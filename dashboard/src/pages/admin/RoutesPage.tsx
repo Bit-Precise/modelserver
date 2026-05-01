@@ -109,7 +109,7 @@ export function RoutesPage() {
       inferred = ["anthropic_messages"];
     } else if (providers.size === 1 && providers.has("openai")) {
       inferred = ["openai_responses"];
-    } else if (providers.size === 1 && providers.has("vertex-openai")) {
+    } else if (subsetOf(["vertex-openai", "bedrock-openai"])) {
       inferred = ["openai_chat_completions"];
     } else if (subsetOf(["gemini", "vertex-google"])) {
       inferred = ["google_generate_content"];
