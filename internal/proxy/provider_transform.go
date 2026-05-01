@@ -57,6 +57,7 @@ var providerTransformers = map[string]ProviderTransformer{}
 func init() {
 	providerTransformers[types.ProviderAnthropic] = &AnthropicTransformer{}
 	providerTransformers[types.ProviderBedrockAnthropic] = &BedrockTransformer{}
+	providerTransformers[types.ProviderBedrockOpenAI] = &BedrockOpenAITransformer{}
 	providerTransformers[types.ProviderOpenAI] = &OpenAITransformer{}
 	providerTransformers[types.ProviderClaudeCode] = &ClaudeCodeTransformer{}
 	providerTransformers[types.ProviderVertexAnthropic] = &VertexAnthropicTransformer{} // tokenManager set by Router init via SetVertexAnthropicTokenManager
