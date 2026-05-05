@@ -127,6 +127,52 @@ func TestComputeCostBreakdown_UnknownModelSkipped(t *testing.T) {
 	}
 }
 
+func TestComputeCostBreakdown_CacheRatesAndMultipleModels(t *testing.T) {
+	cat := modelcatalog.New([]types.Model{
+		{Name: "claude-sonnet-4-6", Status: types.ModelStatusActive,
+			DefaultCreditRate: &types.CreditRate{
+				InputRate: 3, OutputRate: 15, CacheCreationRate: 3.75, CacheReadRate: 0.30,
+			}},
+		{Name: "tiny-model", Status: types.ModelStatusActive,
+			DefaultCreditRate: &types.CreditRate{InputRate: 1, OutputRate: 2}},
+	})
+
+	sums := []store.PerModelTokenSums{
+		// Exercises CacheCreation + CacheRead rate paths (the only test case that does).
+		// credits = 1e6*3.75 + 1e6*0.30 = 4.05e6 → ceil(4.05e6 * 5438 / 1e6) = 22024
+		{Model: "claude-sonnet-4-6", CacheCreationTokens: 1_000_000, CacheReadTokens: 1_000_000},
+		// Second counted model — proves the per-model accumulator across rows.
+		// credits = 5e5*1 + 1e5*2 = 7e5 → ceil(7e5 * 5438 / 1e6) = 3807
+		{Model: "tiny-model", InputTokens: 500_000, OutputTokens: 100_000},
+	}
+
+	got := ComputeCostBreakdown(sums, 0, cat, 5438, nil, nil, time.Time{}, time.Time{})
+
+	if got.APIStandardFen != 22024+3807 {
+		t.Errorf("APIStandardFen = %d, want %d (22024 from claude cache + 3807 from tiny)",
+			got.APIStandardFen, 22024+3807)
+	}
+}
+
+func TestComputeCostBreakdown_SavedZeroAtExactBreakeven(t *testing.T) {
+	cat := newTestCatalog()
+	sub := &types.Subscription{Status: types.SubscriptionStatusActive,
+		StartsAt: time.Now(), ExpiresAt: time.Now().Add(30 * 24 * time.Hour)}
+	// 1M input tokens with InputRate=3 → credits=3e6 → fen = 3e6*5438/1e6 = 16314 exactly.
+	// Set plan price to the same value so APIStandard == ActualPaid exactly.
+	plan := &types.Plan{PricePerPeriod: 16314}
+	sums := []store.PerModelTokenSums{{Model: "claude-sonnet-4-6", InputTokens: 1_000_000}}
+
+	got := ComputeCostBreakdown(sums, 0, cat, 5438, sub, plan, time.Time{}, time.Time{})
+
+	if got.APIStandardFen != 16314 || got.ActualPaidFen != 16314 {
+		t.Fatalf("breakeven setup wrong: api=%d paid=%d", got.APIStandardFen, got.ActualPaidFen)
+	}
+	if got.SavedFen != 0 {
+		t.Errorf("SavedFen = %d, want 0 at exact breakeven", got.SavedFen)
+	}
+}
+
 func TestComputeCostBreakdown_ExtraUsageOnlyCountedThroughExtraField(t *testing.T) {
 	cat := newTestCatalog()
 	sub := &types.Subscription{Status: types.SubscriptionStatusActive,
