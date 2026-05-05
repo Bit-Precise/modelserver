@@ -80,6 +80,17 @@ export function OverviewPage() {
   const recentRequests = recentData?.data ?? [];
   const myQuota = myQuotaData?.data;
 
+  // The handler may align the window to the active subscription period
+  // instead of the historical 30-day default. Drive the existing cards'
+  // description from period_source so the label reflects the actual data.
+  const periodLabel =
+    overview?.period_source === "subscription" && overview.cost_breakdown
+      ? `Current period · ${formatPeriod(
+          overview.cost_breakdown.period_start,
+          overview.cost_breakdown.period_end,
+        )}`
+      : "Last 30 days";
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -91,19 +102,19 @@ export function OverviewPage() {
         <StatCard
           title="Total Requests"
           value={formatNumber(overview?.request_count ?? 0)}
-          description="Last 30 days"
+          description={periodLabel}
           icon={<Activity className="h-4 w-4" />}
         />
         <StatCard
           title="Total Tokens"
           value={formatNumber(overview?.total_tokens ?? 0)}
-          description="Last 30 days"
+          description={periodLabel}
           icon={<Zap className="h-4 w-4" />}
         />
         <StatCard
           title="Total Credits"
           value={`${(overview?.total_credits_k ?? 0).toLocaleString()}K`}
-          description="Last 30 days"
+          description={periodLabel}
           icon={<Coins className="h-4 w-4" />}
         />
         <StatCard
@@ -124,7 +135,14 @@ export function OverviewPage() {
       {overview?.cost_breakdown && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <InfoTooltip>
-            <TooltipTrigger render={<div className="cursor-help" />}>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className="block w-full cursor-help rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              }
+            >
               <StatCard
                 title="API Standard Price"
                 value={formatYuan(overview.cost_breakdown.api_standard_fen)}
@@ -147,7 +165,14 @@ export function OverviewPage() {
           </InfoTooltip>
 
           <InfoTooltip>
-            <TooltipTrigger render={<div className="cursor-help" />}>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className="block w-full cursor-help rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              }
+            >
               <StatCard
                 title="Period Paid"
                 value={formatYuan(overview.cost_breakdown.actual_paid_fen)}
@@ -171,7 +196,14 @@ export function OverviewPage() {
           </InfoTooltip>
 
           <InfoTooltip>
-            <TooltipTrigger render={<div className="cursor-help" />}>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className="block w-full cursor-help rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              }
+            >
               {overview.cost_breakdown.saved_fen > 0 ? (
                 <StatCard
                   title="Saved by Plan"
