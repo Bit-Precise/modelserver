@@ -144,16 +144,27 @@ func handleGetUsage(st *store.Store, catalog modelcatalog.Catalog, creditPriceFe
 			// Determine the period for cost_breakdown:
 			//  - If caller passed an explicit window, do NOT compute breakdown
 			//    (subscription_fen would not align with the window).
-			//  - Otherwise use the active subscription's period; when there is
-			//    no active subscription, use the default 30-day window.
+			//  - Otherwise use the active subscription's period when both sub
+			//    AND plan resolve; if either is missing, fall back to the
+			//    default 30-day window (HasActiveSub=false will agree with it).
 			var sub *types.Subscription
 			var plan *types.Plan
 			if !userProvidedWindow {
-				sub, _ = st.GetActiveSubscription(projectID)
-				if sub != nil {
-					since, until = sub.StartsAt, sub.ExpiresAt
-					if sub.PlanID != "" {
-						plan, _ = st.GetPlanByID(sub.PlanID)
+				s, err := st.GetActiveSubscription(projectID)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "internal", "failed to get usage")
+					return
+				}
+				if s != nil && s.PlanID != "" {
+					p, err := st.GetPlanByID(s.PlanID)
+					if err != nil {
+						writeError(w, http.StatusInternalServerError, "internal", "failed to get usage")
+						return
+					}
+					if p != nil {
+						sub = s
+						plan = p
+						since, until = s.StartsAt, s.ExpiresAt
 					}
 				}
 			}
