@@ -405,3 +405,54 @@ func TestMatch_ProjectKindBeatsGlobalKind(t *testing.T) {
 		t.Errorf("project route should beat global, got %s", g.group.ID)
 	}
 }
+
+// TestMatch_RespectsResponsesCompactKind ensures the router only matches
+// /v1/responses/compact traffic to routes whose request_kinds explicitly
+// include openai_responses_compact. A route configured for openai_responses
+// must NOT silently absorb compact traffic.
+func TestMatch_RespectsResponsesCompactKind(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	upstreams := []types.Upstream{
+		{ID: "up-openai", Provider: types.ProviderOpenAI, Status: types.UpstreamStatusActive, Weight: 1, SupportedModels: []string{"gpt-5"}},
+	}
+	groups := []store.UpstreamGroupWithMembers{{
+		UpstreamGroup: types.UpstreamGroup{ID: "grp", Name: "grp", LBPolicy: types.LBPolicyWeightedRandom, Status: "active"},
+		Members: []store.UpstreamGroupMemberDetail{
+			{UpstreamGroupMember: types.UpstreamGroupMember{UpstreamGroupID: "grp", UpstreamID: "up-openai"}},
+		},
+	}}
+
+	t.Run("responses-only route does not match compact", func(t *testing.T) {
+		routes := []types.Route{{
+			ID:              "r1",
+			ModelNames:      []string{"gpt-5"},
+			RequestKinds:    []string{types.KindOpenAIResponses},
+			UpstreamGroupID: "grp",
+			MatchPriority:   1,
+			Status:          "active",
+		}}
+		r := NewRouter(upstreams, groups, routes, nil, logger, time.Hour, nil, nil, nil)
+		if _, err := r.Match("", "gpt-5", types.KindOpenAIResponsesCompact); err == nil {
+			t.Fatal("expected no-match error for compact kind, got nil")
+		}
+	})
+
+	t.Run("route with both kinds matches both", func(t *testing.T) {
+		routes := []types.Route{{
+			ID:              "r2",
+			ModelNames:      []string{"gpt-5"},
+			RequestKinds:    []string{types.KindOpenAIResponses, types.KindOpenAIResponsesCompact},
+			UpstreamGroupID: "grp",
+			MatchPriority:   1,
+			Status:          "active",
+		}}
+		r := NewRouter(upstreams, groups, routes, nil, logger, time.Hour, nil, nil, nil)
+		if _, err := r.Match("", "gpt-5", types.KindOpenAIResponses); err != nil {
+			t.Fatalf("Match(openai_responses) failed: %v", err)
+		}
+		if _, err := r.Match("", "gpt-5", types.KindOpenAIResponsesCompact); err != nil {
+			t.Fatalf("Match(openai_responses_compact) failed: %v", err)
+		}
+	})
+}
