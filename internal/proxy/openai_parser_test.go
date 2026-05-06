@@ -92,6 +92,55 @@ func TestParseOpenAINonStreamingResponse_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestParseOpenAINonStreamingResponse_CompactBodyNoUsage(t *testing.T) {
+	// Compact endpoint may return only `output` with no `usage` field.
+	// Parser must zero-default usage and not error.
+	body := []byte(`{"output":[{"type":"message","content":"x"}]}`)
+
+	model, respID, usage, err := ParseOpenAINonStreamingResponse(body)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if model != "" {
+		t.Errorf("model = %q, want empty", model)
+	}
+	if respID != "" {
+		t.Errorf("respID = %q, want empty", respID)
+	}
+	if usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0 {
+		t.Errorf("usage non-zero: %+v", usage)
+	}
+	if usage.InputTokensDetails.CachedTokens != 0 {
+		t.Errorf("cached_tokens = %d, want 0", usage.InputTokensDetails.CachedTokens)
+	}
+}
+
+func TestParseOpenAINonStreamingResponse_CompactBodyWithUsage(t *testing.T) {
+	// Some upstreams may include usage on the compact response. When present,
+	// it MUST be parsed identically to /v1/responses.
+	body := []byte(`{"output":[],"id":"resp_compact_1","model":"gpt-5","usage":{"input_tokens":42,"output_tokens":8,"total_tokens":50,"input_tokens_details":{"cached_tokens":10}}}`)
+
+	model, respID, usage, err := ParseOpenAINonStreamingResponse(body)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if model != "gpt-5" {
+		t.Errorf("model = %q, want gpt-5", model)
+	}
+	if respID != "resp_compact_1" {
+		t.Errorf("respID = %q, want resp_compact_1", respID)
+	}
+	if usage.InputTokens != 42 || usage.OutputTokens != 8 {
+		t.Errorf("usage = %+v, want input=42 output=8", usage)
+	}
+	if usage.TotalTokens != 50 {
+		t.Errorf("total_tokens = %d, want 50", usage.TotalTokens)
+	}
+	if usage.InputTokensDetails.CachedTokens != 10 {
+		t.Errorf("cached_tokens = %d, want 10", usage.InputTokensDetails.CachedTokens)
+	}
+}
+
 func TestParseOpenAIStreamEvent_ResponseCreated(t *testing.T) {
 	data := []byte(`{"type":"response.created","response":{"id":"resp_stream1","model":"gpt-4o-2024-08-06","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`)
 
