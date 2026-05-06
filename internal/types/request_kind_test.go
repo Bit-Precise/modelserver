@@ -18,8 +18,14 @@ func TestIsValidRequestKind_RejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestAllRequestKinds_ContainsExactlySeven(t *testing.T) {
-	if got := len(AllRequestKinds); got != 7 {
-		t.Errorf("len(AllRequestKinds) = %d, want 7", got)
+func TestAllRequestKinds_ContainsExactlyEight(t *testing.T) {
+	if got := len(AllRequestKinds); got != 8 {
+		t.Errorf("len(AllRequestKinds) = %d, want 8", got)
+	}
+}
+
+func TestIsValidRequestKind_OpenAIResponsesCompact(t *testing.T) {
+	if !IsValidRequestKind(KindOpenAIResponsesCompact) {
+		t.Errorf("IsValidRequestKind(%q) = false, want true", KindOpenAIResponsesCompact)
 	}
 }

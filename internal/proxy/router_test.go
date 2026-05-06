@@ -182,3 +182,34 @@ func TestMountRoutes_ImageEndpointsAreRegistered(t *testing.T) {
 		}
 	}
 }
+
+func TestMountRoutes_ResponsesCompactIsRegistered(t *testing.T) {
+	r := chi.NewRouter()
+	MountRoutes(
+		r,
+		nil,
+		&Handler{},
+		config.TraceConfig{},
+		nil,
+		nil,
+		config.ExtraUsageConfig{},
+		16<<20,
+		200<<20,
+		nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses/compact", strings.NewReader(`{"model":"gpt-5","input":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code == http.StatusNotFound {
+		t.Fatalf("/v1/responses/compact was not registered; got %d body %q", w.Code, w.Body.String())
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d before auth", w.Code, http.StatusUnauthorized)
+	}
+}

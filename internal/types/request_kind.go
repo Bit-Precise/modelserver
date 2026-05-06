@@ -5,6 +5,7 @@ const (
 	KindAnthropicCountTokens    = "anthropic_count_tokens"
 	KindOpenAIChatCompletions   = "openai_chat_completions"
 	KindOpenAIResponses         = "openai_responses"
+	KindOpenAIResponsesCompact  = "openai_responses_compact"
 	KindOpenAIImagesGenerations = "openai_images_generations"
 	KindOpenAIImagesEdits       = "openai_images_edits"
 	KindGoogleGenerateContent   = "google_generate_content"
@@ -15,6 +16,7 @@ var AllRequestKinds = []string{
 	KindAnthropicCountTokens,
 	KindOpenAIChatCompletions,
 	KindOpenAIResponses,
+	KindOpenAIResponsesCompact,
 	KindOpenAIImagesGenerations,
 	KindOpenAIImagesEdits,
 	KindGoogleGenerateContent,
