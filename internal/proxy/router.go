@@ -51,6 +51,7 @@ func MountRoutes(
 		r.Post("/messages", handler.HandleMessages)
 		r.Post("/messages/count_tokens", handler.HandleCountTokens)
 		r.Post("/responses", handler.HandleResponses)
+		r.Post("/responses/compact", handler.HandleResponsesCompact)
 		r.Post("/chat/completions", handler.HandleChatCompletions)
 		r.Post("/images/generations", handler.HandleImagesGenerations)
 		r.Post("/images/edits", handler.HandleImagesEdits)

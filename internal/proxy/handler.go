@@ -81,6 +81,12 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	h.handleProxyRequest(w, r, IngressOpenAI, types.KindOpenAIResponses)
 }
 
+// HandleResponsesCompact proxies OpenAI /v1/responses/compact (unary).
+// Routes are matched against KindOpenAIResponsesCompact.
+func (h *Handler) HandleResponsesCompact(w http.ResponseWriter, r *http.Request) {
+	h.handleProxyRequest(w, r, IngressOpenAI, types.KindOpenAIResponsesCompact)
+}
+
 // HandleChatCompletions proxies OpenAI Chat Completions format requests.
 // Routes are matched against KindOpenAIChatCompletions.
 func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
