@@ -276,7 +276,7 @@ func main() {
 	jwtMgr := auth.NewJWTManager(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL, cfg.Auth.RefreshTokenTTL)
 
 	// Mount admin API routes.
-	admin.MountRoutes(adminRouter, st, cfg, encryptionKey, jwtMgr, catalog, httpLogger)
+	admin.MountRoutes(adminRouter, st, cfg, encryptionKey, jwtMgr, catalog, httpLogger, newRoutingHealthProvider(st, router))
 
 	adminServer := &http.Server{
 		Addr:    cfg.Server.AdminAddr,
