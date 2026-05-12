@@ -71,10 +71,13 @@ export function UsagePage() {
   const { data: overview } = useUsageOverview(projectId, sinceISO, untilISO);
   const { data: daily } = useDailyUsage(projectId, sinceISO, untilISO);
   const { data: byModel } = useUsageByModel(projectId, sinceISO, untilISO);
+  // Member ranking is pinned to the active subscription period server-side,
+  // so don't forward the date picker — it would just churn the cache key
+  // without changing the response.
   const { data: byMember } = useUsageByMember(
     projectId,
-    sinceISO,
-    untilISO,
+    undefined,
+    undefined,
     memberPage,
     MEMBER_PER_PAGE,
   );
