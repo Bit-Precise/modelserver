@@ -94,6 +94,46 @@ func (s *Store) ListSubscriptions(projectID string) ([]types.Subscription, error
 	return subs, nil
 }
 
+// GetActiveSubscriptionsByProjectIDs returns the active subscription for each
+// of the given project IDs in a single query. Projects without an active
+// subscription are simply absent from the result map.
+func (s *Store) GetActiveSubscriptionsByProjectIDs(projectIDs []string) (map[string]*types.Subscription, error) {
+	if len(projectIDs) == 0 {
+		return map[string]*types.Subscription{}, nil
+	}
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT DISTINCT ON (project_id)
+			id, project_id, COALESCE(plan_id::text, ''), plan_name, status, starts_at, expires_at, created_at, updated_at
+		FROM subscriptions
+		WHERE project_id = ANY($1::uuid[])
+		  AND status = 'active'
+		  AND starts_at <= NOW()
+		  AND expires_at >= NOW()
+		ORDER BY project_id, created_at DESC`, projectIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get active subscriptions by project ids: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]*types.Subscription, len(projectIDs))
+	for rows.Next() {
+		sub := &types.Subscription{}
+		var planID *string
+		if err := rows.Scan(&sub.ID, &sub.ProjectID, &planID, &sub.PlanName, &sub.Status,
+			&sub.StartsAt, &sub.ExpiresAt, &sub.CreatedAt, &sub.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan subscription: %w", err)
+		}
+		if planID != nil {
+			sub.PlanID = *planID
+		}
+		out[sub.ProjectID] = sub
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate subscriptions: %w", err)
+	}
+	return out, nil
+}
+
 // UpdateSubscriptionStatus updates a subscription's status.
 func (s *Store) UpdateSubscriptionStatus(id, status string) error {
 	_, err := s.pool.Exec(context.Background(), `

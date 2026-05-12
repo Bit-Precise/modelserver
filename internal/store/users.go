@@ -42,6 +42,37 @@ func (s *Store) GetUserByID(id string) (*types.User, error) {
 	return u, nil
 }
 
+// GetProjectOwnersByProjectIDs returns the owner (created_by) user record for
+// each given project ID, keyed by project ID. Projects with a missing owner
+// row are absent from the result.
+func (s *Store) GetProjectOwnersByProjectIDs(projectIDs []string) (map[string]*types.User, error) {
+	if len(projectIDs) == 0 {
+		return map[string]*types.User{}, nil
+	}
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT p.id, u.id, u.email, u.nickname, COALESCE(u.picture, ''),
+		       u.is_superadmin, u.max_projects, u.status, u.created_at, u.updated_at
+		FROM projects p
+		JOIN users u ON u.id = p.created_by
+		WHERE p.id = ANY($1::uuid[])`, projectIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get project owners: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]*types.User, len(projectIDs))
+	for rows.Next() {
+		var pid string
+		u := &types.User{}
+		if err := rows.Scan(&pid, &u.ID, &u.Email, &u.Nickname, &u.Picture,
+			&u.IsSuperadmin, &u.MaxProjects, &u.Status, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan project owner: %w", err)
+		}
+		out[pid] = u
+	}
+	return out, rows.Err()
+}
+
 // GetUserByEmail returns a user by email.
 func (s *Store) GetUserByEmail(email string) (*types.User, error) {
 	u, err := scanUser(s.pool.QueryRow(context.Background(), `SELECT `+userColumns+` FROM users WHERE email = $1`, email))

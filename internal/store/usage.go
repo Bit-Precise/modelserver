@@ -376,6 +376,37 @@ func (s *Store) SumCreditsInWindowByProject(projectID string, windowStart time.T
 	return total, err
 }
 
+// SumCreditsInWindowByProjects returns total credits consumed per project for
+// the given project IDs since windowStart. Projects with no requests in the
+// window are absent from the returned map.
+func (s *Store) SumCreditsInWindowByProjects(projectIDs []string, windowStart time.Time) (map[string]float64, error) {
+	if len(projectIDs) == 0 {
+		return map[string]float64{}, nil
+	}
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT project_id, COALESCE(SUM(credits_consumed), 0)
+		FROM requests
+		WHERE project_id = ANY($1::uuid[]) AND created_at >= $2
+		GROUP BY project_id`,
+		projectIDs, windowStart,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]float64, len(projectIDs))
+	for rows.Next() {
+		var pid string
+		var total float64
+		if err := rows.Scan(&pid, &total); err != nil {
+			return nil, err
+		}
+		out[pid] = total
+	}
+	return out, rows.Err()
+}
+
 // CountRequestsInWindowByProject returns the number of requests by all keys in a project within a time window.
 func (s *Store) CountRequestsInWindowByProject(projectID string, windowStart time.Time) (int64, error) {
 	var count int64

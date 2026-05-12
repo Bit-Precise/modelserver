@@ -1,6 +1,35 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { ListResponse, DataResponse, Project } from "./types";
+import type { CreditWindowStatus } from "./subscriptions";
+
+export interface ProjectOwnerSnapshot {
+  id: string;
+  email?: string;
+  nickname?: string;
+  picture?: string;
+}
+
+export interface ProjectSubscriptionOverview {
+  project_id: string;
+  plan_id?: string;
+  plan_name?: string;
+  display_name?: string;
+  windows: CreditWindowStatus[];
+  owner?: ProjectOwnerSnapshot;
+}
+
+export function useAdminProjectsSubscriptionsOverview(projectIds: string[]) {
+  const ids = [...projectIds].sort().join(",");
+  return useQuery({
+    queryKey: ["admin-projects-subscriptions-overview", ids],
+    queryFn: () =>
+      api.get<DataResponse<ProjectSubscriptionOverview[]>>(
+        `/api/v1/admin/projects/subscriptions-overview?project_ids=${encodeURIComponent(ids)}`,
+      ),
+    enabled: projectIds.length > 0,
+  });
+}
 
 export function useProjects() {
   return useQuery({

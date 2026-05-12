@@ -130,6 +130,7 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 			r.Route("/admin/projects", func(r chi.Router) {
 				r.Use(RequireSuperadmin)
 				r.Get("/", handleListAllProjects(st))
+				r.Get("/subscriptions-overview", handleAdminProjectsSubscriptionsOverview(st))
 			})
 
 			// Admin: global requests (superadmin only).

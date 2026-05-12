@@ -1,7 +1,9 @@
-import { useState } from "react";
-import { useAllProjects } from "@/api/projects";
-import { useUsers } from "@/api/users";
-import { usePlans } from "@/api/plans";
+import { useMemo, useState } from "react";
+import {
+  useAllProjects,
+  useAdminProjectsSubscriptionsOverview,
+  type ProjectOwnerSnapshot,
+} from "@/api/projects";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DataTable, type Column } from "@/components/shared/DataTable";
 import { Pagination } from "@/components/shared/Pagination";
@@ -9,11 +11,8 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import type { Project, User, Plan } from "@/api/types";
+import type { Project } from "@/api/types";
 import { useNavigate } from "react-router";
-import { useQueries } from "@tanstack/react-query";
-import { api } from "@/api/client";
-import type { DataResponse, Subscription } from "@/api/types";
 import type { CreditWindowStatus } from "@/api/subscriptions";
 
 function initials(name?: string): string {
@@ -53,65 +52,27 @@ const PER_PAGE = 20;
 export function AdminProjectsPage() {
   const [page, setPage] = useState(1);
   const { data: projectsData, isLoading: loadingProjects } = useAllProjects(page, PER_PAGE);
-  const { data: usersData, isLoading: loadingUsers } = useUsers(1, 100);
-  const { data: plansData } = usePlans(1, 100);
   const navigate = useNavigate();
 
   const projects = projectsData?.data ?? [];
   const meta = projectsData?.meta;
-  const users = usersData?.data ?? [];
-  const plans = plansData?.data ?? [];
 
-  const planMap = new Map<string, Plan>();
-  for (const p of plans) planMap.set(p.id, p);
+  const projectIds = useMemo(() => projects.map((p) => p.id), [projects]);
+  const { data: overviewData } = useAdminProjectsSubscriptionsOverview(projectIds);
 
-  // Fetch active subscription for each project in parallel.
-  const subQueries = useQueries({
-    queries: projects.map((p) => ({
-      queryKey: ["subscriptions", p.id],
-      queryFn: () =>
-        api.get<DataResponse<Subscription[]>>(
-          `/api/v1/projects/${p.id}/subscriptions`,
-        ),
-      enabled: projects.length > 0,
-    })),
-  });
-
-  // Fetch usage for each project in parallel.
-  const usageQueries = useQueries({
-    queries: projects.map((p) => ({
-      queryKey: ["subscription-usage", p.id],
-      queryFn: () =>
-        api.get<DataResponse<CreditWindowStatus[]>>(
-          `/api/v1/projects/${p.id}/subscription/usage`,
-        ),
-      enabled: projects.length > 0,
-    })),
-  });
-
-  // Map project ID -> active subscription's plan name.
   const projectPlanMap = new Map<string, string>();
-  for (let i = 0; i < projects.length; i++) {
-    const subs = subQueries[i]?.data?.data ?? [];
-    const active = subs.find((s) => s.status === "active");
-    if (active) {
-      const plan = active.plan_id ? planMap.get(active.plan_id) : undefined;
-      projectPlanMap.set(projects[i]!.id, plan?.display_name || active.plan_name);
-    }
-  }
-
-  // Map project ID -> usage statuses.
   const projectUsageMap = new Map<string, CreditWindowStatus[]>();
-  for (let i = 0; i < projects.length; i++) {
-    const statuses = usageQueries[i]?.data?.data;
-    if (statuses && statuses.length > 0) {
-      projectUsageMap.set(projects[i]!.id, statuses);
+  const ownerMap = new Map<string, ProjectOwnerSnapshot>();
+  for (const row of overviewData?.data ?? []) {
+    if (row.display_name || row.plan_name) {
+      projectPlanMap.set(row.project_id, row.display_name || row.plan_name || "");
     }
-  }
-
-  const userMap = new Map<string, User>();
-  for (const u of users) {
-    userMap.set(u.id, u);
+    if (row.windows && row.windows.length > 0) {
+      projectUsageMap.set(row.project_id, row.windows);
+    }
+    if (row.owner) {
+      ownerMap.set(row.project_id, row.owner);
+    }
   }
 
   const columns: Column<Project>[] = [
@@ -126,19 +87,18 @@ export function AdminProjectsPage() {
     {
       header: "Owner",
       accessor: (p) => {
-        const owner = userMap.get(p.created_by);
+        const owner = ownerMap.get(p.id);
         if (!owner) return <span className="text-muted-foreground">-</span>;
+        const label = owner.nickname || owner.email || "";
         return (
           <div className="flex items-center gap-2">
             <Avatar className="h-6 w-6">
-              {owner.picture && (
-                <AvatarImage src={owner.picture} alt={owner.nickname || owner.email} />
-              )}
+              {owner.picture && <AvatarImage src={owner.picture} alt={label} />}
               <AvatarFallback className="text-[10px]">
                 {initials(owner.nickname)}
               </AvatarFallback>
             </Avatar>
-            <span className="truncate">{owner.nickname || owner.email}</span>
+            <span className="truncate">{label}</span>
           </div>
         );
       },
@@ -180,7 +140,7 @@ export function AdminProjectsPage() {
     },
   ];
 
-  const isLoading = loadingProjects || loadingUsers;
+  const isLoading = loadingProjects;
 
   return (
     <div className="space-y-6">

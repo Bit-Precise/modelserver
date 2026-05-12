@@ -40,6 +40,179 @@ func handleListAllProjects(st *store.Store) http.HandlerFunc {
 	}
 }
 
+// projectOwnerSnapshot is the minimal owner info needed to render the admin
+// projects table. Avoids polluting types.User with display-only concerns.
+type projectOwnerSnapshot struct {
+	ID       string `json:"id"`
+	Email    string `json:"email,omitempty"`
+	Nickname string `json:"nickname,omitempty"`
+	Picture  string `json:"picture,omitempty"`
+}
+
+// projectSubscriptionOverview is the per-project payload returned by the
+// admin subscriptions-overview endpoint.
+type projectSubscriptionOverview struct {
+	ProjectID   string                         `json:"project_id"`
+	PlanID      string                         `json:"plan_id,omitempty"`
+	PlanName    string                         `json:"plan_name,omitempty"`
+	DisplayName string                         `json:"display_name,omitempty"`
+	Windows     []ratelimit.CreditWindowStatus `json:"windows"`
+	Owner       *projectOwnerSnapshot          `json:"owner,omitempty"`
+}
+
+// handleAdminProjectsSubscriptionsOverview returns active subscription + credit
+// window usage for many projects in a single response. Replaces the per-row
+// N+1 the dashboard used to do via /projects/{id}/subscriptions and
+// /projects/{id}/subscription/usage.
+//
+// Query: ?project_ids=id1,id2,...
+func handleAdminProjectsSubscriptionsOverview(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		raw := strings.TrimSpace(r.URL.Query().Get("project_ids"))
+		if raw == "" {
+			writeData(w, http.StatusOK, []projectSubscriptionOverview{})
+			return
+		}
+		projectIDs := make([]string, 0, 16)
+		for _, id := range strings.Split(raw, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				projectIDs = append(projectIDs, id)
+			}
+		}
+		if len(projectIDs) == 0 {
+			writeData(w, http.StatusOK, []projectSubscriptionOverview{})
+			return
+		}
+
+		activeSubs, err := st.GetActiveSubscriptionsByProjectIDs(projectIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to load subscriptions")
+			return
+		}
+
+		owners, err := st.GetProjectOwnersByProjectIDs(projectIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to load project owners")
+			return
+		}
+
+		plans, err := st.ListPlans(false)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to load plans")
+			return
+		}
+		plansBySlug := make(map[string]*types.Plan, len(plans))
+		for i := range plans {
+			plansBySlug[plans[i].Name] = &plans[i]
+		}
+
+		// Bucket (projectID, rule) by windowStart so we can issue one aggregate
+		// query per unique window start across all projects.
+		type ruleRef struct {
+			window      string
+			maxCred     int64
+			windowTyp   string
+			anchor      *time.Time
+			windowStart time.Time
+		}
+		bucketsByStart := make(map[time.Time]map[string]struct{}) // windowStart -> set of projectIDs
+		rulesByProject := make(map[string][]ruleRef, len(projectIDs))
+
+		for _, pid := range projectIDs {
+			sub := activeSubs[pid]
+			if sub == nil {
+				continue
+			}
+			plan := plansBySlug[sub.PlanName]
+			if plan == nil {
+				continue
+			}
+			policy := plan.ToPolicy(pid, &sub.StartsAt)
+			for _, rule := range policy.CreditRules {
+				ws := ratelimit.WindowStartTime(rule.Window, rule.WindowType, rule.AnchorTime)
+				if bucketsByStart[ws] == nil {
+					bucketsByStart[ws] = make(map[string]struct{})
+				}
+				bucketsByStart[ws][pid] = struct{}{}
+				rulesByProject[pid] = append(rulesByProject[pid], ruleRef{
+					window:      rule.Window,
+					maxCred:     rule.MaxCredits,
+					windowTyp:   rule.WindowType,
+					anchor:      rule.AnchorTime,
+					windowStart: ws,
+				})
+			}
+		}
+
+		// One SUM query per unique windowStart across all projects in that bucket.
+		// Keyed by (projectID, windowStart) so duplicate window names on the
+		// same project (rare but possible) don't collide.
+		type usageKey struct {
+			projectID   string
+			windowStart time.Time
+		}
+		usedByRule := make(map[usageKey]float64)
+		for ws, pidSet := range bucketsByStart {
+			pids := make([]string, 0, len(pidSet))
+			for pid := range pidSet {
+				pids = append(pids, pid)
+			}
+			sums, err := st.SumCreditsInWindowByProjects(pids, ws)
+			if err != nil {
+				continue
+			}
+			for pid, total := range sums {
+				usedByRule[usageKey{pid, ws}] = total
+			}
+		}
+
+		out := make([]projectSubscriptionOverview, 0, len(projectIDs))
+		for _, pid := range projectIDs {
+			row := projectSubscriptionOverview{ProjectID: pid, Windows: []ratelimit.CreditWindowStatus{}}
+			sub := activeSubs[pid]
+			if sub != nil {
+				row.PlanID = sub.PlanID
+				row.PlanName = sub.PlanName
+				if plan := plansBySlug[sub.PlanName]; plan != nil {
+					row.DisplayName = plan.DisplayName
+				}
+			}
+			if owner := owners[pid]; owner != nil {
+				row.Owner = &projectOwnerSnapshot{
+					ID:       owner.ID,
+					Email:    owner.Email,
+					Nickname: owner.Nickname,
+					Picture:  owner.Picture,
+				}
+			}
+			for _, rr := range rulesByProject[pid] {
+				used := usedByRule[usageKey{pid, rr.windowStart}]
+				percentage := 0.0
+				if rr.maxCred > 0 {
+					percentage = (used / float64(rr.maxCred)) * 100
+					if percentage > 100 {
+						percentage = 100
+					}
+				}
+				percentage = math.Round(percentage*100) / 100
+				s := ratelimit.CreditWindowStatus{
+					Window:     rr.window,
+					Percentage: percentage,
+				}
+				if rr.windowTyp == types.WindowTypeCalendar || rr.windowTyp == types.WindowTypeFixed {
+					resetDur := ratelimit.WindowResetDuration(rr.window, rr.windowTyp, rr.anchor)
+					s.ResetsAt = time.Now().UTC().Add(resetDur).Format(time.RFC3339)
+				}
+				row.Windows = append(row.Windows, s)
+			}
+			out = append(out, row)
+		}
+
+		writeData(w, http.StatusOK, out)
+	}
+}
+
 func handleCreateProject(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := UserFromContext(r.Context())
