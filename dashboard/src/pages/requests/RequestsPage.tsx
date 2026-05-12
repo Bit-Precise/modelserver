@@ -5,7 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useRequests, type RequestFilters } from "@/api/requests";
 import { useHttpLog } from "@/api/httpLog";
 import { useKeys } from "@/api/keys";
-import { useMembers } from "@/api/members";
+import { useMembersCompact } from "@/api/members";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DataTable, type Column } from "@/components/shared/DataTable";
 import { StatusBadge } from "@/components/shared/StatusBadge";
@@ -69,7 +69,7 @@ export function RequestsPage() {
   const { data: keysData } = useKeys(projectId);
   const apiKeys = keysData?.data ?? [];
 
-  const { data: membersData } = useMembers(projectId, 1, 100);
+  const { data: membersData } = useMembersCompact(projectId);
   const members = membersData?.data ?? [];
 
   const filters: RequestFilters = {
@@ -278,7 +278,7 @@ export function RequestsPage() {
               <SelectItem value="all">All members</SelectItem>
               {members.map((m) => (
                 <SelectItem key={m.user_id} value={m.user_id}>
-                  {m.user?.nickname || m.user?.email || m.user_id.slice(0, 8)}
+                  {m.nickname || m.user_id.slice(0, 8)}
                 </SelectItem>
               ))}
             </SelectContent>

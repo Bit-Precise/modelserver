@@ -9,6 +9,21 @@ export function useUsers(page = 1, perPage = 20) {
   });
 }
 
+export interface UserCompact {
+  id: string;
+  nickname?: string;
+}
+
+// useAllUsersCompact returns every user (superadmin only) in a single
+// lightweight request — used to populate filter dropdowns without the
+// pagination cap that miss users outside the first page.
+export function useAllUsersCompact() {
+  return useQuery({
+    queryKey: ["admin", "users-compact"],
+    queryFn: () => api.get<DataResponse<UserCompact[]>>(`/api/v1/users/compact`),
+  });
+}
+
 export function useUpdateUser() {
   const qc = useQueryClient();
   return useMutation({

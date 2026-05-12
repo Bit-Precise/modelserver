@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { useAdminRequests, type AdminRequestFilters } from "@/api/adminRequests";
 import { useAdminHttpLog } from "@/api/httpLog";
 import { useUpstreams } from "@/api/upstreams";
-import { useUsers } from "@/api/users";
+import { useAllUsersCompact } from "@/api/users";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DataTable, type Column } from "@/components/shared/DataTable";
 import { Pagination } from "@/components/shared/Pagination";
@@ -61,7 +61,7 @@ export function AdminRequestsPage() {
   );
 
   const { data: upstreamsData } = useUpstreams(1, 100);
-  const { data: usersData } = useUsers(1, 100);
+  const { data: usersData } = useAllUsersCompact();
   const users = usersData?.data ?? [];
   const upstreams = upstreamsData?.data ?? [];
 
@@ -234,7 +234,7 @@ export function AdminRequestsPage() {
               <SelectItem value="all">All users</SelectItem>
               {users.map((u) => (
                 <SelectItem key={u.id} value={u.id}>
-                  {u.nickname || u.email}
+                  {u.nickname || u.id.slice(0, 8)}
                 </SelectItem>
               ))}
             </SelectContent>

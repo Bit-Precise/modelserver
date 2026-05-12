@@ -97,6 +97,7 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 			r.Route("/users", func(r chi.Router) {
 				r.Use(RequireSuperadmin)
 				r.Get("/", handleListUsers(st))
+				r.Get("/compact", handleListUsersCompact(st))
 				r.Get("/{userID}", handleGetUser(st))
 				r.Put("/{userID}", handleUpdateUser(st))
 			})
@@ -161,6 +162,7 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 
 					// Project members.
 					r.Get("/members", handleListMembers(st))
+					r.Get("/members/compact", handleListMembersCompact(st))
 					r.Post("/members", handleAddMember(st))
 					r.Get("/members/usage", handleMembersUsage(st))
 					r.Put("/members/{userID}", handleUpdateMember(st))

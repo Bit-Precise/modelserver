@@ -232,6 +232,32 @@ func handleListUsers(st *store.Store) http.HandlerFunc {
 	}
 }
 
+// userCompact is the minimal shape returned by /users/compact for dropdown
+// population. Email is intentionally excluded; the only callers populate
+// filter selects where the displayed label is nickname-or-id.
+type userCompact struct {
+	ID       string `json:"id"`
+	Nickname string `json:"nickname,omitempty"`
+}
+
+// handleListUsersCompact returns all users in one shot, lightweight, no
+// pagination — used by filter dropdowns that previously paged at 100 and
+// missed users outside the first page.
+func handleListUsersCompact(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		users, err := st.ListAllUsersCompact()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to list users")
+			return
+		}
+		out := make([]userCompact, 0, len(users))
+		for _, u := range users {
+			out = append(out, userCompact{ID: u.ID, Nickname: u.Nickname})
+		}
+		writeData(w, http.StatusOK, out)
+	}
+}
+
 func handleGetUser(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, err := st.GetUserByID(chi.URLParam(r, "userID"))

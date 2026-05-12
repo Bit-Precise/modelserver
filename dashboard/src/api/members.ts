@@ -12,6 +12,26 @@ export function useMembers(projectId: string, page = 1, perPage = 20) {
   });
 }
 
+export interface MemberCompact {
+  user_id: string;
+  nickname?: string;
+}
+
+// useMembersCompact returns every project member in a single request as
+// minimal {user_id, nickname}. Use it for filter dropdowns; the paginated
+// useMembers caps at the per_page passed in and would miss members on
+// projects with more rows than that.
+export function useMembersCompact(projectId: string) {
+  return useQuery({
+    queryKey: ["members-compact", projectId],
+    queryFn: () =>
+      api.get<DataResponse<MemberCompact[]>>(
+        `/api/v1/projects/${projectId}/members/compact`,
+      ),
+    enabled: !!projectId,
+  });
+}
+
 export function useMembersUsage(projectId: string, userIds: string[]) {
   return useQuery({
     queryKey: ["members-usage", projectId, userIds],

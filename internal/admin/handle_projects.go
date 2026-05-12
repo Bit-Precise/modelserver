@@ -380,6 +380,34 @@ func handleListMembers(st *store.Store) http.HandlerFunc {
 	}
 }
 
+// memberCompact is the minimal shape returned by the project /members/compact
+// endpoint — used to populate filter dropdowns without the 100-row pagination
+// cap that the full handler imposes.
+type memberCompact struct {
+	UserID   string `json:"user_id"`
+	Nickname string `json:"nickname,omitempty"`
+}
+
+func handleListMembersCompact(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := chi.URLParam(r, "projectID")
+		members, err := st.ListProjectMembers(projectID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to list members")
+			return
+		}
+		out := make([]memberCompact, 0, len(members))
+		for _, m := range members {
+			nickname := ""
+			if m.User != nil {
+				nickname = m.User.Nickname
+			}
+			out = append(out, memberCompact{UserID: m.UserID, Nickname: nickname})
+		}
+		writeData(w, http.StatusOK, out)
+	}
+}
+
 func handleAddMember(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireRole(w, r, types.RoleOwner, types.RoleMaintainer) {
