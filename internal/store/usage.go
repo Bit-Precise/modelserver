@@ -173,7 +173,6 @@ func (s *Store) GetUsageByMember(projectID string, since, until time.Time, limit
 		SELECT a.created_by,
 			COALESCE(u.nickname, ''),
 			COALESCE(u.picture, ''),
-			COALESCE(u.email, ''),
 			a.request_count,
 			a.total_tokens,
 			COALESCE(ROUND(a.total_credits / 1000), 0)::BIGINT AS total_credits_k
@@ -189,16 +188,15 @@ func (s *Store) GetUsageByMember(projectID string, since, until time.Time, limit
 
 	results := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		var userID, nickname, picture, email string
+		var userID, nickname, picture string
 		var count, tokens, creditsK int64
-		if err := rows.Scan(&userID, &nickname, &picture, &email, &count, &tokens, &creditsK); err != nil {
+		if err := rows.Scan(&userID, &nickname, &picture, &count, &tokens, &creditsK); err != nil {
 			return nil, 0, err
 		}
 		results = append(results, map[string]interface{}{
 			"user_id":         userID,
 			"nickname":        nickname,
 			"picture":         picture,
-			"email":           email,
 			"request_count":   count,
 			"total_tokens":    tokens,
 			"total_credits_k": creditsK,

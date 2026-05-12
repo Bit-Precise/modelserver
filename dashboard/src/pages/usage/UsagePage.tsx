@@ -111,8 +111,8 @@ export function UsagePage() {
     {
       header: "Member",
       accessor: (r) => {
-        const name = r.nickname || r.email || r.user_id;
-        const initials = (r.nickname || r.email || "?").slice(0, 2).toUpperCase();
+        const name = r.nickname || r.user_id.slice(0, 8);
+        const initials = (r.nickname || "?").slice(0, 2).toUpperCase();
         const rank = rankByUserId.get(r.user_id) ?? -1;
         const medal = rank >= 0 && rank < medals.length ? medals[rank] : null;
         return (
@@ -127,7 +127,6 @@ export function UsagePage() {
         );
       },
     },
-    { header: "Email", accessor: (r) => r.email || "—" },
     { header: "Requests", accessor: (r) => formatNumber(r.request_count), className: "text-right" },
     { header: "Tokens", accessor: (r) => formatNumber(r.total_tokens), className: "text-right" },
     {

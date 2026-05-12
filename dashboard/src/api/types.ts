@@ -331,7 +331,6 @@ export interface UsageByMember {
   user_id: string;
   nickname: string;
   picture: string;
-  email: string;
   request_count: number;
   total_tokens: number;
   total_credits_k: number;
