@@ -160,6 +160,9 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 					r.Post("/archive", handleArchiveProject(st))
 					r.Post("/unarchive", handleUnarchiveProject(st))
 
+					// Callable models in the project (read-only).
+					r.Get("/models", handleListProjectModels(st))
+
 					// Project members.
 					r.Get("/members", handleListMembers(st))
 					r.Get("/members/compact", handleListMembersCompact(st))

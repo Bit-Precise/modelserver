@@ -27,6 +27,43 @@ type modelListResponseRow struct {
 	ReferenceCounts store.ModelReferenceCounts `json:"reference_counts"`
 }
 
+// projectModelRow is the read-only shape served to project members. It strips
+// admin-only fields (default_credit_rate, default_image_credit_rate, reference
+// counts) so we don't leak pricing internals to plain members.
+type projectModelRow struct {
+	Name        string             `json:"name"`
+	DisplayName string             `json:"display_name"`
+	Description string             `json:"description,omitempty"`
+	Aliases     []string           `json:"aliases"`
+	Publisher   string             `json:"publisher"`
+	Metadata    types.ModelMetadata `json:"metadata"`
+}
+
+// handleListProjectModels returns the catalog of active models visible to any
+// project member. Used by the dashboard Models tab so users can see what they
+// can call from this project.
+func handleListProjectModels(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		models, err := st.ListModelsByStatus(types.ModelStatusActive)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to list models")
+			return
+		}
+		out := make([]projectModelRow, 0, len(models))
+		for _, m := range models {
+			out = append(out, projectModelRow{
+				Name:        m.Name,
+				DisplayName: m.DisplayName,
+				Description: m.Description,
+				Aliases:     m.Aliases,
+				Publisher:   m.Publisher,
+				Metadata:    m.Metadata,
+			})
+		}
+		writeData(w, http.StatusOK, out)
+	}
+}
+
 func handleListModels(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var (

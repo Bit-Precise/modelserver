@@ -29,6 +29,9 @@ import { MembersPage } from "@/pages/members/MembersPage";
 import { RequestsPage } from "@/pages/requests/RequestsPage";
 import { UsagePage } from "@/pages/usage/UsagePage";
 
+// Models (project-scoped, read-only)
+import { ProjectModelsPage } from "@/pages/models/ProjectModelsPage";
+
 // Traces
 import { TracesPage } from "@/pages/traces/TracesPage";
 
@@ -100,6 +103,7 @@ export function App() {
                 <Route path="projects/:projectId/requests" element={<RequestsPage />} />
                 <Route path="projects/:projectId/traces" element={<TracesPage />} />
                 <Route path="projects/:projectId/usage" element={<UsagePage />} />
+                <Route path="projects/:projectId/models" element={<ProjectModelsPage />} />
                 <Route path="projects/:projectId/subscription" element={<SubscriptionPage />} />
                 <Route path="projects/:projectId/extra-usage" element={<ExtraUsagePage />} />
                 <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />

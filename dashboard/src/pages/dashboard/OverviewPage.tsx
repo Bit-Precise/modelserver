@@ -16,7 +16,8 @@ import {
 } from "@/components/ui/tooltip";
 import type { Request } from "@/api/types";
 import { useAuth } from "@/hooks/useAuth";
-import { Activity, Zap, Clock, Coins, Receipt, Wallet, PiggyBank } from "lucide-react";
+import { Activity, Zap, Clock, Coins, Receipt, Wallet, PiggyBank, Info } from "lucide-react";
+import { Link } from "react-router";
 import {
   LineChart,
   Line,
@@ -108,12 +109,42 @@ export function OverviewPage() {
         )}`
       : "Last 30 days";
 
+  const projectName = project?.data.name ?? "Project";
+  // The OAuth signup hook creates a project literally named "Default Project"
+  // for new users. Show a soft hint that this isn't a special object — they
+  // can rename it or spin up more.
+  const isDefaultProject = projectName === "Default Project";
+
   return (
     <div className="space-y-6">
       <PageHeader
-        title={project?.data.name ?? "Project"}
+        title={projectName}
         description={project?.data.description}
       />
+
+      {isDefaultProject && (
+        <div className="flex items-start gap-3 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <div className="space-y-1">
+            <p className="font-medium">This is your default project.</p>
+            <p className="text-muted-foreground">
+              It was auto-created when you signed up — there's nothing special
+              about it. Rename it under{" "}
+              <Link
+                to={`/projects/${projectId}/settings`}
+                className="text-primary hover:underline"
+              >
+                Settings
+              </Link>
+              , add teammates, or spin up another one from the{" "}
+              <Link to="/projects" className="text-primary hover:underline">
+                Projects
+              </Link>{" "}
+              page.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard

@@ -114,6 +114,9 @@ export function Sidebar() {
             <SidebarLink to={`/projects/${projectId}/usage`} icon={BarChart3}>
               Usage
             </SidebarLink>
+            <SidebarLink to={`/projects/${projectId}/models`} icon={Sparkles}>
+              Models
+            </SidebarLink>
             <SidebarLink to={`/projects/${projectId}/subscription`} icon={Zap}>
               Subscription
             </SidebarLink>

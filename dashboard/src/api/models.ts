@@ -1,6 +1,31 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { DataResponse, Model, ModelListRow } from "./types";
+import type { DataResponse, Model, ModelListRow, ModelMetadata } from "./types";
+
+// ProjectModel is the read-only model row the project-scoped endpoint
+// returns. Admin-only fields (credit rates, status, timestamps, reference
+// counts) are stripped on the server.
+export interface ProjectModel {
+  name: string;
+  display_name: string;
+  description?: string;
+  aliases: string[];
+  publisher: string;
+  metadata: ModelMetadata;
+}
+
+// useProjectModels returns the catalog of active models that any project
+// member can call from this project.
+export function useProjectModels(projectId: string) {
+  return useQuery({
+    queryKey: ["project-models", projectId],
+    queryFn: () =>
+      api.get<DataResponse<ProjectModel[]>>(
+        `/api/v1/projects/${projectId}/models`,
+      ),
+    enabled: !!projectId,
+  });
+}
 
 // useModels returns every catalog row with embedded reference counts.
 // `?status=active` or `?status=disabled` narrows the server-side filter.
