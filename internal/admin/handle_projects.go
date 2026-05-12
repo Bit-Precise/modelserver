@@ -102,9 +102,11 @@ func handleAdminProjectsSubscriptionsOverview(st *store.Store) http.HandlerFunc 
 			writeError(w, http.StatusInternalServerError, "internal", "failed to load plans")
 			return
 		}
+		// subscription.PlanName stores the plan slug (cf. GetPlanBySlug in the
+		// per-project handler). Plan.Name is the human-facing tier name.
 		plansBySlug := make(map[string]*types.Plan, len(plans))
 		for i := range plans {
-			plansBySlug[plans[i].Name] = &plans[i]
+			plansBySlug[plans[i].Slug] = &plans[i]
 		}
 
 		// Bucket (projectID, rule) by windowStart so we can issue one aggregate
