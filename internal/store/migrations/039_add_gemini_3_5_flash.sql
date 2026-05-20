@@ -21,13 +21,16 @@
 --     cache_creation_rate= 0
 --     cache_read_rate    = 0.15 / 7.5 = 0.02
 --
--- No per-plan rate is seeded. This matches the established Gemini
--- convention documented in 035: gemini-3-* are catalog-only and operators
--- attach a per-plan rate via the admin UI if they want subscription
--- metering. The proxy layer already forwards arbitrary Gemini model names
--- transparently (internal/proxy/provider_gemini.go), so once this row
--- exists the model is selectable in the routing UI and has a fallback
--- default rate for billing/savings paths.
+-- Unlike the gemini-3-* rows noted in 035 (which were left without a
+-- default rate because Google had not yet published a public standard
+-- price), this migration sets default_credit_rate now that 3.5-flash has
+-- a clear published price. The per-plan rate is still skipped, following
+-- the gemini-3-* precedent: operators attach a per-plan rate via the
+-- admin UI if they want subscription metering. The proxy layer already
+-- forwards arbitrary Gemini model names transparently (internal/proxy/
+-- provider_gemini.go), so once this row exists the model is selectable
+-- in the routing UI and has a fallback default rate for billing/savings
+-- paths.
 --
 -- Routes and upstreams are intentionally not seeded — operators wire the
 -- model into the relevant gemini / vertex-google upstream group after
