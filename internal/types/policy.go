@@ -8,7 +8,9 @@ const (
 	PlanMax5x   = "max_5x"
 	PlanMax20x  = "max_20x"
 	PlanMax40x  = "max_40x"
+	PlanMax60x  = "max_60x"
 	PlanMax80x  = "max_80x"
+	PlanMax100x = "max_100x"
 	PlanMax120x = "max_120x"
 	PlanMax200x = "max_200x"
 	PlanMax240x = "max_240x"
@@ -177,7 +179,7 @@ type Subscription struct {
 	ID        string    `json:"id"`
 	ProjectID string    `json:"project_id"`
 	PlanID    string    `json:"plan_id,omitempty"`
-	PlanName  string    `json:"plan_name"` // "pro", "max_5x", "max_20x", "max_40x", "max_80x", "max_120x", "max_200x", "max_240x", or custom
+	PlanName  string    `json:"plan_name"` // "pro", "max_5x", "max_20x", "max_40x", "max_60x", "max_80x", "max_100x", "max_120x", "max_200x", "max_240x", or custom
 	Status    string    `json:"status"`
 	StartsAt  time.Time `json:"starts_at"`
 	ExpiresAt time.Time `json:"expires_at"`
