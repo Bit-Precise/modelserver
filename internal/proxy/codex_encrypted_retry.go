@@ -60,10 +60,15 @@ func stripEncryptedReasoningContent(body []byte) ([]byte, bool) {
 	stripped := false
 
 	for i, item := range input.Array() {
-		if item.Get("type").String() == "reasoning" && item.Get("encrypted_content").Exists() {
-			if next, err := sjson.DeleteBytes(out, fmt.Sprintf("input.%d.encrypted_content", i)); err == nil {
-				out = next
-				stripped = true
+		// Skip null values explicitly — gjson's Exists() returns true for
+		// an explicit JSON null, but there's nothing to strip and triggering
+		// a retry on a null field would be pointless.
+		if item.Get("type").String() == "reasoning" {
+			if enc := item.Get("encrypted_content"); enc.Exists() && enc.Type != gjson.Null {
+				if next, err := sjson.DeleteBytes(out, fmt.Sprintf("input.%d.encrypted_content", i)); err == nil {
+					out = next
+					stripped = true
+				}
 			}
 		}
 

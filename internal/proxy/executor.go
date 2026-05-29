@@ -675,6 +675,13 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 						retryCancelFn()
 					}
 					cancelFn = retryCancelFn
+
+					// Classify outcome for the operator-facing metric.
+					if doErr == nil && resp != nil && resp.StatusCode < http.StatusBadRequest {
+						metrics.IncEncryptedReasoningRetry(metrics.EncryptedReasoningRetryRecovered)
+					} else {
+						metrics.IncEncryptedReasoningRetry(metrics.EncryptedReasoningRetryStillFailing)
+					}
 				} else {
 					// Backend reported invalid_encrypted_content but nothing
 					// matched the strip heuristic. Surface the original error
@@ -682,6 +689,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 					// to cover the new field shape.
 					logger.Warn("invalid_encrypted_content returned but no encrypted fields found in request",
 						"upstream_id", upstream.ID)
+					metrics.IncEncryptedReasoningRetry(metrics.EncryptedReasoningRetryNotStripped)
 					resp.Body = io.NopCloser(bytes.NewReader(errBody))
 				}
 			} else {
