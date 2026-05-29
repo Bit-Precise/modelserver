@@ -137,6 +137,25 @@ func TestStripEncryptedReasoningContent_NoEncryptedFields(t *testing.T) {
 	}
 }
 
+func TestStripEncryptedReasoningContent_IgnoresNullEncryptedContent(t *testing.T) {
+	// An explicit JSON null on encrypted_content is a no-op for the backend
+	// (Option<String>::None). Triggering a strip+retry for it would be
+	// pointless overhead, so we treat null as "nothing to strip".
+	in := []byte(`{
+		"input":[
+			{"type":"reasoning","summary":[],"encrypted_content":null}
+		]
+	}`)
+
+	out, stripped := stripEncryptedReasoningContent(in)
+	if stripped {
+		t.Error("stripped = true on null encrypted_content (should be no-op)")
+	}
+	if string(out) != string(in) {
+		t.Errorf("body mutated: got %q, want unchanged", string(out))
+	}
+}
+
 func TestStripEncryptedReasoningContent_HandlesMissingOrInvalidInput(t *testing.T) {
 	cases := []struct {
 		name string

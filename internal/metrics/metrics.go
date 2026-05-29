@@ -79,6 +79,7 @@ var (
 	extraUsageTopupsTotal           = newCounter("extra_usage_topups_total", "topup webhook deliveries")
 	extraUsageBalanceFen            = newCounter("extra_usage_balance_fen", "per-project extra-usage balance in fen")
 	imageStreamEventTooLargeTotal   = newCounter("image_stream_event_too_large_total", "image SSE events that exceeded parser buffer limit")
+	encryptedReasoningRetryTotal    = newCounter("encrypted_reasoning_retry_total", "Responses-API retries triggered by invalid_encrypted_content, by outcome")
 
 	counters = []*counter{
 		extraUsageRequestsTotal,
@@ -89,6 +90,7 @@ var (
 		extraUsageTopupsTotal,
 		extraUsageBalanceFen,
 		imageStreamEventTooLargeTotal,
+		encryptedReasoningRetryTotal,
 	}
 )
 
@@ -147,6 +149,32 @@ func SetExtraUsageBalance(projectID string, balanceFen int64) {
 // parser buffer cap.
 func IncImageStreamEventTooLarge() {
 	imageStreamEventTooLargeTotal.inc(1)
+}
+
+// EncryptedReasoningRetryResult labels the outcome of an
+// invalid_encrypted_content recovery attempt on a Responses-API request.
+const (
+	// EncryptedReasoningRetryRecovered: backend returned
+	// invalid_encrypted_content, we stripped encrypted blobs and the same
+	// upstream accepted the replayed request. Happy path — the conversation
+	// continues without a client-visible error.
+	EncryptedReasoningRetryRecovered = "recovered"
+	// EncryptedReasoningRetryStillFailing: backend returned
+	// invalid_encrypted_content, strip happened, retry still failed. The
+	// client sees the upstream's final response. Watch this counter — if it
+	// climbs, the strip heuristic may be missing a field shape.
+	EncryptedReasoningRetryStillFailing = "still_failing"
+	// EncryptedReasoningRetryNotStripped: backend returned
+	// invalid_encrypted_content but stripEncryptedReasoningContent found
+	// nothing to remove — a hard signal that the strip logic needs to be
+	// extended to cover a new encrypted field shape.
+	EncryptedReasoningRetryNotStripped = "not_stripped"
+)
+
+// IncEncryptedReasoningRetry records one invalid_encrypted_content
+// recovery outcome. See EncryptedReasoningRetry* for valid result values.
+func IncEncryptedReasoningRetry(result string) {
+	encryptedReasoningRetryTotal.inc(1, labelPair{"result", quote(result)})
 }
 
 func quote(s string) string {
