@@ -767,9 +767,10 @@ func handleMyMembership(st *store.Store) http.HandlerFunc {
 			// Superadmins may not be actual members; return a synthetic owner record.
 			if caller.IsSuperadmin {
 				writeData(w, http.StatusOK, types.ProjectMember{
-					UserID:    caller.ID,
-					ProjectID: projectID,
-					Role:      types.RoleOwner,
+					UserID:       caller.ID,
+					ProjectID:    projectID,
+					Role:         types.RoleOwner,
+					DeniedModels: []string{}, // contract: always an array, never null
 				})
 				return
 			}
