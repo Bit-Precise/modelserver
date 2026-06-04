@@ -60,6 +60,12 @@ ALTER TABLE project_members
 
 - `NOT NULL DEFAULT '{}'` — empty array means "no model is denied". Avoids
   three-valued logic (NULL vs `{}`) at every read site.
+- **Existing rows after migration are guaranteed empty.** PostgreSQL 11+
+  applies `ADD COLUMN ... NOT NULL DEFAULT '{}'` as a "fast default":
+  no table rewrite, every pre-existing row reads back as `{}`. No backfill
+  script is needed. Confirmed minimum is PG 11; the project already
+  targets a newer version (see other migrations using `gen_random_uuid()`,
+  PG 13+).
 - No index. Lookups are always by `(project_id, user_id)` (single-row read
   on an existing PK), never by model name.
 - No FK to the catalog. See *Non-goals*.
@@ -87,6 +93,27 @@ Four code-level checks already gate on `apiKey.AllowedModels`:
 `handleProxyRequest` is shared by `HandleMessages`, `HandleResponses`,
 `HandleResponsesCompact`, `HandleChatCompletions`, and
 `HandleImagesGenerations` — one check covers all of them.
+
+There is also one **non-request** read site, `HandleListModels`
+(`internal/proxy/router.go:80`), which uses `apiKey.AllowedModels` to
+filter the `/v1/models` response. This must also subtract the member
+denylist; otherwise a member sees model names that every actual request
+will 403 on — confusing and inconsistent.
+
+### Both authentication paths covered
+
+The denylist applies to every authenticated request, regardless of
+credential type:
+
+- **API-key path** (`handleAPIKeyAuth`, `auth_middleware.go:257`) already
+  reads the `ProjectMember` row via `apiKey.CreatedBy`. We piggyback on
+  this read to get `DeniedModels`.
+- **OAuth path** (`handleTokenIntrospectionAuth`,
+  `auth_middleware.go:369`) already reads the `ProjectMember` row via the
+  token's `user_id` claim. Same piggyback. The synthesized `APIKey`
+  constructed at line 333 has an empty `AllowedModels`, so the existing
+  allowlist check is a no-op on this path — but the denylist check in
+  `checkModelAllowed` still fires from the context value.
 
 ### Loading the denylist
 
@@ -144,6 +171,22 @@ Each of the four call sites replaces its current 4-line `if` block with
 a single call to `checkModelAllowed`, passing `writeGeminiError` for the
 Gemini path and `writeProxyError` otherwise.
 
+`HandleListModels` does not use `checkModelAllowed` (it's not enforcing
+on a single request; it's filtering a list). Logic:
+
+```go
+names := h.router.ActiveModels()
+if len(apiKey.AllowedModels) > 0 {
+    names = apiKey.AllowedModels
+}
+if denied := UserDeniedModelsFromContext(r.Context()); len(denied) > 0 {
+    names = subtract(names, denied)
+}
+```
+
+`subtract` returns the names from the first slice that are not present in
+the second.
+
 `modelInList` is reused unchanged; matching is exact-string against the
 canonical model name resolved by `h.resolveModel`.
 
@@ -173,26 +216,27 @@ Tri-state semantics matching the DB's `NOT NULL DEFAULT '{}'`:
 
 ### Validation
 
-1. **Non-empty body**: extend the existing "at least one of role,
+1. **Role gate** is already enforced by the existing
+   `requireRole(w, r, types.RoleOwner, types.RoleMaintainer)` call at
+   `handle_projects.go:471`, which guards the whole PATCH endpoint. A
+   developer never reaches the body parser, so no extra in-body role
+   check is needed for `denied_models`.
+2. **Non-empty body**: extend the existing "at least one of role,
    credit_quota_percent, or clear_quota must be provided" check to also
-   accept `DeniedModels != nil`.
-2. **Role gate** (Q1): only owner and maintainer may set `denied_models`.
-   The caller's role is already loaded in this handler scope (used for the
-   existing `targetMember.Role == types.RoleOwner` check).
-   ```go
-   if body.DeniedModels != nil {
-       if caller.Role != types.RoleOwner && caller.Role != types.RoleMaintainer {
-           writeError(w, http.StatusForbidden, "forbidden",
-               "only owner or maintainer can set denied_models")
-           return
-       }
-   }
-   ```
+   accept `DeniedModels != nil`. New message includes `denied_models` in
+   the list.
 3. **Element validation**: each entry trimmed, non-empty, deduped. Hard
    cap of 256 entries per member; over → 400. No catalog membership check.
 4. **Owner self-deny is allowed**: the user explicitly chose to make the
-   constraint uniform across roles. No special-case rejection of "owner
-   adds themselves to their own denylist."
+   runtime constraint uniform across roles. No special-case rejection of
+   "owner adds themselves to their own denylist."
+5. **No "maintainer can't touch another maintainer's denylist" rule.**
+   Existing quota code (line 522) blocks maintainer→maintainer quota
+   edits. Per the design discussion (Q1), `denied_models` is configurable
+   by any owner or maintainer for *all members*; we deliberately do not
+   port that quota-style restriction here. Worth a comment in the handler
+   pointing this out, so a future reader does not "fix" what looks like an
+   omission.
 
 ### Store layer
 
@@ -265,6 +309,13 @@ Style follows existing `_test.go` files in `internal/store`,
   own branch). The other shared-handler kinds (responses, chat
   completions, images generations) get one smoke-test each to confirm the
   shared check fires.
+- **OAuth-authenticated request** with the caller's member-row denylist
+  set → 403, just like the API-key path. Confirms the synthetic-key
+  branch in `auth_middleware.go` populates the context correctly.
+- **`HandleListModels`** returns names with denylist subtracted:
+  - no allowlist, denylist `["claude-opus-4-8"]` → opus name absent
+  - allowlist `["a","b","c"]`, denylist `["b"]` → only `["a","c"]`
+  - empty denylist → identical output to before
 
 ### Auth middleware
 
