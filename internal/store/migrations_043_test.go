@@ -48,3 +48,68 @@ func TestMigration043_AddDeniedModelsColumn(t *testing.T) {
 	// Suppress unused-var warning on userID (owner of the seeded project).
 	_ = userID
 }
+
+// TestGetProjectMemberDeniedModelsRoundTrip verifies that
+// GetProjectMember/ListProjectMembers read back denied_models as the
+// stored slice — empty for default rows, non-empty after a direct
+// UPDATE.
+func TestGetProjectMemberDeniedModelsRoundTrip(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	userID, projectID := seedUserAndProject(t, st)
+
+	// Seed a second user as a project member.
+	var memberID string
+	if err := st.pool.QueryRow(ctx, `
+		INSERT INTO users (email) VALUES ('m-' || gen_random_uuid()::text || '@test.local')
+		RETURNING id`).Scan(&memberID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := st.AddProjectMember(projectID, memberID, "developer"); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+
+	// Default: empty slice.
+	got, err := st.GetProjectMember(projectID, memberID)
+	if err != nil || got == nil {
+		t.Fatalf("get member: err=%v got=%v", err, got)
+	}
+	if got.DeniedModels == nil || len(got.DeniedModels) != 0 {
+		t.Fatalf("default DeniedModels = %v; want []", got.DeniedModels)
+	}
+
+	// Set via raw UPDATE, then re-read.
+	if _, err := st.pool.Exec(ctx, `
+		UPDATE project_members SET denied_models = $1
+		WHERE project_id = $2 AND user_id = $3`,
+		[]string{"claude-opus-4-8", "gpt-5-5"}, projectID, memberID); err != nil {
+		t.Fatalf("update denied_models: %v", err)
+	}
+	got, err = st.GetProjectMember(projectID, memberID)
+	if err != nil || got == nil {
+		t.Fatalf("re-get member: err=%v got=%v", err, got)
+	}
+	if len(got.DeniedModels) != 2 || got.DeniedModels[0] != "claude-opus-4-8" || got.DeniedModels[1] != "gpt-5-5" {
+		t.Fatalf("DeniedModels = %v; want [claude-opus-4-8 gpt-5-5]", got.DeniedModels)
+	}
+
+	// ListProjectMembers also surfaces it.
+	members, err := st.ListProjectMembers(projectID)
+	if err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+	var found bool
+	for _, m := range members {
+		if m.UserID == memberID {
+			found = true
+			if len(m.DeniedModels) != 2 {
+				t.Fatalf("ListProjectMembers DeniedModels = %v; want 2 entries", m.DeniedModels)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("seeded member not in ListProjectMembers result")
+	}
+	_ = userID
+}

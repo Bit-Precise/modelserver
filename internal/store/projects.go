@@ -169,10 +169,10 @@ func (s *Store) AddProjectMember(projectID, userID, role string) error {
 func (s *Store) GetProjectMember(projectID, userID string) (*types.ProjectMember, error) {
 	m := &types.ProjectMember{}
 	err := s.pool.QueryRow(context.Background(), `
-		SELECT user_id, project_id, role, created_at, credit_quota_percent
+		SELECT user_id, project_id, role, created_at, credit_quota_percent, denied_models
 		FROM project_members WHERE project_id = $1 AND user_id = $2`,
 		projectID, userID,
-	).Scan(&m.UserID, &m.ProjectID, &m.Role, &m.CreatedAt, &m.CreditQuotaPct)
+	).Scan(&m.UserID, &m.ProjectID, &m.Role, &m.CreatedAt, &m.CreditQuotaPct, &m.DeniedModels)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -185,7 +185,7 @@ func (s *Store) GetProjectMember(projectID, userID string) (*types.ProjectMember
 // ListProjectMembers returns all members of a project with user info.
 func (s *Store) ListProjectMembers(projectID string) ([]types.ProjectMember, error) {
 	rows, err := s.pool.Query(context.Background(), `
-		SELECT pm.user_id, pm.project_id, pm.role, pm.credit_quota_percent, pm.created_at,
+		SELECT pm.user_id, pm.project_id, pm.role, pm.credit_quota_percent, pm.denied_models, pm.created_at,
 			u.id, u.email, u.nickname, COALESCE(u.picture, '')
 		FROM project_members pm
 		JOIN users u ON pm.user_id = u.id
@@ -200,7 +200,7 @@ func (s *Store) ListProjectMembers(projectID string) ([]types.ProjectMember, err
 	for rows.Next() {
 		var m types.ProjectMember
 		var u types.User
-		if err := rows.Scan(&m.UserID, &m.ProjectID, &m.Role, &m.CreditQuotaPct, &m.CreatedAt,
+		if err := rows.Scan(&m.UserID, &m.ProjectID, &m.Role, &m.CreditQuotaPct, &m.DeniedModels, &m.CreatedAt,
 			&u.ID, &u.Email, &u.Nickname, &u.Picture); err != nil {
 			return nil, fmt.Errorf("scan member: %w", err)
 		}
@@ -224,7 +224,7 @@ func (s *Store) ListProjectMembersPaginated(projectID string, p types.Pagination
 	}
 
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
-		SELECT pm.user_id, pm.project_id, pm.role, pm.credit_quota_percent, pm.created_at,
+		SELECT pm.user_id, pm.project_id, pm.role, pm.credit_quota_percent, pm.denied_models, pm.created_at,
 			u.id, u.email, u.nickname, COALESCE(u.picture, '')
 		FROM project_members pm
 		JOIN users u ON pm.user_id = u.id
@@ -242,7 +242,7 @@ func (s *Store) ListProjectMembersPaginated(projectID string, p types.Pagination
 	for rows.Next() {
 		var m types.ProjectMember
 		var u types.User
-		if err := rows.Scan(&m.UserID, &m.ProjectID, &m.Role, &m.CreditQuotaPct, &m.CreatedAt,
+		if err := rows.Scan(&m.UserID, &m.ProjectID, &m.Role, &m.CreditQuotaPct, &m.DeniedModels, &m.CreatedAt,
 			&u.ID, &u.Email, &u.Nickname, &u.Picture); err != nil {
 			return nil, 0, fmt.Errorf("scan member: %w", err)
 		}
