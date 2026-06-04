@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"testing"
+
+	"github.com/modelserver/modelserver/internal/types"
 )
 
 // TestMigration043_AddDeniedModelsColumn verifies that an INSERT into
@@ -112,4 +114,94 @@ func TestGetProjectMemberDeniedModelsRoundTrip(t *testing.T) {
 		t.Fatalf("seeded member not in ListProjectMembers result")
 	}
 	_ = userID
+}
+
+// TestUpdateProjectMemberDeniedModels exercises the new
+// UpdateProjectMember signature with denied_models in every
+// combination with role and creditQuotaPct.
+func TestUpdateProjectMemberDeniedModels(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	_, projectID := seedUserAndProject(t, st)
+	var memberID string
+	if err := st.pool.QueryRow(ctx, `
+		INSERT INTO users (email) VALUES ('u-' || gen_random_uuid()::text || '@test.local')
+		RETURNING id`).Scan(&memberID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := st.AddProjectMember(projectID, memberID, "developer"); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+
+	// Helper to re-read the row.
+	read := func() *types.ProjectMember {
+		t.Helper()
+		m, err := st.GetProjectMember(projectID, memberID)
+		if err != nil || m == nil {
+			t.Fatalf("get member: err=%v m=%v", err, m)
+		}
+		return m
+	}
+
+	// 1. denylist-only update.
+	denied := []string{"claude-opus-4-8"}
+	if err := st.UpdateProjectMember(projectID, memberID, nil, nil, &denied); err != nil {
+		t.Fatalf("update denylist only: %v", err)
+	}
+	if got := read().DeniedModels; len(got) != 1 || got[0] != "claude-opus-4-8" {
+		t.Fatalf("denylist after solo update = %v", got)
+	}
+
+	// 2. Clear denylist.
+	empty := []string{}
+	if err := st.UpdateProjectMember(projectID, memberID, nil, nil, &empty); err != nil {
+		t.Fatalf("clear denylist: %v", err)
+	}
+	if got := read().DeniedModels; len(got) != 0 {
+		t.Fatalf("denylist after clear = %v; want []", got)
+	}
+
+	// 3. Combined role + quota + denylist in one call.
+	role := "maintainer"
+	q := 50.0
+	qPtr := &q
+	denied = []string{"a", "b"}
+	if err := st.UpdateProjectMember(projectID, memberID, &role, &qPtr, &denied); err != nil {
+		t.Fatalf("combined update: %v", err)
+	}
+	m := read()
+	if m.Role != "maintainer" {
+		t.Fatalf("Role = %q", m.Role)
+	}
+	if m.CreditQuotaPct == nil || *m.CreditQuotaPct != 50.0 {
+		t.Fatalf("CreditQuotaPct = %v", m.CreditQuotaPct)
+	}
+	if len(m.DeniedModels) != 2 {
+		t.Fatalf("DeniedModels = %v", m.DeniedModels)
+	}
+
+	// 4. All nil → no-op, no error.
+	if err := st.UpdateProjectMember(projectID, memberID, nil, nil, nil); err != nil {
+		t.Fatalf("no-op update: %v", err)
+	}
+
+	// 5. Promote to owner with denied_models present — owner promotion
+	//    still clears credit_quota_percent, and denied_models follows
+	//    the explicit argument (nil → unchanged).
+	owner := "owner"
+	if err := st.UpdateProjectMember(projectID, memberID, &owner, nil, nil); err != nil {
+		t.Fatalf("promote owner: %v", err)
+	}
+	m = read()
+	if m.Role != "owner" {
+		t.Fatalf("Role after promote = %q", m.Role)
+	}
+	if m.CreditQuotaPct != nil {
+		t.Fatalf("CreditQuotaPct should clear on owner promote; got %v", *m.CreditQuotaPct)
+	}
+	// denied_models was unchanged (we passed nil) — still 2 entries.
+	if len(m.DeniedModels) != 2 {
+		t.Fatalf("DeniedModels post-promote = %v; want 2", m.DeniedModels)
+	}
 }

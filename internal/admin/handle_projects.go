@@ -456,7 +456,7 @@ func handleAddMember(st *store.Store) http.HandlerFunc {
 		// Set quota if provided.
 		if body.CreditQuotaPct != nil {
 			quotaPtr := &body.CreditQuotaPct
-			if err := st.UpdateProjectMember(projectID, userID, nil, quotaPtr); err != nil {
+			if err := st.UpdateProjectMember(projectID, userID, nil, quotaPtr, nil); err != nil {
 				writeError(w, http.StatusInternalServerError, "internal", "failed to set member quota")
 				return
 			}
@@ -538,7 +538,7 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 		}
 
 		// If promoting to owner, quota is auto-cleared in the store layer.
-		if err := st.UpdateProjectMember(projectID, userID, body.Role, quotaArg); err != nil {
+		if err := st.UpdateProjectMember(projectID, userID, body.Role, quotaArg, nil); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to update member")
 			return
 		}

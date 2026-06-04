@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -263,40 +264,63 @@ func (s *Store) UpdateProjectMemberRole(projectID, userID, role string) error {
 	return err
 }
 
-// UpdateProjectMember updates a member's role and/or credit quota.
-// Pass nil pointers to leave fields unchanged.
-// If role is set to "owner", credit_quota_percent is forced to NULL.
-func (s *Store) UpdateProjectMember(projectID, userID string, role *string, creditQuotaPct **float64) error {
-	if role == nil && creditQuotaPct == nil {
+// UpdateProjectMember updates a member's role, credit quota, and/or
+// denied models. Pass nil pointers to leave fields unchanged.
+//
+//   - role:           *string. nil = unchanged.
+//   - creditQuotaPct: **float64. nil = unchanged; non-nil pointer whose
+//     value is nil = set NULL; non-nil pointer whose value is non-nil =
+//     set that float. (Same convention the previous signature used.)
+//   - deniedModels:   *[]string. nil = unchanged; non-nil pointer (including
+//     empty slice) = replace the column with that slice. Empty slice means
+//     "no model is denied".
+//
+// If role is set to "owner", credit_quota_percent is forced to NULL
+// regardless of the creditQuotaPct argument.
+func (s *Store) UpdateProjectMember(
+	projectID, userID string,
+	role *string,
+	creditQuotaPct **float64,
+	deniedModels *[]string,
+) error {
+	if role == nil && creditQuotaPct == nil && deniedModels == nil {
 		return nil
 	}
 
-	// If promoting to owner, clear quota.
-	if role != nil && *role == types.RoleOwner {
-		_, err := s.pool.Exec(context.Background(), `
-			UPDATE project_members SET role = $1, credit_quota_percent = NULL
-			WHERE project_id = $2 AND user_id = $3`, *role, projectID, userID)
-		return err
-	}
-
-	if role != nil && creditQuotaPct != nil {
-		_, err := s.pool.Exec(context.Background(), `
-			UPDATE project_members SET role = $1, credit_quota_percent = $2
-			WHERE project_id = $3 AND user_id = $4`, *role, *creditQuotaPct, projectID, userID)
-		return err
+	sets := make([]string, 0, 3)
+	args := make([]any, 0, 5)
+	next := 1
+	add := func(col string, val any) {
+		sets = append(sets, fmt.Sprintf("%s = $%d", col, next))
+		args = append(args, val)
+		next++
 	}
 
 	if role != nil {
-		_, err := s.pool.Exec(context.Background(), `
-			UPDATE project_members SET role = $1
-			WHERE project_id = $2 AND user_id = $3`, *role, projectID, userID)
-		return err
+		add("role", *role)
+		// Owner promotion always clears the quota, even if the caller
+		// also passed an explicit creditQuotaPct.
+		if *role == types.RoleOwner {
+			sets = append(sets, "credit_quota_percent = NULL")
+		} else if creditQuotaPct != nil {
+			add("credit_quota_percent", *creditQuotaPct) // *float64 (may be nil → SQL NULL)
+		}
+	} else if creditQuotaPct != nil {
+		add("credit_quota_percent", *creditQuotaPct)
 	}
 
-	// creditQuotaPct only
-	_, err := s.pool.Exec(context.Background(), `
-		UPDATE project_members SET credit_quota_percent = $1
-		WHERE project_id = $2 AND user_id = $3`, *creditQuotaPct, projectID, userID)
+	if deniedModels != nil {
+		// pgx encodes a non-nil []string as TEXT[]. Empty slice → '{}'.
+		add("denied_models", *deniedModels)
+	}
+
+	args = append(args, projectID, userID)
+	query := fmt.Sprintf(
+		"UPDATE project_members SET %s WHERE project_id = $%d AND user_id = $%d",
+		strings.Join(sets, ", "), next, next+1,
+	)
+
+	_, err := s.pool.Exec(context.Background(), query, args...)
 	return err
 }
 
