@@ -66,6 +66,7 @@ export interface ProjectMember {
   project_id: string;
   role: "owner" | "maintainer" | "developer";
   credit_quota_percent: number | null;
+  denied_models: string[]; // empty array = no model denied
   created_at: string;
   user?: User;
 }
