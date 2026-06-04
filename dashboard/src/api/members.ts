@@ -63,17 +63,26 @@ export function useUpdateMember(projectId: string) {
       role,
       credit_quota_percent,
       clear_quota,
+      denied_models,
     }: {
       userId: string;
       role?: string;
       credit_quota_percent?: number;
       clear_quota?: boolean;
-    }) =>
-      api.put(`/api/v1/projects/${projectId}/members/${userId}`, {
-        role,
-        credit_quota_percent,
-        clear_quota,
-      }),
+      // undefined  = leave unchanged
+      // []         = clear the denylist
+      // [...names] = replace
+      denied_models?: string[];
+    }) => {
+      // Build body conditionally so undefined fields never serialize
+      // as `null` (which the backend would reject for the wrong reason).
+      const body: Record<string, unknown> = {};
+      if (role !== undefined) body.role = role;
+      if (credit_quota_percent !== undefined) body.credit_quota_percent = credit_quota_percent;
+      if (clear_quota) body.clear_quota = clear_quota;
+      if (denied_models !== undefined) body.denied_models = denied_models;
+      return api.put(`/api/v1/projects/${projectId}/members/${userId}`, body);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["members", projectId] });
       qc.invalidateQueries({ queryKey: ["members-compact", projectId] });
