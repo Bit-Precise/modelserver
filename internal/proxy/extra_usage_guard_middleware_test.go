@@ -6,7 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelserver/modelserver/internal/config"
 	"github.com/modelserver/modelserver/internal/types"
@@ -116,6 +119,9 @@ func dummyCfg(enabled bool) config.ExtraUsageConfig {
 type fakeExtraUsageStore struct {
 	settings *types.ExtraUsageSettings
 	spent    int64
+
+	mu         sync.Mutex
+	logged     []*types.Request
 }
 
 func (f *fakeExtraUsageStore) GetExtraUsageSettings(_ string) (*types.ExtraUsageSettings, error) {
@@ -124,6 +130,21 @@ func (f *fakeExtraUsageStore) GetExtraUsageSettings(_ string) (*types.ExtraUsage
 
 func (f *fakeExtraUsageStore) GetMonthlyExtraSpendFen(_ string) (int64, error) {
 	return f.spent, nil
+}
+
+func (f *fakeExtraUsageStore) CreateRequest(req *types.Request) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logged = append(f.logged, req)
+	return nil
+}
+
+func (f *fakeExtraUsageStore) loggedRequests() []*types.Request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*types.Request, len(f.logged))
+	copy(out, f.logged)
+	return out
 }
 
 // runGuardWithIntent runs the middleware with a rate_limited intent and
@@ -260,6 +281,120 @@ func TestExtraUsageGuard_NoBypass_CreditPriceUnset_Rejected(t *testing.T) {
 	}
 	if rr.Code != http.StatusTooManyRequests {
 		t.Errorf("expected 429, got %d", rr.Code)
+	}
+}
+
+// TestExtraUsageGuard_ClientRestriction_NotEnabled_LogsRequest exercises the
+// production scenario reported in ops: a non-Claude-Code client hits an
+// anthropic-publisher model on a project that hasn't enabled extra usage. The
+// guard returns 429, but historically the rejection bypassed the requests
+// table entirely (RateLimitMiddleware took the classic-only happy path and
+// the guard only bumped a Prometheus counter). This test pins the new
+// behaviour: such rejections must produce a `rate_limited` row carrying the
+// reason and the human-readable rejection message so operators can locate
+// individual rejections in the requests table.
+func TestExtraUsageGuard_ClientRestriction_NotEnabled_LogsRequest(t *testing.T) {
+	st := &fakeExtraUsageStore{settings: nil} // extra-usage settings row absent
+	called := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true })
+	h := ExtraUsageGuardMiddleware(dummyCfg(true), st, slog.Default())(inner)
+
+	body := strings.NewReader(`{"model":"claude-haiku-4-5"}`)
+	r := httptest.NewRequest("POST", "/v1/messages", body)
+	ctx := context.WithValue(r.Context(), ctxExtraUsageIntent, ExtraUsageIntent{Reason: "client_restriction"})
+	ctx = context.WithValue(ctx, ctxProject, &types.Project{ID: "p1"})
+	ctx = context.WithValue(ctx, ctxAPIKey, &types.APIKey{ID: "k1", CreatedBy: "u1"})
+	ctx = context.WithValue(ctx, ctxTraceID, "trace-xyz")
+	r = r.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, r)
+
+	if called {
+		t.Fatalf("inner must not be called when guard rejects")
+	}
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d, want 429", rr.Code)
+	}
+
+	// CreateRequest is fired in a goroutine on the production path; give it
+	// a brief window to land before asserting.
+	deadline := time.Now().Add(2 * time.Second)
+	var logged []*types.Request
+	for time.Now().Before(deadline) {
+		logged = st.loggedRequests()
+		if len(logged) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(logged) != 1 {
+		t.Fatalf("expected exactly 1 logged request, got %d", len(logged))
+	}
+	got := logged[0]
+	if got.ProjectID != "p1" {
+		t.Errorf("ProjectID=%q, want p1", got.ProjectID)
+	}
+	if got.APIKeyID != "k1" {
+		t.Errorf("APIKeyID=%q, want k1", got.APIKeyID)
+	}
+	if got.CreatedBy != "u1" {
+		t.Errorf("CreatedBy=%q, want u1", got.CreatedBy)
+	}
+	if got.TraceID != "trace-xyz" {
+		t.Errorf("TraceID=%q, want trace-xyz", got.TraceID)
+	}
+	if got.Model != "claude-haiku-4-5" {
+		t.Errorf("Model=%q, want claude-haiku-4-5", got.Model)
+	}
+	if got.Status != types.RequestStatusRateLimited {
+		t.Errorf("Status=%q, want %q", got.Status, types.RequestStatusRateLimited)
+	}
+	if got.ExtraUsageReason != "client_restriction" {
+		t.Errorf("ExtraUsageReason=%q, want client_restriction", got.ExtraUsageReason)
+	}
+	wantMsg := "this client cannot use subscription for anthropic models; enable extra usage"
+	if got.ErrorMessage != wantMsg {
+		t.Errorf("ErrorMessage=%q, want %q", got.ErrorMessage, wantMsg)
+	}
+}
+
+// TestExtraUsageGuard_GlobalDisabled_LogsRequest pins that the global-disabled
+// short-circuit at the top of the guard also produces a requests row. This
+// path runs before the per-project settings lookup, so it's the only 4xx exit
+// that does not see `settings`.
+func TestExtraUsageGuard_GlobalDisabled_LogsRequest(t *testing.T) {
+	st := &fakeExtraUsageStore{}
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+	h := ExtraUsageGuardMiddleware(dummyCfg(false), st, slog.Default())(inner)
+
+	body := strings.NewReader(`{"model":"claude-haiku-4-5"}`)
+	r := httptest.NewRequest("POST", "/v1/messages", body)
+	ctx := context.WithValue(r.Context(), ctxExtraUsageIntent, ExtraUsageIntent{Reason: "rate_limited"})
+	ctx = context.WithValue(ctx, ctxProject, &types.Project{ID: "p1"})
+	ctx = context.WithValue(ctx, ctxAPIKey, &types.APIKey{ID: "k1", CreatedBy: "u1"})
+	r = r.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, r)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d, want 429", rr.Code)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var logged []*types.Request
+	for time.Now().Before(deadline) {
+		logged = st.loggedRequests()
+		if len(logged) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(logged) != 1 {
+		t.Fatalf("expected exactly 1 logged request, got %d", len(logged))
+	}
+	if logged[0].ExtraUsageReason != "rate_limited" {
+		t.Errorf("ExtraUsageReason=%q, want rate_limited", logged[0].ExtraUsageReason)
 	}
 }
 

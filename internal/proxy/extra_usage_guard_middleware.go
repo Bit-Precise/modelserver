@@ -69,6 +69,11 @@ func ExtraUsageContextFromContext(ctx context.Context) (ExtraUsageContext, bool)
 type extraUsageStore interface {
 	GetExtraUsageSettings(projectID string) (*types.ExtraUsageSettings, error)
 	GetMonthlyExtraSpendFen(projectID string) (int64, error)
+	// CreateRequest mirrors *store.Store.CreateRequest so the guard can
+	// persist a row for 4xx rejections — without this, guard-level 429s are
+	// invisible in the requests table (only a Prometheus counter is bumped),
+	// which makes per-rejection investigation impossible.
+	CreateRequest(r *types.Request) error
 }
 
 // ExtraUsageGuardMiddleware checks the global circuit breaker and per-project
@@ -97,10 +102,12 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 			}
 
 			if !cfg.Enabled {
+				msg := "extra usage temporarily disabled"
 				writeExtraUsageRejected(w, http.StatusTooManyRequests, intent.Reason, guardStateRejected{
 					Enabled: false,
-					Message: "extra usage temporarily disabled",
+					Message: msg,
 				})
+				logGuardRejection(st, r, intent.Reason, msg)
 				recordExtraUsageResult(intent.Reason, "rejected")
 				return
 			}
@@ -127,19 +134,23 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 
 			if !bypass {
 				if settings == nil || !settings.Enabled {
+					msg := rejectedMessage(intent.Reason, "not_enabled")
 					writeExtraUsageRejected(w, http.StatusTooManyRequests, intent.Reason, guardStateRejected{
 						Enabled: false,
-						Message: rejectedMessage(intent.Reason, "not_enabled"),
+						Message: msg,
 					})
+					logGuardRejection(st, r, intent.Reason, msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
 				if settings.BalanceFen <= 0 {
+					msg := rejectedMessage(intent.Reason, "balance_depleted")
 					writeExtraUsageRejected(w, http.StatusTooManyRequests, intent.Reason, guardStateRejected{
 						Enabled:    true,
 						BalanceFen: settings.BalanceFen,
-						Message:    rejectedMessage(intent.Reason, "balance_depleted"),
+						Message:    msg,
 					})
+					logGuardRejection(st, r, intent.Reason, msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
@@ -159,11 +170,13 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 				if cfg.CreditPriceFen <= 0 {
 					logger.Error("extra_usage_pricing_unavailable",
 						"reason", "credit_price_unset", "project_id", project.ID)
+					msg := rejectedMessage(intent.Reason, "model_unpriced")
 					writeExtraUsageRejected(w, http.StatusTooManyRequests, intent.Reason, guardStateRejected{
 						Enabled:    true,
 						BalanceFen: settings.BalanceFen,
-						Message:    rejectedMessage(intent.Reason, "model_unpriced"),
+						Message:    msg,
 					})
+					logGuardRejection(st, r, intent.Reason, msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
@@ -175,11 +188,13 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 					logger.Error("extra_usage_pricing_unavailable",
 						"reason", "model_missing_default_rate",
 						"project_id", project.ID, "model", modelName)
+					msg := rejectedMessage(intent.Reason, "model_unpriced")
 					writeExtraUsageRejected(w, http.StatusTooManyRequests, intent.Reason, guardStateRejected{
 						Enabled:    true,
 						BalanceFen: settings.BalanceFen,
-						Message:    rejectedMessage(intent.Reason, "model_unpriced"),
+						Message:    msg,
 					})
+					logGuardRejection(st, r, intent.Reason, msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
@@ -198,11 +213,13 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 					return
 				}
 				if spent >= settings.MonthlyLimitFen {
+					msg := rejectedMessage(intent.Reason, "monthly_limit")
 					writeExtraUsageRejected(w, http.StatusTooManyRequests, intent.Reason, guardStateRejected{
 						Enabled:    true,
 						BalanceFen: settings.BalanceFen,
-						Message:    rejectedMessage(intent.Reason, "monthly_limit"),
+						Message:    msg,
 					})
+					logGuardRejection(st, r, intent.Reason, msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
@@ -286,4 +303,41 @@ func rejectedMessage(reason, subReason string) string {
 // recordExtraUsageResult bumps the Prometheus counter for guard decisions.
 func recordExtraUsageResult(reason, result string) {
 	metrics.IncExtraUsageRequest(reason, result)
+}
+
+// logGuardRejection writes a row to the requests table so guard-level 429s
+// are visible alongside RateLimitMiddleware's rejections (which use the same
+// `rate_limited` status — see types.RequestStatusRateLimited). Without this
+// row, the only trace of an extra-usage rejection is a Prometheus counter,
+// which makes per-rejection investigation impossible. ExtraUsageReason
+// distinguishes the two flavours ("client_restriction" vs "rate_limited")
+// so dashboards that want to split the buckets can do so.
+//
+// Best-effort: store/auth context may be missing on infra-failure paths
+// (5xx), so we only log when both project and api key are populated. The
+// insert runs in a goroutine to match logRateLimitRejection's pattern and
+// keep the response path off the database.
+func logGuardRejection(st extraUsageStore, r *http.Request, reason, message string) {
+	if st == nil {
+		return
+	}
+	project := ProjectFromContext(r.Context())
+	apiKey := APIKeyFromContext(r.Context())
+	if project == nil || apiKey == nil {
+		return
+	}
+	model := peekModel(r)
+	traceID := TraceIDFromContext(r.Context())
+	req := &types.Request{
+		ProjectID:        project.ID,
+		APIKeyID:         apiKey.ID,
+		CreatedBy:        apiKey.CreatedBy,
+		TraceID:          traceID,
+		Model:            model,
+		Status:           types.RequestStatusRateLimited,
+		ClientIP:         r.RemoteAddr,
+		ErrorMessage:     message,
+		ExtraUsageReason: reason,
+	}
+	go st.CreateRequest(req)
 }
