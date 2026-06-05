@@ -49,8 +49,23 @@ func TestSubscriptionEligibility_AnthropicClaudeCode_Eligible(t *testing.T) {
 	}
 }
 
+// Claude Desktop is Anthropic's first-party Electron app; like Claude Code it
+// is allowed to consume the project's subscription against anthropic-publisher
+// models. Anything else (third-party tools, unknown clients) must still hit
+// the client_restriction branch.
+func TestSubscriptionEligibility_AnthropicClaudeDesktop_Eligible(t *testing.T) {
+	m := &types.Model{Name: "claude-opus-4-7", Publisher: types.PublisherAnthropic}
+	h, got := buildChain(withModelKind(m, types.ClientKindClaudeDesktop))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/x", nil))
+	if !got.Eligible || got.Reason != "" {
+		t.Errorf("claude-desktop+anthropic → %+v, want eligible", *got)
+	}
+}
+
 func TestSubscriptionEligibility_AnthropicOther_ClientRestriction(t *testing.T) {
 	m := &types.Model{Name: "claude-opus-4-7", Publisher: types.PublisherAnthropic}
+	// Note: ClientKindClaudeDesktop is intentionally absent — desktop is
+	// covered by AnthropicClaudeDesktop_Eligible above.
 	for _, kind := range []string{types.ClientKindOpenCode, types.ClientKindCodex, types.ClientKindOpenClaw, types.ClientKindUnknown} {
 		h, got := buildChain(withModelKind(m, kind))
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/x", nil))
@@ -63,7 +78,7 @@ func TestSubscriptionEligibility_AnthropicOther_ClientRestriction(t *testing.T) 
 func TestSubscriptionEligibility_OpenAIAndGoogle_AnyClientEligible(t *testing.T) {
 	for _, pub := range []string{types.PublisherOpenAI, types.PublisherGoogle} {
 		m := &types.Model{Name: "x", Publisher: pub}
-		for _, kind := range []string{types.ClientKindClaudeCode, types.ClientKindOpenCode, types.ClientKindUnknown} {
+		for _, kind := range []string{types.ClientKindClaudeCode, types.ClientKindClaudeDesktop, types.ClientKindOpenCode, types.ClientKindUnknown} {
 			h, got := buildChain(withModelKind(m, kind))
 			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/x", nil))
 			if !got.Eligible {

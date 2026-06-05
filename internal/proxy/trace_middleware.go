@@ -142,6 +142,15 @@ func deriveClientKind(r *http.Request, cfg config.TraceConfig) string {
 		strings.TrimSpace(r.Header.Get(openCodeTraceHeader)) != "" {
 		return types.ClientKindOpenCode
 	}
+	// Claude Desktop (Anthropic's Electron app) ships a Chromium-style UA
+	// containing both "Claude/<version>" (the product segment) and
+	// "Electron/<version>" (the runtime segment). The CLI's UA is the
+	// unrelated "claude-cli/<version> (external, cli)" string set in
+	// normalize_identity.go, so requiring both substrings keeps CLI traffic
+	// out of this branch even if its UA is ever shortened to "claude/".
+	if strings.Contains(ua, "claude/") && strings.Contains(ua, "electron/") {
+		return types.ClientKindClaudeDesktop
+	}
 	if isOpenClawRequest(r) {
 		return types.ClientKindOpenClaw
 	}

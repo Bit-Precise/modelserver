@@ -27,11 +27,12 @@ const (
 // answers "which client is this, regardless of trace headers present".
 // The subscription-eligibility decision (§3.2) depends on the latter.
 const (
-	ClientKindClaudeCode = "claude-code"
-	ClientKindOpenCode   = "opencode"
-	ClientKindOpenClaw   = "openclaw"
-	ClientKindCodex      = "codex"
-	ClientKindUnknown    = ""
+	ClientKindClaudeCode    = "claude-code"
+	ClientKindClaudeDesktop = "claude-desktop"
+	ClientKindOpenCode      = "opencode"
+	ClientKindOpenClaw      = "openclaw"
+	ClientKindCodex         = "codex"
+	ClientKindUnknown       = ""
 )
 
 // Publisher values for the global models table. These are the set the

@@ -74,6 +74,44 @@ func TestDeriveClientKind_CodexViaSessionHeader(t *testing.T) {
 	}
 }
 
+// Real Claude Desktop UA captured from a production rejection. The Electron
+// shell concatenates Chromium's UA with the product `Claude/<version>` and
+// `Electron/<version>` segments; CLI's UA is the unrelated
+// `claude-cli/<version> (external, cli)` string set in normalize_identity.go.
+const claudeDesktopRealUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/1.11187.1 Chrome/146.0.7680.216 Electron/41.6.1 Safari/537.36"
+
+func TestDeriveClientKind_ClaudeDesktopViaUserAgent(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	r.Header.Set("User-Agent", claudeDesktopRealUA)
+	if got := deriveClientKind(r, config.TraceConfig{}); got != types.ClientKindClaudeDesktop {
+		t.Errorf("real Claude Desktop UA → %q, want %q", got, types.ClientKindClaudeDesktop)
+	}
+}
+
+// The CLI's UA contains "claude-cli/" not "claude/". The Electron substring
+// gate prevents collision either way, but pin it as a regression test in case
+// somebody simplifies the rule to a single substring match.
+func TestDeriveClientKind_ClaudeCLIIsNotMisclassifiedAsDesktop(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	r.Header.Set("User-Agent", "claude-cli/2.1.116 (external, cli)")
+	// No metadata.user_id in body — body classifier returns nothing, so this
+	// should fall through to ClientKindUnknown (and definitely NOT to desktop).
+	if got := deriveClientKind(r, config.TraceConfig{}); got == types.ClientKindClaudeDesktop {
+		t.Errorf("claude-cli UA must not classify as desktop; got %q", got)
+	}
+}
+
+// If somebody hand-fakes a UA with just "Claude/" but no Electron segment
+// (e.g. some unrelated tool that uses the substring), don't promote them to
+// desktop. The Electron gate is the meaningful signal.
+func TestDeriveClientKind_ClaudeUASubstringWithoutElectronStaysUnknown(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	r.Header.Set("User-Agent", "claude/9.9.9 (some-other-tool)")
+	if got := deriveClientKind(r, config.TraceConfig{}); got != types.ClientKindUnknown {
+		t.Errorf("Claude/ UA without Electron/ → %q, want unknown", got)
+	}
+}
+
 func TestDeriveClientKind_UnknownByDefault(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	if got := deriveClientKind(r, config.TraceConfig{}); got != types.ClientKindUnknown {

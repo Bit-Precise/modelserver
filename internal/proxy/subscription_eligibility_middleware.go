@@ -53,7 +53,7 @@ func SubscriptionEligibilityMiddleware() func(http.Handler) http.Handler {
 			case m.Publisher == "":
 				// Data hole: treat as eligible but surface to ops via metric.
 				metrics.IncExtraUsageMissingPublisher(m.Name)
-			case m.Publisher == types.PublisherAnthropic && kind != types.ClientKindClaudeCode:
+			case m.Publisher == types.PublisherAnthropic && !isAnthropicSubscriptionClient(kind):
 				eligible = false
 				reason = types.ExtraUsageReasonClientRestriction
 			}
@@ -63,4 +63,13 @@ func SubscriptionEligibilityMiddleware() func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// isAnthropicSubscriptionClient returns true for client kinds that are
+// allowed to consume the project's subscription against anthropic-publisher
+// models. Today that's Anthropic's first-party clients: Claude Code (CLI)
+// and Claude Desktop (Electron app). Third-party tools and unknown clients
+// must take the extra-usage path instead.
+func isAnthropicSubscriptionClient(kind string) bool {
+	return kind == types.ClientKindClaudeCode || kind == types.ClientKindClaudeDesktop
 }
