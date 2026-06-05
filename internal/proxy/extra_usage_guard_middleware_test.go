@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -395,6 +396,82 @@ func TestExtraUsageGuard_GlobalDisabled_LogsRequest(t *testing.T) {
 	}
 	if logged[0].ExtraUsageReason != "rate_limited" {
 		t.Errorf("ExtraUsageReason=%q, want rate_limited", logged[0].ExtraUsageReason)
+	}
+}
+
+// TestExtraUsageGuard_ClientRestriction_LogsRequestDetails pins that when the
+// guard rejects, a structured slog line is emitted carrying the inputs that
+// determined the verdict (publisher, client_kind, user-agent, presence of the
+// four client-kind detection signals, etc). Without this, operators can see
+// "client_restriction" was the reason but not why the request wasn't
+// recognised as the matching client.
+func TestExtraUsageGuard_ClientRestriction_LogsRequestDetails(t *testing.T) {
+	st := &fakeExtraUsageStore{settings: nil}
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	h := ExtraUsageGuardMiddleware(dummyCfg(true), st, logger)(inner)
+
+	body := strings.NewReader(`{"model":"claude-haiku-4-5","metadata":{"user_id":"{\"device_id\":\"abc\",\"account_uuid\":\"u-1\"}"}}`)
+	r := httptest.NewRequest("POST", "/v1/messages", body)
+	r.Header.Set("User-Agent", "curl/8.4.0")
+	r.Header.Set("x-app", "my-tool")
+	r.RemoteAddr = "10.0.0.5:54321"
+	ctx := context.WithValue(r.Context(), ctxExtraUsageIntent, ExtraUsageIntent{Reason: "client_restriction"})
+	ctx = context.WithValue(ctx, ctxProject, &types.Project{ID: "p1"})
+	ctx = context.WithValue(ctx, ctxAPIKey, &types.APIKey{ID: "k1", CreatedBy: "u1"})
+	ctx = context.WithValue(ctx, ctxTraceID, "trace-xyz")
+	ctx = context.WithValue(ctx, ctxModel, &types.Model{Name: "claude-haiku-4-5", Publisher: types.PublisherAnthropic})
+	ctx = context.WithValue(ctx, ctxClientKind, types.ClientKindUnknown)
+	r = r.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, r)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d, want 429", rr.Code)
+	}
+
+	// Find the guard-rejection log line.
+	var found map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(logBuf.Bytes()), []byte("\n")) {
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		if msg, _ := rec["msg"].(string); msg == "extra_usage_rejected" {
+			found = rec
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("no extra_usage_rejected log line emitted; buf=%s", logBuf.String())
+	}
+
+	// Spot-check fields that ops needs to attribute and triage.
+	wantStr := map[string]string{
+		"reason":           "client_restriction",
+		"sub_reason":       "not_enabled",
+		"project_id":       "p1",
+		"api_key_id":       "k1",
+		"created_by":       "u1",
+		"trace_id":         "trace-xyz",
+		"model":            "claude-haiku-4-5",
+		"publisher":        "anthropic",
+		"client_kind":      "unknown",
+		"user_agent":       "curl/8.4.0",
+		"client_ip":        "10.0.0.5:54321",
+		"path":             "/v1/messages",
+		"user_id_shape":    "json_no_session",
+		"opencode_header":  "false",
+		"codex_session":    "false",
+		"openclaw_match":   "false",
+	}
+	for k, want := range wantStr {
+		got, _ := found[k].(string)
+		if got != want {
+			t.Errorf("log[%s]=%q, want %q", k, got, want)
+		}
 	}
 }
 

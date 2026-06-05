@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
+
+	"github.com/tidwall/gjson"
 
 	"github.com/modelserver/modelserver/internal/config"
 	"github.com/modelserver/modelserver/internal/metrics"
@@ -107,7 +110,7 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 					Enabled: false,
 					Message: msg,
 				})
-				logGuardRejection(st, r, intent.Reason, msg)
+				emitGuardRejection(logger, st, r, intent.Reason, "global_disabled", msg)
 				recordExtraUsageResult(intent.Reason, "rejected")
 				return
 			}
@@ -139,7 +142,7 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 						Enabled: false,
 						Message: msg,
 					})
-					logGuardRejection(st, r, intent.Reason, msg)
+					emitGuardRejection(logger, st, r, intent.Reason, "not_enabled", msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
@@ -150,7 +153,7 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 						BalanceFen: settings.BalanceFen,
 						Message:    msg,
 					})
-					logGuardRejection(st, r, intent.Reason, msg)
+					emitGuardRejection(logger, st, r, intent.Reason, "balance_depleted", msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
@@ -176,7 +179,7 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 						BalanceFen: settings.BalanceFen,
 						Message:    msg,
 					})
-					logGuardRejection(st, r, intent.Reason, msg)
+					emitGuardRejection(logger, st, r, intent.Reason, "model_unpriced_credit_price_unset", msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
@@ -194,7 +197,7 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 						BalanceFen: settings.BalanceFen,
 						Message:    msg,
 					})
-					logGuardRejection(st, r, intent.Reason, msg)
+					emitGuardRejection(logger, st, r, intent.Reason, "model_unpriced_missing_default_rate", msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
@@ -219,7 +222,7 @@ func ExtraUsageGuardMiddleware(cfg config.ExtraUsageConfig, st extraUsageStore, 
 						BalanceFen: settings.BalanceFen,
 						Message:    msg,
 					})
-					logGuardRejection(st, r, intent.Reason, msg)
+					emitGuardRejection(logger, st, r, intent.Reason, "monthly_limit", msg)
 					recordExtraUsageResult(intent.Reason, "rejected")
 					return
 				}
@@ -305,39 +308,147 @@ func recordExtraUsageResult(reason, result string) {
 	metrics.IncExtraUsageRequest(reason, result)
 }
 
-// logGuardRejection writes a row to the requests table so guard-level 429s
-// are visible alongside RateLimitMiddleware's rejections (which use the same
-// `rate_limited` status — see types.RequestStatusRateLimited). Without this
-// row, the only trace of an extra-usage rejection is a Prometheus counter,
-// which makes per-rejection investigation impossible. ExtraUsageReason
-// distinguishes the two flavours ("client_restriction" vs "rate_limited")
-// so dashboards that want to split the buckets can do so.
+// emitGuardRejection records a guard-level 429 in two places:
 //
-// Best-effort: store/auth context may be missing on infra-failure paths
-// (5xx), so we only log when both project and api key are populated. The
-// insert runs in a goroutine to match logRateLimitRejection's pattern and
-// keep the response path off the database.
-func logGuardRejection(st extraUsageStore, r *http.Request, reason, message string) {
-	if st == nil {
-		return
-	}
+//   - slog at Warn level under the canonical message "extra_usage_rejected",
+//     carrying every input that fed into the verdict (publisher, client_kind,
+//     user-agent, client-kind detection signals, project/api-key/trace ids).
+//     This is the primary triage surface — `grep extra_usage_rejected` plus
+//     the JSON fields tells operators exactly why a request was rejected and
+//     why the client wasn't recognised (e.g. missing metadata.user_id,
+//     wrong User-Agent).
+//   - requests table via st.CreateRequest, using the existing
+//     RequestStatusRateLimited status so dashboards and queries that already
+//     filter on `rate_limited` keep working. ExtraUsageReason distinguishes
+//     the guard-side rejection from RateLimitMiddleware's classic 429s.
+//
+// Both sinks are best-effort: the DB row is skipped when project/api-key
+// context is missing (5xx infra-failure paths), and the insert runs in a
+// goroutine to keep the response path off the database. The slog line is
+// always emitted because diagnosis matters even when attribution is partial.
+func emitGuardRejection(logger *slog.Logger, st extraUsageStore, r *http.Request, reason, subReason, message string) {
 	project := ProjectFromContext(r.Context())
 	apiKey := APIKeyFromContext(r.Context())
-	if project == nil || apiKey == nil {
+	model := ModelFromContext(r.Context())
+	traceID := TraceIDFromContext(r.Context())
+	kind := ClientKindFromContext(r.Context())
+	bodyModel := peekModel(r)
+
+	publisher := ""
+	modelName := bodyModel
+	if model != nil {
+		publisher = model.Publisher
+		if model.Name != "" {
+			modelName = model.Name
+		}
+	}
+	projectID, apiKeyID, createdBy := "", "", ""
+	if project != nil {
+		projectID = project.ID
+	}
+	if apiKey != nil {
+		apiKeyID = apiKey.ID
+		createdBy = apiKey.CreatedBy
+	}
+	ua := r.Header.Get("User-Agent")
+	opencodeHeader := strings.TrimSpace(r.Header.Get(openCodeTraceHeader)) != ""
+	codexSession := codexSessionIDFromRequest(r) != ""
+	openclawMatch := isOpenClawRequest(r)
+	userIDShape := classifyClaudeUserIDShape(r)
+
+	if logger != nil {
+		logger.Warn("extra_usage_rejected",
+			"reason", reason,
+			"sub_reason", subReason,
+			"message", message,
+			"project_id", projectID,
+			"api_key_id", apiKeyID,
+			"created_by", createdBy,
+			"trace_id", traceID,
+			"model", modelName,
+			"publisher", publisher,
+			"client_kind", classifyClientKindLabel(kind),
+			"user_agent", truncate(ua, 256),
+			"client_ip", r.RemoteAddr,
+			"path", r.URL.Path,
+			"user_id_shape", userIDShape,
+			"opencode_header", strconv.FormatBool(opencodeHeader),
+			"codex_session", strconv.FormatBool(codexSession),
+			"openclaw_match", strconv.FormatBool(openclawMatch),
+		)
+	}
+
+	if st == nil || project == nil || apiKey == nil {
 		return
 	}
-	model := peekModel(r)
-	traceID := TraceIDFromContext(r.Context())
 	req := &types.Request{
 		ProjectID:        project.ID,
 		APIKeyID:         apiKey.ID,
 		CreatedBy:        apiKey.CreatedBy,
 		TraceID:          traceID,
-		Model:            model,
+		Model:            modelName,
 		Status:           types.RequestStatusRateLimited,
 		ClientIP:         r.RemoteAddr,
 		ErrorMessage:     message,
 		ExtraUsageReason: reason,
 	}
 	go st.CreateRequest(req)
+}
+
+// classifyClientKindLabel renders the empty unknown sentinel as a readable
+// label for log scraping. Other kinds pass through unchanged.
+func classifyClientKindLabel(kind string) string {
+	if kind == types.ClientKindUnknown {
+		return "unknown"
+	}
+	return kind
+}
+
+// classifyClaudeUserIDShape inspects the request body and returns a short
+// label describing what (if anything) was found at metadata.user_id. This
+// is the single most useful field for diagnosing why a request wasn't
+// recognised as Claude Code:
+//
+//   - "absent"             — body has no metadata.user_id at all
+//   - "json_session"       — JSON object containing a non-empty session_id
+//   - "json_no_session"    — JSON object missing session_id
+//   - "legacy_session"     — legacy user_<hex>_..._session_<uuid> string
+//   - "legacy_no_session"  — non-JSON string that didn't match the legacy pattern
+//
+// Body access mirrors tryExtractClaudeCodeTraceID so the read doesn't
+// consume the body for downstream handlers.
+func classifyClaudeUserIDShape(r *http.Request) string {
+	if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+		return "absent"
+	}
+	body, err := readAndRestoreBody(r)
+	if err != nil || len(body) == 0 {
+		return "absent"
+	}
+	res := gjson.GetBytes(body, "metadata.user_id")
+	if !res.Exists() {
+		return "absent"
+	}
+	raw := res.String()
+	if raw == "" {
+		return "absent"
+	}
+	if strings.HasPrefix(strings.TrimSpace(raw), "{") {
+		if gjson.Get(raw, "session_id").String() != "" {
+			return "json_session"
+		}
+		return "json_no_session"
+	}
+	if claudeUserIDLegacyPattern.MatchString(raw) {
+		return "legacy_session"
+	}
+	return "legacy_no_session"
+}
+
+// truncate clips s to at most n bytes, suffixing with "…" when shortened.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
