@@ -15,7 +15,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { Request } from "@/api/types";
-import { useAuth } from "@/hooks/useAuth";
 import { Activity, Zap, Clock, Coins, Receipt, Wallet, PiggyBank, Info } from "lucide-react";
 import { Link } from "react-router";
 import {
@@ -90,7 +89,6 @@ export function OverviewPage() {
   const { data: recentData } = useRequests(projectId, { per_page: 5 });
   const { data: myQuotaData } = useMyQuota(projectId);
   const { data: subUsageData } = useSubscriptionUsage(projectId);
-  const { user } = useAuth();
 
   const overview = usage?.data;
   const dailyData = daily?.data ?? [];
@@ -303,11 +301,7 @@ export function OverviewPage() {
                   <div className="flex justify-between text-sm">
                     <span className="capitalize">{w.window}</span>
                     <span className="flex items-center gap-2 text-muted-foreground">
-                      <span>
-                        {user?.is_superadmin
-                          ? `${Math.round(w.used ?? 0).toLocaleString()} / ${(w.limit ?? 0).toLocaleString()}`
-                          : `${w.percentage.toFixed(2)}%`}
-                      </span>
+                      <span>{w.percentage.toFixed(2)}%</span>
                       {resetIn && (
                         <span
                           className="text-xs"
