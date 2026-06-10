@@ -635,8 +635,8 @@ type quotaWindowStatus struct {
 }
 
 // serveQuotaUsage is the shared core logic for quota usage responses.
-// When showCredits is false, absolute credit values (limit/used) are omitted from the response.
-func serveQuotaUsage(st *store.Store, w http.ResponseWriter, projectID, userID string, showCredits bool) {
+// Always emits percentages only — absolute credit values are never exposed.
+func serveQuotaUsage(st *store.Store, w http.ResponseWriter, projectID, userID string) {
 	member, err := st.GetProjectMember(projectID, userID)
 	if err != nil || member == nil {
 		writeError(w, http.StatusNotFound, "not_found", "member not found")
@@ -712,10 +712,6 @@ func serveQuotaUsage(st *store.Store, w http.ResponseWriter, projectID, userID s
 			WindowType: rule.WindowType,
 			Percentage: percentage,
 		}
-		if showCredits {
-			ws.Limit = &userLimit
-			ws.Used = &used
-		}
 
 		if rule.WindowType == types.WindowTypeCalendar || rule.WindowType == types.WindowTypeFixed {
 			resetDur := ratelimit.WindowResetDuration(rule.Window, rule.WindowType, rule.AnchorTime)
@@ -745,7 +741,7 @@ func handleQuotaUsage(st *store.Store) http.HandlerFunc {
 			return
 		}
 
-		serveQuotaUsage(st, w, projectID, userID, caller.IsSuperadmin)
+		serveQuotaUsage(st, w, projectID, userID)
 	}
 }
 
@@ -753,7 +749,7 @@ func handleMyQuota(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projectID := chi.URLParam(r, "projectID")
 		caller := UserFromContext(r.Context())
-		serveQuotaUsage(st, w, projectID, caller.ID, caller.IsSuperadmin)
+		serveQuotaUsage(st, w, projectID, caller.ID)
 	}
 }
 
