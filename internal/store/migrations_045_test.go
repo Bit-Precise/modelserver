@@ -62,12 +62,13 @@ func TestMigration045_PlansSeeded(t *testing.T) {
 	ctx := context.Background()
 
 	cases := []struct {
-		key        string
-		wantInput  float64
-		wantOutput float64
+		key           string
+		wantInput     float64
+		wantOutput    float64
+		wantCacheRead float64
 	}{
-		{"gpt-5.4-mini", 0.0022, 0.0175},
-		{"gpt-5.4-nano", 0.0005, 0.0035},
+		{"gpt-5.4-mini", 0.0022, 0.0175, 0.0002},
+		{"gpt-5.4-nano", 0.0005, 0.0035, 0.0001},
 	}
 
 	for _, tc := range cases {
@@ -83,20 +84,32 @@ func TestMigration045_PlansSeeded(t *testing.T) {
 			t.Fatalf("%d plan(s) missing %s after migration", missing, tc.key)
 		}
 
-		// Spot-check the rate values on the well-known 'pro' plan.
-		var input, output float64
+		// Spot-check the rate values on the well-known 'pro' plan. Includes
+		// cache_read_rate and the long_context payload so a future edit that
+		// drops either at the plan level is caught.
+		var input, output, cacheRead, lcIn, lcOut float64
+		var lcThresh int
 		err := st.pool.QueryRow(ctx, `
 			SELECT
 			  (model_credit_rates->$1->>'input_rate')::float8,
-			  (model_credit_rates->$1->>'output_rate')::float8
+			  (model_credit_rates->$1->>'output_rate')::float8,
+			  (model_credit_rates->$1->>'cache_read_rate')::float8,
+			  (model_credit_rates->$1->'long_context'->>'input_multiplier')::float8,
+			  (model_credit_rates->$1->'long_context'->>'output_multiplier')::float8,
+			  (model_credit_rates->$1->'long_context'->>'threshold_input_tokens')::int
 			FROM plans WHERE slug = 'pro'`, tc.key).
-			Scan(&input, &output)
+			Scan(&input, &output, &cacheRead, &lcIn, &lcOut, &lcThresh)
 		if err != nil {
 			t.Fatalf("query pro plan %s: %v", tc.key, err)
 		}
-		if input != tc.wantInput || output != tc.wantOutput {
-			t.Fatalf("pro plan %s: input=%v output=%v; want %v/%v",
-				tc.key, input, output, tc.wantInput, tc.wantOutput)
+		if input != tc.wantInput || output != tc.wantOutput || cacheRead != tc.wantCacheRead {
+			t.Fatalf("pro plan %s rates: input=%v output=%v cache_read=%v; want %v/%v/%v",
+				tc.key, input, output, cacheRead,
+				tc.wantInput, tc.wantOutput, tc.wantCacheRead)
+		}
+		if lcIn != 2.0 || lcOut != 1.5 || lcThresh != 272000 {
+			t.Fatalf("pro plan %s long_context: in_mult=%v out_mult=%v thresh=%v; want 2/1.5/272000",
+				tc.key, lcIn, lcOut, lcThresh)
 		}
 	}
 }
