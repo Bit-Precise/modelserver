@@ -456,8 +456,13 @@ func handleAddMember(st *store.Store) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, "bad_request", "credit_quota_percent must be between 0 and 100")
 				return
 			}
-			if body.Role == types.RoleOwner {
-				writeError(w, http.StatusBadRequest, "bad_request", "cannot set quota on an owner")
+			// Defer to the central permission helper. The new member doesn't
+			// exist yet, so we pass the requested role as targetRole. isSelf is
+			// always false on add: a user cannot add themselves to a project
+			// via this endpoint (caller must already be owner/maintainer).
+			callerMember := MemberFromContext(r.Context())
+			if ok, status, code, msg := canSetMemberQuota(callerMember, body.Role, false); !ok {
+				writeError(w, status, code, msg)
 				return
 			}
 		}
