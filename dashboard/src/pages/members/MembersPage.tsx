@@ -161,10 +161,12 @@ export function MembersPage() {
       header: "Quota",
       accessor: (m) => {
         const pct = m.credit_quota_percent ?? 100;
+        // Mirror backend rule (spec 2026-06-15-self-quota-permissions-design):
+        // any owner/maintainer may set quota on anyone, except maintainers
+        // cannot set quota on owners.
         const editable =
           canManageQuota &&
-          m.role !== "owner" &&
-          m.user_id !== currentUser?.id;
+          !(currentRole === "maintainer" && m.role === "owner");
         if (editable) {
           return (
             <button
