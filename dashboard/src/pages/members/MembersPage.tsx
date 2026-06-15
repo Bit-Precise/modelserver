@@ -1,6 +1,5 @@
 import { useState, useMemo } from "react";
 import { useCurrentProject } from "@/hooks/useCurrentProject";
-import { useAuth } from "@/hooks/useAuth";
 import { useMembers, useMyMembership, useAddMember, useUpdateMember, useRemoveMember, useMembersUsage } from "@/api/members";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DataTable, type Column } from "@/components/shared/DataTable";
@@ -45,7 +44,6 @@ const PER_PAGE = 20;
 
 export function MembersPage() {
   const projectId = useCurrentProject();
-  const { user: currentUser } = useAuth();
   const [page, setPage] = useState(1);
   const { data, isLoading } = useMembers(projectId, page, PER_PAGE);
   const addMember = useAddMember(projectId);
@@ -274,8 +272,7 @@ export function MembersPage() {
                 </DropdownMenuItem>
               ))}
             {canManageQuota &&
-              m.role !== "owner" &&
-              m.user_id !== currentUser?.id && (
+              !(currentRole === "maintainer" && m.role === "owner") && (
                 <DropdownMenuItem onClick={() => openQuotaDialog(m)}>
                   Set Quota
                 </DropdownMenuItem>
