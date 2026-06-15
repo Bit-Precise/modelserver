@@ -1,6 +1,5 @@
 import { useState, useMemo } from "react";
 import { useCurrentProject } from "@/hooks/useCurrentProject";
-import { useAuth } from "@/hooks/useAuth";
 import { useMembers, useMyMembership, useAddMember, useUpdateMember, useRemoveMember, useMembersUsage } from "@/api/members";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DataTable, type Column } from "@/components/shared/DataTable";
@@ -45,7 +44,6 @@ const PER_PAGE = 20;
 
 export function MembersPage() {
   const projectId = useCurrentProject();
-  const { user: currentUser } = useAuth();
   const [page, setPage] = useState(1);
   const { data, isLoading } = useMembers(projectId, page, PER_PAGE);
   const addMember = useAddMember(projectId);
@@ -91,9 +89,14 @@ export function MembersPage() {
   const currentRole = myMembershipData?.data?.role;
   const canManageQuota = currentRole === "owner" || currentRole === "maintainer";
 
+  // Mirror backend rule: a maintainer cannot create an owner with a quota.
+  // Owners may now set a quota on any role at create time, including owner.
+  const canSetQuotaForRole = (r: string) =>
+    !(currentRole === "maintainer" && r === "owner");
+
   async function handleAdd() {
     const params: { email: string; role: string; credit_quota_percent?: number } = { email, role };
-    if (addQuota !== "" && role !== "owner") {
+    if (addQuota !== "" && canSetQuotaForRole(role)) {
       const parsed = parseFloat(addQuota);
       if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) {
         params.credit_quota_percent = parsed;
@@ -161,10 +164,12 @@ export function MembersPage() {
       header: "Quota",
       accessor: (m) => {
         const pct = m.credit_quota_percent ?? 100;
+        // Mirror backend rule (spec 2026-06-15-self-quota-permissions-design):
+        // any owner/maintainer may set quota on anyone, except maintainers
+        // cannot set quota on owners.
         const editable =
           canManageQuota &&
-          m.role !== "owner" &&
-          m.user_id !== currentUser?.id;
+          !(currentRole === "maintainer" && m.role === "owner");
         if (editable) {
           return (
             <button
@@ -272,8 +277,7 @@ export function MembersPage() {
                 </DropdownMenuItem>
               ))}
             {canManageQuota &&
-              m.role !== "owner" &&
-              m.user_id !== currentUser?.id && (
+              !(currentRole === "maintainer" && m.role === "owner") && (
                 <DropdownMenuItem onClick={() => openQuotaDialog(m)}>
                   Set Quota
                 </DropdownMenuItem>
@@ -373,7 +377,7 @@ export function MembersPage() {
                 </SelectContent>
               </Select>
             </div>
-            {role !== "owner" && (
+            {canSetQuotaForRole(role) && (
               <div className="space-y-2">
                 <Label htmlFor="add-quota">Credit Quota % (optional)</Label>
                 <Input

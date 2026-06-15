@@ -456,8 +456,13 @@ func handleAddMember(st *store.Store) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, "bad_request", "credit_quota_percent must be between 0 and 100")
 				return
 			}
-			if body.Role == types.RoleOwner {
-				writeError(w, http.StatusBadRequest, "bad_request", "cannot set quota on an owner")
+			// Defer to the central permission helper. The new member doesn't
+			// exist yet, so we pass the requested role as targetRole. isSelf is
+			// always false on add: a user cannot add themselves to a project
+			// via this endpoint (caller must already be owner/maintainer).
+			callerMember := MemberFromContext(r.Context())
+			if ok, status, code, msg := canSetMemberQuota(callerMember, body.Role, false); !ok {
+				writeError(w, status, code, msg)
 				return
 			}
 		}
@@ -529,12 +534,6 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 		caller := UserFromContext(r.Context())
 		callerMember := MemberFromContext(r.Context())
 
-		// Cannot set quota on yourself.
-		if (body.CreditQuotaPct != nil || body.ClearQuota) && userID == caller.ID {
-			writeError(w, http.StatusBadRequest, "bad_request", "cannot set quota on yourself")
-			return
-		}
-
 		// Load target member to check their role.
 		targetMember, err := st.GetProjectMember(projectID, userID)
 		if err != nil || targetMember == nil {
@@ -542,22 +541,16 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 			return
 		}
 
-		// Cannot set quota on an owner.
-		if (body.CreditQuotaPct != nil || body.ClearQuota) && targetMember.Role == types.RoleOwner {
-			writeError(w, http.StatusForbidden, "forbidden", "cannot set quota on an owner")
-			return
-		}
-
-		// Maintainers cannot set quota on other maintainers.
-		//
-		// NOTE: this restriction intentionally does NOT extend to denied_models.
-		// Per the design (Q1), any owner or maintainer may configure the
-		// denylist for any member. Do not "mirror" the quota rule here.
-		if callerMember != nil && callerMember.Role == types.RoleMaintainer &&
-			(body.CreditQuotaPct != nil || body.ClearQuota) &&
-			targetMember.Role == types.RoleMaintainer {
-			writeError(w, http.StatusForbidden, "forbidden", "maintainers cannot set quota on other maintainers")
-			return
+		// Per the simplified rule (see spec
+		// 2026-06-15-self-quota-permissions-design.md): the only remaining
+		// restriction on quota changes is that maintainers may not set quota
+		// on owners. Self-quota and same-level quota are both allowed.
+		// denied_models is intentionally NOT subject to this check.
+		if body.CreditQuotaPct != nil || body.ClearQuota {
+			if ok, status, code, msg := canSetMemberQuota(callerMember, targetMember.Role, userID == caller.ID); !ok {
+				writeError(w, status, code, msg)
+				return
+			}
 		}
 
 		// Build quota pointer argument (**float64).
