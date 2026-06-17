@@ -103,6 +103,12 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
       output_multiplier: 1.5,
     },
   },
+  "glm-5.2": {
+    input_rate: 0.0187,
+    output_rate: 0.0587,
+    cache_creation_rate: 0,
+    cache_read_rate: 0.0035,
+  },
   _default: {
     input_rate: 0.4,
     output_rate: 2.0,
