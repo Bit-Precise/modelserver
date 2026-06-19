@@ -72,9 +72,20 @@ function formatExpiry(d: string) {
   return formatDate(d);
 }
 
-function formatPrice(cents: number) {
+function formatPriceCNY(fen: number) {
+  if (fen === 0) return "Free";
+  return `\u00A5${(fen / 100).toFixed(2)}`;
+}
+
+function formatPriceUSD(cents: number) {
   if (cents === 0) return "Free";
-  return `\u00A5${(cents / 100).toFixed(2)}`;
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+function formatPriceForCurrency(plan: Plan, cur: "CNY" | "USD") {
+  return cur === "USD"
+    ? formatPriceUSD(plan.price_usd_cents)
+    : formatPriceCNY(plan.price_cny_fen);
 }
 
 type PaymentChannel = "wechat" | "alipay";
@@ -131,6 +142,21 @@ export function SubscriptionPage() {
   const activeSubPlan = activeSub
     ? plans.find((p: Plan) => p.slug === activeSub.plan_name)
     : null;
+
+  type DisplayCurrency = "CNY" | "USD";
+
+  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>(() => {
+    const c = activeSub?.currency;
+    return c === "USD" ? "USD" : "CNY";
+  });
+
+  useEffect(() => {
+    if (activeSub?.currency === "USD") setDisplayCurrency("USD");
+    else if (activeSub?.currency === "CNY") setDisplayCurrency("CNY");
+  }, [activeSub?.currency]);
+
+  const formatPrice = (plan: Plan) =>
+    formatPriceForCurrency(plan, displayCurrency);
 
   function getButtonState(plan: Plan) {
     if (activeSub?.plan_name === plan.slug) {
