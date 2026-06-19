@@ -126,13 +126,11 @@ func handleCreateOrder(st *store.Store, payClient billing.PaymentClient, billing
 			return
 		}
 
-		// Determine the currency the project is locked to via its paid history.
-		// "" means no paid commitment yet (Free) — any channel is allowed.
-		lockedCurrency, err := st.GetActivePaidCurrency(projectID, activeSub.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "currency lookup failed")
-			return
-		}
+		// Determine the currency the project is locked to. activeSub.Currency
+		// is populated by DeliverOrder from the originating order's currency;
+		// "" means free-tier / never-paid — any channel is allowed. See
+		// migration 050 and the DeliverOrder comment.
+		lockedCurrency := activeSub.Currency
 
 		orderCurrency, basePrice, ok := billing.ChannelPricing(body.Channel, plan)
 		if !ok {

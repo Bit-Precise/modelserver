@@ -114,19 +114,47 @@ func (h *ordersHarness) seedFreeSubscription(label string) string {
 }
 
 // seedPaidSubscription creates a project with a paid subscription in the
-// given currency. It inserts an order in "paid" status to lock the currency.
+// given currency. To mirror production state after DeliverOrder runs:
+//   - the project's active subscription carries Currency = currency
+//   - a paid order for that purchase exists, pointing at the predecessor
+//     (free) subscription that DeliverOrder revoked
+//
+// Without the active-sub.Currency assignment, the lock check would behave
+// as if the project were free-tier — the bug fixed by migration 050.
 func (h *ordersHarness) seedPaidSubscription(label, planSlug, currency string) string {
 	h.t.Helper()
 	_, projectID := h.seedProject(label)
 
 	plan := h.mustGetPlan(planSlug)
 	now := time.Now()
-	sub, err := h.st.CreateSubscriptionFromPlan(projectID, plan, now, now.AddDate(0, 1, 0))
+
+	// Predecessor (free) subscription — revoked, like DeliverOrder would do.
+	freePlan := h.mustGetPlan("free")
+	prevSub, err := h.st.CreateSubscriptionFromPlan(projectID, freePlan, now.Add(-time.Hour), now)
 	if err != nil {
-		h.t.Fatalf("seedPaidSubscription(%s) subscription: %v", label, err)
+		h.t.Fatalf("seedPaidSubscription(%s) prev sub: %v", label, err)
+	}
+	if err := h.st.UpdateSubscriptionStatus(prevSub.ID, "revoked"); err != nil {
+		h.t.Fatalf("revoke prev sub: %v", err)
 	}
 
-	// Insert a "paid" order to lock the currency.
+	// Active paid subscription with currency populated (what DeliverOrder
+	// emits in production after migration 050).
+	sub := &types.Subscription{
+		ProjectID: projectID,
+		PlanID:    plan.ID,
+		PlanName:  plan.Slug,
+		Status:    "active",
+		StartsAt:  now,
+		ExpiresAt: now.AddDate(0, 1, 0),
+		Currency:  currency,
+	}
+	if err := h.st.CreateSubscription(sub); err != nil {
+		h.t.Fatalf("seedPaidSubscription(%s) active sub: %v", label, err)
+	}
+
+	// Insert the "paid" order that produced the active sub. Pointing at
+	// prevSub.ID matches DeliverOrder's post-state.
 	channel := "wechat"
 	unitPrice := plan.PriceCNYFen
 	if currency == "USD" {
@@ -140,9 +168,9 @@ func (h *ordersHarness) seedPaidSubscription(label, planSlug, currency string) s
 		UnitPrice:              unitPrice,
 		Amount:                 unitPrice,
 		Currency:               currency,
-		Status:                 "paid",
+		Status:                 "delivered",
 		Channel:                channel,
-		ExistingSubscriptionID: sub.ID,
+		ExistingSubscriptionID: prevSub.ID,
 		Metadata:               "{}",
 	}
 	if err := h.st.CreateOrder(order); err != nil {
@@ -299,4 +327,59 @@ func TestCreateOrder_PlanMissingUSDPrice_BadRequest(t *testing.T) {
 		"plan_slug": "max_5x", "periods": 1, "channel": "stripe",
 	})
 	mustStatus(t, resp, http.StatusBadRequest)
+}
+
+// TestCreateOrder_PostDelivery_CrossCurrencyRejected exercises the actual
+// DeliverOrder boundary that broke the old GetActivePaidCurrency lookup:
+// pay in CNY, run the order through DeliverOrder (which revokes the old
+// subscription and inserts a new active one), then try to upgrade in USD.
+// The active subscription's currency column must carry the lock forward.
+func TestCreateOrder_PostDelivery_CrossCurrencyRejected(t *testing.T) {
+	h := newOrdersHarness(t)
+	projectID := h.seedFreeSubscription("proj-delivered")
+
+	// First buy in CNY — drive the whole pipeline: handler → order →
+	// DeliverOrder → new active subscription with currency populated.
+	resp := h.post(projectID, map[string]any{
+		"plan_slug": "pro", "periods": 1, "channel": "wechat",
+	})
+	mustStatus(t, resp, http.StatusCreated)
+	mustField(t, resp, "currency", "CNY")
+
+	// Pull the freshly-created order back, walk it through DeliverOrder
+	// exactly like the billing webhook would.
+	var created struct {
+		Data types.Order `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created order: %v", err)
+	}
+	// handleCreateOrder already left the order in "paying"; DeliverOrder
+	// expects that, not "paid". Skip the intermediate update.
+	proPlan := h.mustGetPlan("pro")
+	project, err := h.st.GetProjectByID(projectID)
+	if err != nil || project == nil {
+		t.Fatalf("get project: err=%v", err)
+	}
+	if _, err := h.st.DeliverOrder(created.Data.ID, proPlan, project); err != nil {
+		t.Fatalf("DeliverOrder: %v", err)
+	}
+
+	// Sanity-check: the new active sub carries Currency=CNY (the bug
+	// migration 050 fixes — without it, this would be "").
+	activeSub, err := h.st.GetActiveSubscription(projectID)
+	if err != nil || activeSub == nil {
+		t.Fatalf("active sub after delivery: err=%v", err)
+	}
+	if activeSub.Currency != "CNY" {
+		t.Fatalf("post-delivery active sub currency = %q, want CNY", activeSub.Currency)
+	}
+
+	// Now attempt a USD upgrade — must be rejected, even though the paid
+	// order's existing_subscription_id no longer matches activeSub.ID.
+	resp2 := h.post(projectID, map[string]any{
+		"plan_slug": "max_5x", "periods": 1, "channel": "stripe",
+	})
+	mustStatus(t, resp2, http.StatusConflict)
+	mustErrorCode(t, resp2, "currency_mismatch")
 }

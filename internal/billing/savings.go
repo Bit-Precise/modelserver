@@ -37,7 +37,7 @@ type CostBreakdown struct {
 // applied in this v1; see spec §VII for the known limitation.
 //
 // activeCurrency is the currency of the active subscription's paid orders
-// (from GetActivePaidCurrency). USD orders are excluded from savings
+// (from subscriptions.currency). USD orders are excluded from savings
 // analytics in v1: mixing USD cents into a fen-denominated aggregate would
 // produce a meaningless number.
 // See docs/superpowers/specs/2026-06-19-stripe-payserver-design.md §5.7.

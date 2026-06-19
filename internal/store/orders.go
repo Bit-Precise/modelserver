@@ -156,14 +156,15 @@ func (s *Store) UpdateOrderPayment(id, paymentRef, paymentURL, status string) er
 	return err
 }
 
-// GetActivePaidCurrency returns the currency code recorded on the latest
-// paid or delivered order tied to the given subscription. Empty string
-// means the subscription has no paid order (e.g. it's the Free tier
-// granted without a purchase) — callers treat that as "unlocked".
-//
-// Used to enforce the cross-currency lock: a project that paid in CNY can
-// only renew/upgrade with CNY; switching currencies requires waiting for
-// the subscription to expire.
+// Deprecated: GetActivePaidCurrency was the original implementation of the
+// cross-currency lock. It was broken: it joined on
+// existing_subscription_id, but DeliverOrder revokes that sub and inserts
+// a new one, so after the first delivery the lookup found nothing and
+// silently unlocked the project. Replaced by reading
+// subscriptions.currency directly (denormalized in migration 050,
+// populated by DeliverOrder). This function is retained ONLY to keep
+// orders_currency_test.go compiling until the next cleanup wave removes
+// both — it has no callers in production code.
 func (s *Store) GetActivePaidCurrency(projectID, subscriptionID string) (string, error) {
 	var currency string
 	err := s.pool.QueryRow(context.Background(), `
