@@ -40,10 +40,6 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	if cfg.APIKey == "" {
-		log.Fatal("api_key is required (api_key in config or PAYSERVER_API_KEY env)")
-	}
-
 	// Logger.
 	var logLevel slog.Level
 	switch cfg.Log.Level {
@@ -191,7 +187,6 @@ func main() {
 
 	// HTTP server.
 	router := server.NewRouter(server.Config{
-		APIKey:       cfg.APIKey,
 		Store:        st,
 		Gateways:     gateways,
 		WeChatNotify: wechatNotify,

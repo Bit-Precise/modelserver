@@ -13,7 +13,6 @@ import (
 )
 
 type Config struct {
-	APIKey       string
 	Store        *store.Store
 	Gateways     map[string]gateway.Gateway
 	WeChatNotify *notify.WeChatNotifyHandler
@@ -34,7 +33,7 @@ func NewRouter(cfg Config) http.Handler {
 
 	// Authenticated endpoint for modelserver
 	r.Group(func(r chi.Router) {
-		r.Use(bearerAuthMiddleware(cfg.APIKey))
+		r.Use(tenantAuthMiddleware(cfg.Store, cfg.Logger))
 		r.Post("/payments", handleCreatePayment(cfg.Store, cfg.Gateways, cfg.Logger))
 	})
 

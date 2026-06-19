@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -67,6 +66,7 @@ type paymentAPIResponse struct {
 func handleCreatePayment(st *store.Store, gateways map[string]gateway.Gateway, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+		currentTenant := TenantFromContext(r.Context())
 
 		var req paymentAPIRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -93,10 +93,11 @@ func handleCreatePayment(st *store.Store, gateways map[string]gateway.Gateway, l
 		// Insert-first pattern: atomically insert a placeholder record or retrieve existing.
 		// This prevents TOCTOU races where concurrent requests could both call the gateway.
 		payment := &store.Payment{
-			OrderID: req.OrderID,
-			Channel: req.Channel,
-			Amount:  req.Amount,
-			Status:  "pending",
+			TenantID: currentTenant.ID,
+			OrderID:  req.OrderID,
+			Channel:  req.Channel,
+			Amount:   req.Amount,
+			Status:   "pending",
 		}
 		created, err := st.InsertOrGetPayment(payment)
 		if err != nil {
@@ -151,24 +152,6 @@ func handleCreatePayment(st *store.Store, gateways map[string]gateway.Gateway, l
 	}
 }
 
-func bearerAuthMiddleware(apiKey string) func(http.Handler) http.Handler {
-	apiKeyBytes := []byte(apiKey)
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			auth := r.Header.Get("Authorization")
-			if !strings.HasPrefix(auth, "Bearer ") {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
-			token := []byte(auth[7:])
-			if subtle.ConstantTimeCompare(token, apiKeyBytes) != 1 {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
