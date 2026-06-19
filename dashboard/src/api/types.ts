@@ -261,6 +261,7 @@ export interface Subscription {
   status: "active" | "expired" | "revoked";
   starts_at: string;
   expires_at: string;
+  currency?: "CNY" | "USD" | "";
   created_at: string;
   updated_at: string;
 }
@@ -273,7 +274,7 @@ export interface Order {
   periods: number;
   unit_price: number;
   amount: number;
-  currency: string;
+  currency: "CNY" | "USD";
   status: "pending" | "paying" | "paid" | "delivered" | "failed" | "cancelled";
   channel?: string;
   payment_ref?: string;
