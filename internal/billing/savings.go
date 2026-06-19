@@ -29,7 +29,7 @@ type CostBreakdown struct {
 
 // ComputeCostBreakdown folds per-model token sums against the catalog's
 // default credit rates to produce the equivalent API standard cost, then
-// combines that with the active plan's PricePerPeriod and accumulated
+// combines that with the active plan's PriceCNYFen and accumulated
 // extra-usage spend.
 //
 // sub/plan may be nil (no active subscription); fallbackStart/fallbackEnd
