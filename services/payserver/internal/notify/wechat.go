@@ -1,7 +1,6 @@
 package notify
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -109,13 +108,15 @@ func (h *WeChatNotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		PaidAt:     paidAt.Format(time.RFC3339),
 	}
 
-	cbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := h.callback.Send(cbCtx, payload); err != nil {
-		h.logger.Warn("wechat notify: callback to modelserver failed, will retry",
-			"order_id", orderID, "error", err)
-		h.store.IncrCallbackRetries(orderID)
-		return
-	}
-	h.store.MarkCallbackSuccess(orderID)
+	// TODO(Task 7): Update to pass CallbackTarget per-call
+	// cbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// defer cancel()
+	// if err := h.callback.Send(cbCtx, payload); err != nil {
+	// 	h.logger.Warn("wechat notify: callback to modelserver failed, will retry",
+	// 		"order_id", orderID, "error", err)
+	// 	h.store.IncrCallbackRetries(orderID)
+	// 	return
+	// }
+	// h.store.MarkCallbackSuccess(orderID)
+	_ = payload // TODO(Task 7): Remove once callback is updated
 }

@@ -266,7 +266,8 @@ func newStubCallbackClient(t *testing.T, cb *stubCallback) *CallbackClient {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
-	return NewCallbackClient(srv.URL, "test-secret", 5*time.Second)
+	return NewCallbackClient(5*time.Second)
+	// TODO(Task 7): Remove the old signature
 }
 
 // seedPendingPayment inserts a payment with status=pending and returns its order ID.
