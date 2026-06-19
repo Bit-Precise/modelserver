@@ -210,9 +210,15 @@ Notes:
 
 ### `002_tenants.sql`
 
-```sql
-BEGIN;
+The migration runner (`store.migrate` in `store.go`) already wraps each
+migration's SQL in a `BEGIN/COMMIT` tx and records `schema_migrations` in
+the **same** tx. Therefore this SQL file must **not** include its own
+`BEGIN/COMMIT` — nested transactions in PostgreSQL emit a warning and
+worse, an inner `COMMIT` actually closes the outer tx so the
+`schema_migrations` insert lands outside the migration's scope, allowing
+duplicate runs on restart.
 
+```sql
 -- 1) tenants table
 CREATE TABLE IF NOT EXISTS tenants (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -227,7 +233,12 @@ CREATE TABLE IF NOT EXISTS tenants (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_name ON tenants(name);
 
--- 2) Default tenant from legacy config values (session settings, see main.go)
+-- 2) Default tenant from legacy config values. The Go runner injects the
+-- three current_setting() values into this transaction via SET LOCAL
+-- before running this SQL (see store.go change below). current_setting()
+-- with a missing GUC raises ERROR — the migration fails fast and the
+-- transaction rolls back. That's the desired behavior when the operator
+-- forgot to set PAYSERVER_DEFAULT_TENANT_SECRET.
 INSERT INTO tenants (name, secret_hash, callback_url, callback_secret, description)
 VALUES (
     'default',
@@ -247,60 +258,163 @@ ALTER TABLE payments
     ADD CONSTRAINT fk_payments_tenant
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE RESTRICT;
 CREATE INDEX IF NOT EXISTS idx_payments_tenant ON payments(tenant_id);
-
-COMMIT;
 ```
 
-### main.go bootstrap
+### main.go bootstrap (always-set, fail-on-rerun-OK)
+
+Rather than gating on "is 002 already applied" (which would need a second
+DB connection before `store.New`), we always derive bootstrap values from
+the env at startup. If 002 has already run, the values are computed but
+unused (the migration runner sees 002 in `schema_migrations` and skips
+the SQL entirely, so no `SET LOCAL` runs and no `current_setting()`
+fires). On the first run, the values are required; absence is detected
+inside the migration when `current_setting()` raises ERROR.
 
 ```go
 // cmd/payserver/main.go (before store.New)
-if !st_migrations.AlreadyApplied(cfg.DB.URL, "002_tenants.sql") {
-    if cfg.DefaultTenantSecret == "" {
-        log.Fatal("PAYSERVER_DEFAULT_TENANT_SECRET is required on the first deploy of the multi-tenant payserver (migration 002 needs it)")
-    }
+//
+// On the very first deploy of the multi-tenant payserver, migration 002
+// runs and needs the operator-supplied default-tenant secret. On every
+// subsequent boot, 002 has already run; bootstrap.* values are derived
+// but never consumed.
+var bootstrap store.MigrationBootstrap
+if cfg.DefaultTenantSecret != "" {
     hash, err := tenant.HashSecret(cfg.DefaultTenantSecret)
-    if err != nil { log.Fatalf("hash default secret: %v", err) }
-    store.SetMigrationBootstrap(store.MigrationBootstrap{
+    if err != nil {
+        log.Fatalf("hash default tenant secret: %v", err)
+    }
+    bootstrap = store.MigrationBootstrap{
         DefaultTenantSecretHash: hash,
         DefaultCallbackURL:      cfg.Callback.ModelserverURL,
         DefaultCallbackSecret:   cfg.Callback.WebhookSecret,
-    })
+    }
 }
-st, err := store.New(cfg.DB.URL, logger)
+st, err := store.New(cfg.DB.URL, logger, bootstrap)
+// If 002 hasn't run yet AND bootstrap.DefaultTenantSecretHash == "",
+// the migration transaction will fail with:
+//   ERROR: unrecognized configuration parameter "payserver.default_tenant_secret_hash"
+// Operator sees that, sets PAYSERVER_DEFAULT_TENANT_SECRET, restarts.
 ```
 
-`store.New` reads `MigrationBootstrap` (in-memory, set before this call)
-and, when about to apply 002, executes `SET LOCAL
-payserver.default_tenant_secret_hash = '...'` (and two more) within the
-migration transaction so `current_setting('...')` in the SQL works.
+### `store.migrate` modification
+
+`store.New` takes a third arg `bootstrap MigrationBootstrap`. The
+existing `migrate(ctx)` loop is extended: when about to execute migration
+002's SQL, the runner first runs three `SET LOCAL` statements inside the
+same migration tx, then `tx.Exec(content)`:
+
+```go
+// services/payserver/internal/store/store.go (within the per-migration tx block)
+if name == "002_tenants.sql" && s.bootstrap.DefaultTenantSecretHash != "" {
+    for _, stmt := range []struct{ key, val string }{
+        {"payserver.default_tenant_secret_hash", s.bootstrap.DefaultTenantSecretHash},
+        {"payserver.default_callback_url",       s.bootstrap.DefaultCallbackURL},
+        {"payserver.default_callback_secret",    s.bootstrap.DefaultCallbackSecret},
+    } {
+        // SET LOCAL with parameterized value not directly supported;
+        // values are operator-controlled (hash / URL / secret) so we
+        // quote-escape via pq's recommended approach. Values containing
+        // a single quote (impossible for bcrypt or our URLs/secrets)
+        // would need explicit escaping — assert and bail if seen.
+        if strings.ContainsRune(stmt.val, '\'') {
+            tx.Rollback(ctx)
+            return fmt.Errorf("migration 002 bootstrap value for %s contains a single quote (unsupported)", stmt.key)
+        }
+        if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL %s = '%s'", stmt.key, stmt.val)); err != nil {
+            tx.Rollback(ctx)
+            return fmt.Errorf("set local %s: %w", stmt.key, err)
+        }
+    }
+}
+if _, err := tx.Exec(ctx, string(content)); err != nil { ... }
+```
+
+The single-quote guard is belt-and-braces — bcrypt output is `[A-Za-z0-9./$]`,
+and the URL/secret come from operator config that's already been read by
+viper's YAML/env layer (no SQL injection vector through that path).
 
 ### Operator runbook
 
 ```bash
-# Step 1: generate the default tenant's secret
-openssl rand -base64 32   # e.g. "Xc2BkP9...=="
+# Step 1: generate the default tenant's API secret (used by modelserver
+# to authenticate to payserver — distinct from the HMAC secret below).
+openssl rand -base64 32   # e.g. "Xc2BkP9...=="    ← record this
 
-# Step 2: set on payserver, restart
+# Step 2: payserver: set bootstrap env and the existing per-channel
+# secrets your deployment already uses. Note that the EXISTING
+# `PAYSERVER_CALLBACK_WEBHOOK_SECRET` is what migration 002 copies into
+# default tenant.callback_secret — DO NOT change it during this deploy
+# (changing it later via the admin UI is fine).
 export PAYSERVER_DEFAULT_TENANT_SECRET="Xc2BkP9...=="
-# migration 002 runs once, prints: "default tenant id=<uuid>" to logs
+# Keep existing PAYSERVER_CALLBACK_MODELSERVER_URL and
+# PAYSERVER_CALLBACK_WEBHOOK_SECRET set — migration 002 reads them once.
 
-# Step 3: take that <uuid> and update modelserver
+# Step 3: restart payserver. Migration 002 runs once. Logs print:
+#   "default tenant id=<uuid>"
+# Record <uuid>.
+
+# Step 4: modelserver: swap the auth header value. The webhook secret
+# stays exactly as it was (see §3.x "Cross-service env coupling" below).
 # old: MODELSERVER_BILLING_PAYMENT_API_KEY=<old-payserver-api-key>
 # new: MODELSERVER_BILLING_PAYMENT_API_KEY=<uuid>:Xc2BkP9...==
 
-# Step 4: restart modelserver. The two services are coupled during the
-# rolling window — see §7 Deployment Order.
+# Step 5: restart modelserver.
 ```
+
+### Cross-service env coupling (critical — read before deploying)
+
+The HMAC webhook channel (payserver → modelserver `POST
+/api/v1/admin/billing/webhook/delivery`) has a secret that **lives on
+both sides** and must remain identical for callbacks to authenticate.
+Migration 002 freezes that secret onto the default tenant; modelserver's
+verifier middleware reads it from a separate env. Diverging them silently
+breaks delivery callbacks (modelserver returns 401, payserver's
+compensate worker retries and eventually marks `callback_status=failed`).
+
+| Side | Env | Used For | Action |
+|---|---|---|---|
+| modelserver | `MODELSERVER_BILLING_WEBHOOK_SECRET` | HMAC verifier on `/api/v1/admin/billing/webhook/delivery` route mount + signature check | **KEEP as-is.** Same string before and after this PR |
+| modelserver | `MODELSERVER_BILLING_PAYMENT_API_KEY` | Bearer header sent on `POST /payments` to payserver | **REPLACE** with `<default-tenant-uuid>:<PAYSERVER_DEFAULT_TENANT_SECRET>` |
+| modelserver | `MODELSERVER_BILLING_PAYMENT_API_URL` | payserver base URL | **KEEP** |
+| modelserver | `MODELSERVER_BILLING_NOTIFY_URL` | (no longer sent on `PaymentRequest`; payserver derives from tenant.callback_url) | **DEPRECATED** — value is ignored by payserver going forward. Can be unset or left for documentation. |
+| modelserver | `MODELSERVER_BILLING_RETURN_URL` | per-order success_url prefix (PR #47) | **KEEP** |
+| payserver | `PAYSERVER_CALLBACK_WEBHOOK_SECRET` | One-time bootstrap into default-tenant `callback_secret` | **KEEP for the deploy, MUST equal `MODELSERVER_BILLING_WEBHOOK_SECRET`.** After migration 002 runs, value is ignored — future changes happen through the admin UI by editing the tenant's `callback_secret` |
+| payserver | `PAYSERVER_CALLBACK_MODELSERVER_URL` | One-time bootstrap into default-tenant `callback_url` | Same disposition |
+| payserver | `PAYSERVER_API_KEY` | The legacy single bearer key (entirely removed) | **DELETE.** Any value silently ignored after this PR — the auth middleware no longer reads it |
+| payserver | `PAYSERVER_DEFAULT_TENANT_SECRET` | NEW; consumed only by migration 002 on first run | Set before first deploy; can be unset on subsequent deploys |
+
+**Rollback path**: there is none in v1. Once migration 002 has applied,
+the auth middleware permanently expects `<id>:<secret>` form. A real
+emergency rollback means manually inserting into the now-required
+`tenant_id` column for any new payments while running the old code —
+deeply unsafe. Do not deploy this without confirming the modelserver env
+change is queued.
+
+### Deployment window — service interruption
+
+Between "payserver restart" (Step 3) and "modelserver restart" (Step 5),
+**all `POST /payments` from modelserver fail with 401** because old-format
+`Authorization: Bearer <old-api-key>` doesn't parse as `<uuid>:<secret>`.
+Subscription ordering is a low-frequency operation; the window is
+typically 30–60s with rolling restarts. To minimize:
+
+- Pre-stage the `MODELSERVER_BILLING_PAYMENT_API_KEY` change so step 5
+  is just a process restart, not an env mutation
+- Pick a low-traffic deploy window (e.g. 02:00–05:00 local)
+- If you cannot accept any window, add a **temporary auth shim**: in
+  `auth.go`, before invoking the tenant middleware, check if the bearer
+  token matches a hard-coded `cfg.LegacyAPIKey` and inject the default
+  tenant if so. Strip the shim in the next PR. Not in this spec; mention
+  in Future Work if you want it followed up.
 
 ### Legacy field handling
 
 | Legacy cfg field | Disposition |
 |---|---|
-| `cfg.APIKey` | Deleted. `<tenant_id>:<secret>` replaces it |
-| `cfg.Callback.ModelserverURL` | Read once by migration 002 → stored on default tenant. Ignored on subsequent boots (warn if still set) |
+| `cfg.APIKey` | Deleted from Go config + ApplyEnvOverrides + main.go. Operator may delete `PAYSERVER_API_KEY` env after this PR |
+| `cfg.Callback.ModelserverURL` | Read once by migration 002 → stored on default tenant. Ignored on subsequent boots (warn at startup if still set after 002 applied) |
 | `cfg.Callback.WebhookSecret` | Same |
-| `cfg.Callback.Timeout` | Retained as global HTTP timeout |
+| `cfg.Callback.Timeout` | Retained as global HTTP timeout for `CallbackClient` |
 
 ## §4 — Per-Tenant Callback (handler + notify + compensate)
 
@@ -406,6 +520,32 @@ Stripe webhook payload doesn't carry tenant info. We look the payment up by
 `order_id` (still globally UNIQUE), read `payment.tenant_id`, then resolve
 the tenant. Operator convention: tenants use UUID order IDs so cross-tenant
 collision is impossible in practice.
+
+### Provider webhook routing — design intent, not a limitation
+
+There is exactly **one** Stripe account, **one** wechat MCH, and **one**
+alipay app at the platform level — this is intentional and permanent.
+Tenants do not bring their own payment credentials; this platform is the
+merchant of record for every payment, across every business that calls in.
+
+What this means for the webhook path:
+
+- Stripe sends *all* `checkout.session.completed` events to the single
+  `/notify/stripe` endpoint, regardless of which tenant originated the
+  order. The handler reads `ClientReferenceID` (= the compact order_id we
+  put there at create time), loads the `payments` row, reads its
+  `tenant_id`, and posts the `DeliveryPayload` to that tenant's
+  `callback_url`. The Stripe → tenant mapping is therefore indirect (via
+  the `payments` row) — by design — not a v1 limitation.
+- wechat and alipay are identical: one global merchant identity, one
+  `/notify/{wechat,alipay}` endpoint, per-row tenant lookup determines
+  the callback destination.
+
+There is no scenario in which a tenant needs to "see" Stripe events
+directly. The platform is the gateway; tenants only see normalized
+`DeliveryPayload` callbacks. This is the entire reason `payserver`
+exists — to abstract away every channel's idiosyncrasies behind one
+HMAC-signed callback envelope.
 
 ## §5 — Admin API + OIDC
 
@@ -635,12 +775,29 @@ r.Get("/admin/*", func(w http.ResponseWriter, r *http.Request) {
 Build pipeline (Makefile target `make all`):
 ```
 cd services/payserver/admin && pnpm install --frozen-lockfile && pnpm build
+rm -rf services/payserver/admin_dist
 cp -r services/payserver/admin/dist services/payserver/admin_dist
 cd services/payserver && go build ./cmd/payserver
 ```
 
-Dockerfile multi-stage: node:20 builds frontend, golang:1.26 builds the
-binary with the dist copied in.
+The `admin_dist/` directory is build output; add to `.gitignore`:
+
+```
+# services/payserver/.gitignore
+admin/node_modules/
+admin/dist/
+admin_dist/
+```
+
+So that `//go:embed admin_dist` reads what the local build just produced.
+Initial commit needs a placeholder `admin_dist/.gitkeep` plus a stub
+`admin_dist/index.html` (empty `<html>`) so `go build` doesn't fail on
+fresh checkouts where `pnpm build` hasn't run yet — the Makefile
+overwrites both during the real build.
+
+Dockerfile multi-stage: node:20 builds frontend (produces `dist/`),
+golang:1.26 stage copies that `dist/` into `admin_dist/` and runs
+`go build`.
 
 ## §7 — Testing & Out of Scope
 
@@ -691,9 +848,14 @@ short-lived shim that accepts the old key and remaps to default tenant
 
 ### Out of Scope (Future Work)
 
-- **Per-tenant provider credentials** (Stripe/wechat/alipay per tenant).
-  Requires per-call Stripe client init; defer until a second receiving
-  entity is real.
+- **Per-tenant provider credentials** are explicitly **not** a platform
+  goal. payserver is the merchant of record for every payment across
+  every tenant; one Stripe account, one wechat MCH, one alipay app
+  forever. Removing this from "future work" means we never need
+  per-call Stripe client init, never need tenant routing on the inbound
+  webhook surface, and the operations team only ever reconciles three
+  upstream accounts. Should that change at the business level, it is a
+  different platform, not a v2 of this one.
 - **Tenant self-service portal**. UI is admin-only.
 - **Dashboard overview page** (today's volume, channel split, retry
   backlog) — third page, YAGNI for v1.
@@ -713,16 +875,46 @@ short-lived shim that accepts the old key and remaps to default tenant
   (cost=10, ~50ms). Payment creation is low-frequency, but if multi-tenant
   call volume rises, a small in-memory verified-token cache (LRU,
   60-second TTL) is the right next step. Out of scope for v1.
-- **Order-id global uniqueness convention**: documented in operator
-  runbook + handler error message. If a tenant accidentally reuses an
-  order_id another tenant already used, they get 409 — confusing but
-  detectable.
+- **Order-id global uniqueness convention**: `payments.order_id` is
+  globally UNIQUE across all tenants. Every onboarding tenant is told
+  (in the admin UI "New Tenant" dialog help text + the API integration
+  doc) to use UUIDs as order IDs — collision-free in practice.
+  Cross-tenant reuse returns 409 with a message that names the conflict
+  ("order_id already used by tenant=<name>") so debugging is fast.
 - **Default tenant bootstrap secret leakage**: the env value lands in
   process env + (one time) in a Postgres SET LOCAL statement inside the
   migration transaction. SET LOCAL values are not persisted; PG audit
   logs may capture them. Operator should rotate the secret via admin UI
   shortly after first deploy if logging is sensitive.
-- **OIDC misconfiguration locks out admin**. Mitigation: keep a CLI
-  rescue path that reads `PAYSERVER_OIDC_RESCUE_TOKEN` and grants admin
-  access without OIDC. Marked as Future Work — for v1, document that the
-  recovery path is "SSH to host, psql, edit tenants directly".
+- **OIDC misconfiguration locks out admin** — addressed by the rescue
+  path below, not deferred.
+
+### OIDC rescue path
+
+If the OIDC issuer is down, the client secret rotates without notice, or
+`allowed_emails` is misconfigured and excludes everyone with hands on the
+console, admin UI becomes unreachable. The rescue is a CLI subcommand
+that bypasses OIDC and prints a one-shot session token:
+
+```bash
+$ payserver admin rescue --email opsuser@example.com
+issued rescue session, expires in 1h:
+   payserver_admin_session=<base64-signed-cookie>
+   set this cookie on the /admin/* domain to bypass OIDC.
+```
+
+The subcommand reads `PAYSERVER_OIDC_SESSION_SECRET` from the same env
+that signs normal cookies — so the cookie is verifiable by the running
+binary without any code-path branch in production. It writes an audit
+log line `rescue session issued for=<email> ttl=1h pid=...` to stderr
+and the structured logger.
+
+This subcommand is only callable by a process that has shell access on
+the payserver host (i.e. ops via SSH or `kubectl exec`). It has the same
+security envelope as the host itself.
+
+Implementation: a `cmd/payserver` subcommand parser around the existing
+`flag.Parse()` — if `os.Args[1] == "admin" && os.Args[2] == "rescue"`,
+branch into rescue path; otherwise fall through to the server. About 40
+lines of code, no new dependencies (re-uses the OIDC session-signing
+helper).
