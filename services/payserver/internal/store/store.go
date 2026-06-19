@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,12 +17,23 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-type Store struct {
-	pool   *pgxpool.Pool
-	logger *slog.Logger
+// MigrationBootstrap carries one-shot values consumed only by migration
+// 002. After 002 has been applied to a database, these values are
+// computed by main.go but never consulted. The runner reads them inside
+// the migration's tx via SET LOCAL so the SQL can current_setting() them.
+type MigrationBootstrap struct {
+	DefaultTenantSecretHash string
+	DefaultCallbackURL      string
+	DefaultCallbackSecret   string
 }
 
-func New(databaseURL string, logger *slog.Logger) (*Store, error) {
+type Store struct {
+	pool      *pgxpool.Pool
+	logger    *slog.Logger
+	bootstrap MigrationBootstrap // consumed only by migration 002
+}
+
+func New(databaseURL string, logger *slog.Logger, bootstrap MigrationBootstrap) (*Store, error) {
 	ctx := context.Background()
 
 	if err := ensureDatabase(ctx, databaseURL, logger); err != nil {
@@ -44,7 +56,7 @@ func New(databaseURL string, logger *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	s := &Store{pool: pool, logger: logger}
+	s := &Store{pool: pool, logger: logger, bootstrap: bootstrap}
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
@@ -92,6 +104,30 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("begin tx for migration %s: %w", name, err)
 		}
+
+		// Migration 002 reads three current_setting() values; inject them
+		// inside the same tx so they're scoped to this migration only.
+		// bcrypt output / URLs / secrets must not contain single quotes
+		// (asserted below); operator-supplied values from viper-loaded
+		// config have already cleared the SQL injection threat surface
+		// — guard is belt-and-braces.
+		if name == "002_tenants.sql" && s.bootstrap.DefaultTenantSecretHash != "" {
+			for _, kv := range []struct{ key, val string }{
+				{"payserver.default_tenant_secret_hash", s.bootstrap.DefaultTenantSecretHash},
+				{"payserver.default_callback_url", s.bootstrap.DefaultCallbackURL},
+				{"payserver.default_callback_secret", s.bootstrap.DefaultCallbackSecret},
+			} {
+				if strings.ContainsRune(kv.val, '\'') {
+					tx.Rollback(ctx)
+					return fmt.Errorf("migration 002 bootstrap value for %s contains a single quote (unsupported)", kv.key)
+				}
+				if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL %s = '%s'", kv.key, kv.val)); err != nil {
+					tx.Rollback(ctx)
+					return fmt.Errorf("set local %s: %w", kv.key, err)
+				}
+			}
+		}
+
 		if _, err := tx.Exec(ctx, string(content)); err != nil {
 			tx.Rollback(ctx)
 			return fmt.Errorf("apply migration %s: %w", name, err)

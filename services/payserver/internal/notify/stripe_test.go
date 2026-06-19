@@ -240,7 +240,7 @@ func openTestPayserverStore(t *testing.T) *store.Store {
 		t.Skip("PAYSERVER_TEST_DB_URL not set; skipping DB-dependent test")
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	st, err := store.New(dbURL, logger)
+	st, err := store.New(dbURL, logger, store.MigrationBootstrap{})
 	if err != nil {
 		t.Fatalf("open test store: %v", err)
 	}

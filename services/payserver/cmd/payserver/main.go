@@ -21,6 +21,7 @@ import (
 	notifyPkg "github.com/modelserver/modelserver/services/payserver/internal/notify"
 	"github.com/modelserver/modelserver/services/payserver/internal/server"
 	"github.com/modelserver/modelserver/services/payserver/internal/store"
+	"github.com/modelserver/modelserver/services/payserver/internal/tenant"
 )
 
 func main() {
@@ -67,7 +68,23 @@ func main() {
 	if cfg.DB.URL == "" {
 		log.Fatal("database URL is required (db.url or PAYSERVER_DB_URL)")
 	}
-	st, err := store.New(cfg.DB.URL, logger)
+	// Bootstrap values for migration 002 (consumed only on first apply).
+	// On subsequent boots, 002 already exists in schema_migrations so the
+	// runner skips the SQL and these values go unread.
+	var bootstrap store.MigrationBootstrap
+	if defaultSecret := os.Getenv("PAYSERVER_DEFAULT_TENANT_SECRET"); defaultSecret != "" {
+		hash, err := tenant.HashSecret(defaultSecret)
+		if err != nil {
+			log.Fatalf("hash default tenant secret: %v", err)
+		}
+		bootstrap = store.MigrationBootstrap{
+			DefaultTenantSecretHash: hash,
+			DefaultCallbackURL:      cfg.Callback.ModelserverURL,
+			DefaultCallbackSecret:   cfg.Callback.WebhookSecret,
+		}
+	}
+
+	st, err := store.New(cfg.DB.URL, logger, bootstrap)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}

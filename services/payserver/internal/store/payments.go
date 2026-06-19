@@ -10,6 +10,7 @@ import (
 
 type Payment struct {
 	ID              string     `json:"id"`
+	TenantID        string     `json:"tenant_id"`
 	OrderID         string     `json:"order_id"`
 	Channel         string     `json:"channel"`
 	TradeNo         string     `json:"trade_no"`
@@ -31,11 +32,11 @@ func (s *Store) InsertOrGetPayment(p *Payment) (bool, error) {
 	ctx := context.Background()
 	// Try insert first. ON CONFLICT returns nothing, so we detect via RETURNING.
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO payments (order_id, channel, trade_no, payment_url, amount, status)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO payments (tenant_id, order_id, channel, trade_no, payment_url, amount, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (order_id) DO NOTHING
 		RETURNING id, callback_status, callback_retries, created_at, updated_at`,
-		p.OrderID, p.Channel, p.TradeNo, p.PaymentURL, p.Amount, p.Status,
+		p.TenantID, p.OrderID, p.Channel, p.TradeNo, p.PaymentURL, p.Amount, p.Status,
 	).Scan(&p.ID, &p.CallbackStatus, &p.CallbackRetries, &p.CreatedAt, &p.UpdatedAt)
 	if err == nil {
 		return true, nil // inserted
@@ -67,11 +68,11 @@ func (s *Store) UpdatePaymentGatewayResult(id string, tradeNo, paymentURL string
 func (s *Store) GetPaymentByOrderID(orderID string) (*Payment, error) {
 	p := &Payment{}
 	err := s.pool.QueryRow(context.Background(), `
-		SELECT id, order_id, channel, trade_no, payment_url, amount, status,
+		SELECT id, tenant_id, order_id, channel, trade_no, payment_url, amount, status,
 			callback_status, callback_retries, raw_notify, paid_at,
 			created_at, updated_at
 		FROM payments WHERE order_id = $1`, orderID,
-	).Scan(&p.ID, &p.OrderID, &p.Channel, &p.TradeNo, &p.PaymentURL, &p.Amount, &p.Status,
+	).Scan(&p.ID, &p.TenantID, &p.OrderID, &p.Channel, &p.TradeNo, &p.PaymentURL, &p.Amount, &p.Status,
 		&p.CallbackStatus, &p.CallbackRetries, &p.RawNotify, &p.PaidAt,
 		&p.CreatedAt, &p.UpdatedAt)
 	if err == pgx.ErrNoRows {
@@ -86,11 +87,11 @@ func (s *Store) GetPaymentByOrderID(orderID string) (*Payment, error) {
 func (s *Store) GetPaymentByID(id string) (*Payment, error) {
 	p := &Payment{}
 	err := s.pool.QueryRow(context.Background(), `
-		SELECT id, order_id, channel, trade_no, payment_url, amount, status,
+		SELECT id, tenant_id, order_id, channel, trade_no, payment_url, amount, status,
 			callback_status, callback_retries, raw_notify, paid_at,
 			created_at, updated_at
 		FROM payments WHERE id = $1`, id,
-	).Scan(&p.ID, &p.OrderID, &p.Channel, &p.TradeNo, &p.PaymentURL, &p.Amount, &p.Status,
+	).Scan(&p.ID, &p.TenantID, &p.OrderID, &p.Channel, &p.TradeNo, &p.PaymentURL, &p.Amount, &p.Status,
 		&p.CallbackStatus, &p.CallbackRetries, &p.RawNotify, &p.PaidAt,
 		&p.CreatedAt, &p.UpdatedAt)
 	if err == pgx.ErrNoRows {
@@ -141,7 +142,7 @@ func (s *Store) MarkCallbackFailed(orderID string) error {
 // to prevent concurrent workers from processing the same rows.
 func (s *Store) ListPendingCallbacks(limit int, maxRetries int) ([]Payment, error) {
 	rows, err := s.pool.Query(context.Background(), `
-		SELECT id, order_id, channel, trade_no, payment_url, amount, status,
+		SELECT id, tenant_id, order_id, channel, trade_no, payment_url, amount, status,
 			callback_status, callback_retries, raw_notify, paid_at,
 			created_at, updated_at
 		FROM payments
@@ -157,7 +158,7 @@ func (s *Store) ListPendingCallbacks(limit int, maxRetries int) ([]Payment, erro
 	var payments []Payment
 	for rows.Next() {
 		var p Payment
-		if err := rows.Scan(&p.ID, &p.OrderID, &p.Channel, &p.TradeNo, &p.PaymentURL, &p.Amount, &p.Status,
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.OrderID, &p.Channel, &p.TradeNo, &p.PaymentURL, &p.Amount, &p.Status,
 			&p.CallbackStatus, &p.CallbackRetries, &p.RawNotify, &p.PaidAt,
 			&p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan payment: %w", err)
