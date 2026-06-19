@@ -14,14 +14,15 @@ import (
 const maxRequestBodySize = 64 * 1024 // 64 KB
 
 type paymentAPIRequest struct {
-	OrderID     string            `json:"order_id"`
-	ProductName string            `json:"product_name"`
-	Channel     string            `json:"channel"`
-	Currency    string            `json:"currency"`
-	Amount      int64             `json:"amount"`
-	NotifyURL   string            `json:"notify_url"`
-	ReturnURL   string            `json:"return_url"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
+	OrderID       string            `json:"order_id"`
+	ProductName   string            `json:"product_name"`
+	Channel       string            `json:"channel"`
+	Currency      string            `json:"currency"`
+	Amount        int64             `json:"amount"`
+	NotifyURL     string            `json:"notify_url"`
+	ReturnURL     string            `json:"return_url"`
+	CustomerEmail string            `json:"customer_email,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
 }
 
 type paymentAPIResponse struct {
@@ -83,9 +84,13 @@ func handleCreatePayment(st *store.Store, gateways map[string]gateway.Gateway, l
 
 		// New record inserted — call payment gateway.
 		result, err := gw.CreatePayment(r.Context(), &gateway.PaymentRequest{
-			OutTradeNo:  strings.ReplaceAll(req.OrderID, "-", ""),
-			Description: req.ProductName,
-			Amount:      req.Amount,
+			OutTradeNo:    strings.ReplaceAll(req.OrderID, "-", ""),
+			Description:   req.ProductName,
+			Amount:        req.Amount,
+			Currency:      req.Currency,
+			ReturnURL:     req.ReturnURL,
+			CustomerEmail: req.CustomerEmail,
+			Metadata:      req.Metadata,
 		})
 		if err != nil {
 			logger.Error("create payment", "channel", req.Channel, "order_id", req.OrderID, "error", err)
