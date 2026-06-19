@@ -261,6 +261,7 @@ export interface Subscription {
   status: "active" | "expired" | "revoked";
   starts_at: string;
   expires_at: string;
+  currency?: "CNY" | "USD" | "";
   created_at: string;
   updated_at: string;
 }
