@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -28,20 +27,17 @@ func main() {
 	configPath := flag.String("config", "", "path to config file")
 	flag.Parse()
 
-	// Load config.
-	var cfg *config.Config
-	var err error
-	if *configPath != "" {
-		cfg, err = config.LoadFile(*configPath)
-	} else if _, statErr := os.Stat("config.yml"); statErr == nil {
-		cfg, err = config.LoadFile("config.yml")
-	} else {
-		cfg, err = config.Load(strings.NewReader(""))
+	// Auto-discover config.yml in the working directory if --config not given.
+	path := *configPath
+	if path == "" {
+		if _, statErr := os.Stat("config.yml"); statErr == nil {
+			path = "config.yml"
+		}
 	}
+	cfg, err := config.Load(path)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
-	cfg.ApplyEnvOverrides()
 
 	if cfg.APIKey == "" {
 		log.Fatal("api_key is required (api_key in config or PAYSERVER_API_KEY env)")
