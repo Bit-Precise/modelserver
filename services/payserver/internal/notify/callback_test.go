@@ -95,3 +95,52 @@ func TestCallback_Send_PerCallDifferentSecrets(t *testing.T) {
 		t.Error("different secrets produced same signature — secret not used per-call")
 	}
 }
+
+// TestCallback_Send_EmptySecretIsError covers the defense-in-depth check
+// added in response to the auto-review: an empty signing secret combined
+// with a non-empty URL would silently emit a HMAC over an empty key,
+// which is trivially forgeable. Loud failure forces operator notice.
+func TestCallback_Send_EmptySecretIsError(t *testing.T) {
+	client := NewCallbackClient(5 * time.Second)
+	err := client.Send(t.Context(),
+		CallbackTarget{URL: "https://x.example/cb", Secret: ""},
+		DeliveryPayload{OrderID: "x"})
+	if err == nil {
+		t.Error("expected error when secret empty + URL non-empty")
+	}
+}
+
+// TestCallback_Send_InvalidURLSchemeRejected catches non-http(s) schemes
+// before the request is built — second wall behind the admin write-path
+// validation. file:// would otherwise let an attacker exfiltrate request
+// bytes (no scheme check means net/http will try and fail in undefined
+// ways).
+func TestCallback_Send_InvalidURLSchemeRejected(t *testing.T) {
+	client := NewCallbackClient(5 * time.Second)
+	for _, raw := range []string{
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"ftp://x.example/cb",
+		"://no-scheme/cb",
+	} {
+		err := client.Send(t.Context(),
+			CallbackTarget{URL: raw, Secret: "s"},
+			DeliveryPayload{OrderID: "x"})
+		if err == nil {
+			t.Errorf("scheme %q should have been rejected", raw)
+		}
+	}
+}
+
+// TestCallback_Send_UserinfoInURLRejected ensures embedded credentials
+// (https://attacker@victim.example) cannot be used to confuse upstream
+// auth or to leak attacker-supplied auth tokens to victim logs.
+func TestCallback_Send_UserinfoInURLRejected(t *testing.T) {
+	client := NewCallbackClient(5 * time.Second)
+	err := client.Send(t.Context(),
+		CallbackTarget{URL: "https://attacker@victim.example/cb", Secret: "s"},
+		DeliveryPayload{OrderID: "x"})
+	if err == nil {
+		t.Error("userinfo in URL should be rejected")
+	}
+}

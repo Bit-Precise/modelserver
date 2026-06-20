@@ -9,8 +9,43 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
+
+const maxCallbackURLLen = 2048
+
+// validateCallbackURL is a light-weight defense-in-depth check applied at
+// Send time. The admin write path (handle_admin.go) is the primary
+// gatekeeper; this is a second wall in case a tenant row was inserted by
+// a path that didn't validate (e.g. migration 002's default-tenant
+// bootstrap from legacy config). Rejects:
+//   - non-http(s) schemes
+//   - missing host
+//   - embedded userinfo
+//   - oversize URLs (>2048 chars)
+// It does NOT block private-network destinations or apply DNS-rebind
+// defenses — those would require a custom transport and are out of scope
+// for v1; tenants are trusted internal products at this stage.
+func validateCallbackURL(raw string) error {
+	if len(raw) > maxCallbackURLLen {
+		return fmt.Errorf("callback url too long")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("parse callback url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("callback url scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("callback url missing host")
+	}
+	if u.User != nil {
+		return fmt.Errorf("callback url must not contain userinfo")
+	}
+	return nil
+}
 
 type DeliveryPayload struct {
 	OrderID    string `json:"order_id"`
@@ -43,9 +78,20 @@ func NewCallbackClient(timeout time.Duration) *CallbackClient {
 // target.Secret. Empty target.URL is treated as a no-op success — a
 // tenant that doesn't configure a callback URL is read-only by design
 // (e.g. test/sandbox tenant).
+//
+// An empty target.Secret with a non-empty URL is a hard error: signing
+// with an empty key would emit forgeable signatures. Operators configure
+// the secret alongside the URL via the admin UI; the bootstrap path
+// (default-tenant migration) also pulls both together from legacy config.
 func (c *CallbackClient) Send(ctx context.Context, target CallbackTarget, payload DeliveryPayload) error {
 	if target.URL == "" {
 		return nil
+	}
+	if err := validateCallbackURL(target.URL); err != nil {
+		return fmt.Errorf("invalid callback target: %w", err)
+	}
+	if target.Secret == "" {
+		return fmt.Errorf("callback target has URL but no signing secret")
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

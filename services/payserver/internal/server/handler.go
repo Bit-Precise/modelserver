@@ -107,7 +107,21 @@ func handleCreatePayment(st *store.Store, gateways map[string]gateway.Gateway, l
 		}
 
 		if !created {
-			// Existing record — idempotency handling.
+			// Existing record — idempotency handling. Cross-tenant guard:
+			// payments.order_id is globally UNIQUE, so a malicious or
+			// careless tenant could collide on another tenant's order_id
+			// and the !created branch would otherwise leak that tenant's
+			// payment.ID + payment.PaymentURL (Stripe Checkout URLs carry
+			// session tokens). Reject the collision with a generic
+			// conflict message before any data is returned.
+			if payment.TenantID != currentTenant.ID {
+				logger.Warn("cross-tenant order_id collision rejected",
+					"order_id", req.OrderID,
+					"requested_by_tenant", currentTenant.ID,
+					"owning_tenant", payment.TenantID)
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "order_id already in use"})
+				return
+			}
 			if payment.Status == "paid" {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": "order already paid"})
 				return
@@ -118,6 +132,20 @@ func handleCreatePayment(st *store.Store, gateways map[string]gateway.Gateway, l
 				PaymentURL: payment.PaymentURL,
 				Status:     "pending",
 			})
+			return
+		}
+
+		// Same guard for the FK-collision case: InsertOrGetPayment's ON
+		// CONFLICT path runs only when order_id matches; if tenant_id
+		// somehow differs and a future runner relaxes constraints, we
+		// still want to surface a deterministic conflict, not silently
+		// rewrite an unrelated tenant's row.
+		if payment.TenantID != currentTenant.ID {
+			logger.Error("internal: InsertOrGetPayment returned a row from a different tenant on created=true",
+				"order_id", req.OrderID,
+				"requested_by_tenant", currentTenant.ID,
+				"row_tenant", payment.TenantID)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 			return
 		}
 
