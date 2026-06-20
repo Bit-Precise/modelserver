@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -107,15 +108,24 @@ func (s *Store) UpdateTenant(id string, updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil
 	}
-	setClauses := make([]string, 0, len(updates))
-	args := make([]any, 0, len(updates)+1)
-	i := 1
-	for k, v := range updates {
+	// Sort keys so the generated SQL is deterministic — Go's map iteration
+	// order is randomized, which would defeat pgx's prepared-statement
+	// cache (a fresh string for each invocation).
+	keys := make([]string, 0, len(updates))
+	for k := range updates {
 		if !updateAllowedFields[k] {
 			return fmt.Errorf("field %q is not updateable through UpdateTenant", k)
 		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	setClauses := make([]string, 0, len(updates))
+	args := make([]any, 0, len(updates)+1)
+	i := 1
+	for _, k := range keys {
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", k, i))
-		args = append(args, v)
+		args = append(args, updates[k])
 		i++
 	}
 	args = append(args, id)

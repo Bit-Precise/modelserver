@@ -9,11 +9,17 @@ export async function adminFetch<T>(path: string, init?: RequestInit): Promise<T
   }
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;
+    let code: string | undefined;
     try {
       const body = await r.json();
       if (body?.error) msg = body.error;
-    } catch {}
-    throw new Error(msg);
+      if (body?.code) code = body.code;
+    } catch {
+      /* not JSON */
+    }
+    const err = new Error(msg) as Error & { code?: string };
+    err.code = code;
+    throw err;
   }
   return r.json() as Promise<T>;
 }

@@ -53,9 +53,10 @@ export function TenantsPage() {
       await del.mutateAsync(id);
       toast.success("Tenant deleted");
     } catch (e: unknown) {
-      const msg = String((e as Error).message ?? e);
+      const err = e as Error & { code?: string };
+      const msg = String(err.message ?? e);
       toast.error(msg);
-      if (msg.includes("payments")) {
+      if (err.code === "tenant_has_payments") {
         if (confirm("Tenant has payments; deactivate instead?")) {
           try {
             await update.mutateAsync({ id, patch: { is_active: false } });

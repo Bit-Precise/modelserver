@@ -184,6 +184,65 @@ func TestAdminRotateSecret_OldSecretFails(t *testing.T) {
 	}
 }
 
+// TestUpdateTenant_NotFound_Returns404 confirms handleUpdateTenant
+// returns 404 (not 200 with a null tenant body) when the target id
+// does not exist. Before the fix, UpdateTenant silently succeeded on
+// no-match and the handler then wrote {"tenant": null} with 200.
+func TestUpdateTenant_NotFound_Returns404(t *testing.T) {
+	st := adminTestStore(t)
+	b, _ := json.Marshal(map[string]any{"description": "x"})
+	req := httptest.NewRequest("PATCH",
+		"/admin/tenants/00000000-0000-0000-0000-000000000000",
+		bytes.NewReader(b))
+	w := httptest.NewRecorder()
+	adminRouter(st).ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("code = %d, want 404; body = %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Error string `json:"error"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error == "" {
+		t.Errorf("expected non-empty error in body")
+	}
+}
+
+// TestAdminDeleteTenant_TypedErrorCode confirms the 409 response on
+// FK-conflict carries the machine-readable code field consumed by
+// the admin frontend.
+func TestAdminDeleteTenant_TypedErrorCode(t *testing.T) {
+	st := adminTestStore(t)
+	tt := &tenant.Tenant{Name: "del-code-" + t.Name(), SecretHash: "$2a$10$dummy", IsActive: true}
+	if err := st.CreateTenant(tt); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = st.Pool().Exec(t.Context(), `DELETE FROM payments WHERE tenant_id = $1`, tt.ID)
+		_, _ = st.Pool().Exec(t.Context(), `DELETE FROM tenants WHERE id = $1`, tt.ID)
+	})
+	if _, err := st.Pool().Exec(t.Context(), `
+		INSERT INTO payments (tenant_id, order_id, channel, amount, status)
+		VALUES ($1, $2, 'wechat', 1, 'pending')`, tt.ID, "del-code-"+t.Name()); err != nil {
+		t.Fatalf("seed payment: %v", err)
+	}
+
+	req := httptest.NewRequest("DELETE", "/admin/tenants/"+tt.ID, nil)
+	w := httptest.NewRecorder()
+	adminRouter(st).ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("code = %d, want 409", w.Code)
+	}
+	var resp struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Code != "tenant_has_payments" {
+		t.Errorf("code = %q, want tenant_has_payments", resp.Code)
+	}
+}
+
 func TestAdminDeleteTenant_409OnPayments(t *testing.T) {
 	st := adminTestStore(t)
 	tt := &tenant.Tenant{Name: "del-" + t.Name(), SecretHash: "$2a$10$dummy", IsActive: true}

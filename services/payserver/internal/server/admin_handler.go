@@ -123,7 +123,15 @@ func handleUpdateTenant(st *store.Store) http.HandlerFunc {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "update failed"})
 			return
 		}
-		t, _ := st.GetTenantByID(id)
+		t, err := st.GetTenantByID(id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
+			return
+		}
+		if t == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"tenant": t})
 	}
 }
@@ -135,6 +143,7 @@ func handleDeleteTenant(st *store.Store) http.HandlerFunc {
 		if errors.Is(err, store.ErrTenantHasPayments) {
 			writeJSON(w, http.StatusConflict, map[string]string{
 				"error": "tenant has payments; deactivate via PATCH is_active=false instead",
+				"code":  "tenant_has_payments",
 			})
 			return
 		}
