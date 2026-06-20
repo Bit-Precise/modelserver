@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"flag"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -25,6 +26,47 @@ import (
 )
 
 func main() {
+	// Subcommand dispatcher: `payserver admin rescue --email <addr>`
+	if len(os.Args) >= 3 && os.Args[1] == "admin" && os.Args[2] == "rescue" {
+		runRescue(os.Args[3:])
+		return
+	}
+	runServer()
+}
+
+func runRescue(args []string) {
+	fs := flag.NewFlagSet("rescue", flag.ExitOnError)
+	email := fs.String("email", "", "operator email to encode into the session")
+	ttl := fs.Duration("ttl", time.Hour, "session lifetime")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *email == "" {
+		fmt.Fprintln(os.Stderr, "rescue: --email is required")
+		os.Exit(2)
+	}
+	secret := os.Getenv("PAYSERVER_OIDC_SESSION_SECRET")
+	if secret == "" {
+		fmt.Fprintln(os.Stderr, "rescue: PAYSERVER_OIDC_SESSION_SECRET is required")
+		os.Exit(2)
+	}
+	sess := server.AdminSession{
+		Email:     *email,
+		Name:      *email,
+		ExpiresAt: time.Now().Add(*ttl),
+	}
+	token, err := server.EncodeSession(sess, []byte(secret))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rescue: encode session: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("issued rescue session for=%s ttl=%s\n", *email, *ttl)
+	fmt.Println("set this cookie on your /admin/* domain to bypass OIDC:")
+	fmt.Printf("  payserver_admin_session=%s\n", token)
+	fmt.Fprintf(os.Stderr, "audit: rescue session issued for=%s ttl=%s pid=%d\n", *email, *ttl, os.Getpid())
+}
+
+func runServer() {
 	configPath := flag.String("config", "", "path to config file")
 	flag.Parse()
 
