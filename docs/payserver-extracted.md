@@ -18,9 +18,16 @@ changed, why, and how to set up the new repo if it doesn't exist yet.
 
 - `services/payserver/` — entire subtree removed (`git rm -rf`)
 - `docker-compose.yml` — payserver service now pulls a prebuilt image
-  via `${PAYSERVER_IMAGE:-…}` instead of building from a local path.
-  Until the new repo is publishing images, set `PAYSERVER_IMAGE` in
-  your shell or `.env` to a working tag.
+  via `${PAYSERVER_IMAGE:?…}` instead of building from a local path.
+  No default — compose fails fast with a clear message if the var is
+  unset. Pin a specific tag or digest in your `.env`:
+  ```
+  PAYSERVER_IMAGE=ghcr.io/yourorg/payserver:v1.2.3
+  # safer (immutable):
+  PAYSERVER_IMAGE=ghcr.io/yourorg/payserver@sha256:<digest>
+  ```
+  Shipping a `:latest` default keyed to a placeholder org would be a
+  supply-chain footgun (anyone could register the placeholder name).
 - `.github/workflows/images.yml` — `payserver` job removed; the
   workflow now only builds modelserver.
 - `gateway/nginx.conf` — **unchanged**; it still proxies to the
