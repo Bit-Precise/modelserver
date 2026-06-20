@@ -19,6 +19,7 @@ type Config struct {
 	WeChat   WeChatConfig   `mapstructure:"wechat"     yaml:"wechat"`
 	Alipay   AlipayConfig   `mapstructure:"alipay"     yaml:"alipay"`
 	Stripe   StripeConfig   `mapstructure:"stripe"     yaml:"stripe"`
+	OIDC     OIDCConfig     `mapstructure:"oidc"       yaml:"oidc"`
 }
 
 type ServerConfig struct {
@@ -66,6 +67,16 @@ type StripeConfig struct {
 	SuccessURL    string `mapstructure:"success_url"    yaml:"success_url"`
 	CancelURL     string `mapstructure:"cancel_url"     yaml:"cancel_url"`
 	DefaultLocale string `mapstructure:"default_locale" yaml:"default_locale"`
+}
+
+type OIDCConfig struct {
+	IssuerURL     string   `mapstructure:"issuer_url"     yaml:"issuer_url"`
+	ClientID      string   `mapstructure:"client_id"      yaml:"client_id"`
+	ClientSecret  string   `mapstructure:"client_secret"  yaml:"client_secret"`
+	RedirectURL   string   `mapstructure:"redirect_url"   yaml:"redirect_url"`
+	Scopes        []string `mapstructure:"scopes"         yaml:"scopes"`
+	AllowedEmails []string `mapstructure:"allowed_emails" yaml:"allowed_emails"`
+	SessionSecret string   `mapstructure:"session_secret" yaml:"session_secret"`
 }
 
 // Load reads the optional config file (path may be "") and overlays env vars
@@ -122,6 +133,13 @@ func Load(path string) (*Config, error) {
 		"stripe.success_url",
 		"stripe.cancel_url",
 		"stripe.default_locale",
+		"oidc.issuer_url",
+		"oidc.client_id",
+		"oidc.client_secret",
+		"oidc.redirect_url",
+		"oidc.scopes",
+		"oidc.allowed_emails",
+		"oidc.session_secret",
 	} {
 		_ = v.BindEnv(key)
 	}
@@ -129,6 +147,10 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
+
+	if len(cfg.OIDC.Scopes) == 0 {
+		cfg.OIDC.Scopes = []string{"openid", "profile", "email"}
 	}
 
 	cfg.WeChat.MchPrivateKeyPEM = normalizePEM(cfg.WeChat.MchPrivateKeyPEM, "PRIVATE KEY")
