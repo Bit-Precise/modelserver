@@ -75,13 +75,23 @@ type StripeConfig struct {
 }
 
 type OIDCConfig struct {
-	IssuerURL     string   `mapstructure:"issuer_url"     yaml:"issuer_url"`
-	ClientID      string   `mapstructure:"client_id"      yaml:"client_id"`
-	ClientSecret  string   `mapstructure:"client_secret"  yaml:"client_secret"`
-	RedirectURL   string   `mapstructure:"redirect_url"   yaml:"redirect_url"`
-	Scopes        []string `mapstructure:"scopes"         yaml:"scopes"`
+	IssuerURL    string   `mapstructure:"issuer_url"    yaml:"issuer_url"`
+	ClientID     string   `mapstructure:"client_id"     yaml:"client_id"`
+	ClientSecret string   `mapstructure:"client_secret" yaml:"client_secret"`
+	RedirectURL  string   `mapstructure:"redirect_url"  yaml:"redirect_url"`
+	Scopes       []string `mapstructure:"scopes"        yaml:"scopes"`
+	// AllowedEmails restricts admin access to the listed email addresses.
+	// Either AllowedEmails must be non-empty OR AllowAnyAuthenticated must
+	// be true — Validate() rejects an OIDC config with neither set. Without
+	// the explicit opt-in, an operator who forgets to populate the list
+	// would silently expose admin to every user the IdP can authenticate.
 	AllowedEmails []string `mapstructure:"allowed_emails" yaml:"allowed_emails"`
-	SessionSecret string   `mapstructure:"session_secret" yaml:"session_secret"`
+	// AllowAnyAuthenticated opts out of the AllowedEmails requirement.
+	// Set this to true ONLY when the IdP itself is already restricted to
+	// the same population that should have admin access (e.g. a dedicated
+	// Okta group). Default false.
+	AllowAnyAuthenticated bool   `mapstructure:"allow_any_authenticated" yaml:"allow_any_authenticated"`
+	SessionSecret         string `mapstructure:"session_secret"          yaml:"session_secret"`
 }
 
 // Validate performs fast, in-process checks of required fields so the
@@ -142,6 +152,13 @@ func (c *Config) Validate() error {
 		const minSessionSecretChars = 32
 		if len(c.OIDC.SessionSecret) < minSessionSecretChars {
 			return fmt.Errorf("oidc.session_secret must be at least %d characters", minSessionSecretChars)
+		}
+		// Empty allowed_emails + no explicit opt-in = misconfiguration
+		// footgun: every IdP-authenticated user gets admin. Force the
+		// operator to either list emails or acknowledge the broader
+		// access surface by setting allow_any_authenticated=true.
+		if len(c.OIDC.AllowedEmails) == 0 && !c.OIDC.AllowAnyAuthenticated {
+			return fmt.Errorf("oidc.allowed_emails is empty; either list emails or set oidc.allow_any_authenticated=true to explicitly grant admin to every IdP-validated user")
 		}
 	}
 	return nil

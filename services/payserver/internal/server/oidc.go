@@ -22,7 +22,8 @@ type OIDCAuth struct {
 	provider      *oidc.Provider
 	verifier      *oidc.IDTokenVerifier
 	oauth2Cfg     *oauth2.Config
-	allowedEmails map[string]bool // empty = allow any OIDC-validated user
+	allowedEmails map[string]bool // empty + allowAny=true → admit any verified user
+	allowAny      bool
 	sessionSecret []byte
 	logger        *slog.Logger
 }
@@ -56,11 +57,23 @@ func NewOIDCAuth(ctx context.Context, cfg config.OIDCConfig, logger *slog.Logger
 	for _, e := range cfg.AllowedEmails {
 		allowed[strings.ToLower(strings.TrimSpace(e))] = true
 	}
+	// Defense in depth: refuse to construct if neither allowlist is set
+	// nor the explicit opt-in. Config.Validate() already catches this at
+	// startup, but a code path that bypasses Validate (tests, a future
+	// programmatic config builder) must not silently land in "allow any
+	// authenticated user" mode.
+	if len(allowed) == 0 && !cfg.AllowAnyAuthenticated {
+		return nil, errors.New("oidc: allowed_emails is empty and allow_any_authenticated is false — refusing to admit every IdP-validated user without explicit opt-in")
+	}
+	if len(allowed) == 0 && cfg.AllowAnyAuthenticated {
+		logger.Warn("oidc admin: allow_any_authenticated=true — every IdP-validated user has admin access; ensure the IdP itself is appropriately restricted")
+	}
 	return &OIDCAuth{
 		provider:      provider,
 		verifier:      provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
 		oauth2Cfg:     oauth2Cfg,
 		allowedEmails: allowed,
+		allowAny:      cfg.AllowAnyAuthenticated,
 		sessionSecret: []byte(cfg.SessionSecret),
 		logger:        logger,
 	}, nil

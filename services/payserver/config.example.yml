@@ -54,6 +54,10 @@ oidc:
   client_id: ""
   client_secret: ""
   redirect_url: ""         # e.g. https://payserver.example.com/admin/callback
-  scopes: []               # default ["openid", "profile", "email"]
-  allowed_emails: []       # comma-separated env: PAYSERVER_OIDC_ALLOWED_EMAILS
-  session_secret: ""       # MUST be 32+ chars; openssl rand -base64 32
+  scopes: []                       # default ["openid", "profile", "email"]
+  # Either populate allowed_emails OR set allow_any_authenticated=true.
+  # Empty list without the explicit opt-in is rejected at startup so an
+  # operator cannot silently grant admin to every IdP-validated user.
+  allowed_emails: []               # comma-separated env: PAYSERVER_OIDC_ALLOWED_EMAILS
+  allow_any_authenticated: false   # true ONLY when the IdP itself is restricted to admins
+  session_secret: ""               # MUST be 32+ chars; openssl rand -base64 32

@@ -237,6 +237,57 @@ func TestConfig_Validate_WeChatWithoutMchID(t *testing.T) {
 	}
 }
 
+// TestConfig_Validate_OIDCEmptyAllowlistRejected closes the misconfig
+// footgun: an OIDC-enabled config with empty allowed_emails and no
+// explicit allow_any_authenticated opt-in must fail at startup. Without
+// this guard, every IdP-validated user would silently land in admin.
+func TestConfig_Validate_OIDCEmptyAllowlistRejected(t *testing.T) {
+	c := validBase()
+	c.OIDC.IssuerURL = "https://idp.example"
+	c.OIDC.ClientID = "cid"
+	c.OIDC.ClientSecret = "csec"
+	c.OIDC.RedirectURL = "https://x/cb"
+	c.OIDC.SessionSecret = "thirty-two-char-session-secret--!"
+	// AllowedEmails empty; AllowAnyAuthenticated false → reject.
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected error: empty allowed_emails without opt-in")
+	}
+	if !contains(err.Error(), "allowed_emails") || !contains(err.Error(), "allow_any_authenticated") {
+		t.Errorf("err = %q, want mention of both allowed_emails + allow_any_authenticated", err)
+	}
+}
+
+// TestConfig_Validate_OIDCAllowAnyAuthenticated_OK confirms the
+// explicit opt-in path passes Validate.
+func TestConfig_Validate_OIDCAllowAnyAuthenticated_OK(t *testing.T) {
+	c := validBase()
+	c.OIDC.IssuerURL = "https://idp.example"
+	c.OIDC.ClientID = "cid"
+	c.OIDC.ClientSecret = "csec"
+	c.OIDC.RedirectURL = "https://x/cb"
+	c.OIDC.SessionSecret = "thirty-two-char-session-secret--!"
+	c.OIDC.AllowAnyAuthenticated = true
+	if err := c.Validate(); err != nil {
+		t.Errorf("unexpected: %v", err)
+	}
+}
+
+// TestConfig_Validate_OIDCWithAllowedEmails_OK confirms the standard
+// allowlist path passes Validate.
+func TestConfig_Validate_OIDCWithAllowedEmails_OK(t *testing.T) {
+	c := validBase()
+	c.OIDC.IssuerURL = "https://idp.example"
+	c.OIDC.ClientID = "cid"
+	c.OIDC.ClientSecret = "csec"
+	c.OIDC.RedirectURL = "https://x/cb"
+	c.OIDC.SessionSecret = "thirty-two-char-session-secret--!"
+	c.OIDC.AllowedEmails = []string{"ops@example.com"}
+	if err := c.Validate(); err != nil {
+		t.Errorf("unexpected: %v", err)
+	}
+}
+
 func TestConfig_Validate_AlipayWithoutPrivateKey(t *testing.T) {
 	c := validBase()
 	c.Alipay.AppID = "alipay-app"
