@@ -3578,7 +3578,7 @@ git commit -m "feat(payserver/server): admin tenant + payments CRUD handlers"
 
 **Interfaces:**
 - Consumes: Task 10 (`EncodeSession`)
-- Produces: `payserver admin rescue --email <addr>` prints a 1-hour signed session cookie to stdout. Uses `PAYSERVER_OIDC_SESSION_SECRET` from env (not from config; subcommand path is meant to run when config might be unparseable).
+- Produces: `payserver admin rescue --email <addr>` emits a structured JSON audit record on stdout and the signed session cookie value on stderr. The token is deliberately kept off stdout so container log collectors (typically stdout-only) don't archive a bearer-equivalent credential — capture with `2>&1` or redirect stderr explicitly. Uses `PAYSERVER_OIDC_SESSION_SECRET` from env (not from config; subcommand path is meant to run when config might be unparseable).
 
 - [ ] **Step 1: Restructure main.go to detect subcommand**
 
