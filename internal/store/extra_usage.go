@@ -149,11 +149,17 @@ func (s *Store) DeductExtraUsage(req DeductExtraUsageReq) (int64, error) {
 		return 0, fmt.Errorf("deduct extra_usage: %w", err)
 	}
 
+	// Negate in Go rather than via SQL `-$2`. With pgx's extended query
+	// protocol, the unary minus on an untyped parameter triggers
+	// SQLSTATE 42725 (operator is not unique: - unknown) because
+	// Postgres can't resolve which `-` operator (int2/int4/int8/numeric/
+	// money/interval/…) to use before knowing the column type. Passing
+	// the negated int64 directly bypasses operator resolution entirely.
 	_, err = tx.Exec(ctx, `
 		INSERT INTO extra_usage_transactions
 		  (project_id, type, amount_fen, balance_after_fen, request_id, reason, description)
-		VALUES ($1, 'deduction', -$2, $3, $4, $5, $6)`,
-		req.ProjectID, req.AmountFen, newBalance,
+		VALUES ($1, 'deduction', $2, $3, $4, $5, $6)`,
+		req.ProjectID, -req.AmountFen, newBalance,
 		nullString(req.RequestID), req.Reason, req.Description,
 	)
 	if err != nil {
