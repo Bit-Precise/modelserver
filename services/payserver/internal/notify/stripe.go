@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -132,7 +133,26 @@ func (h *StripeNotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Ack Stripe before calling modelserver.
 	w.WriteHeader(http.StatusOK)
 
-	// Phase 2: callback modelserver (best-effort; increment retries on failure).
+	// Phase 2: resolve tenant + deliver callback.
+	t, err := h.store.GetTenantByID(payment.TenantID)
+	if err != nil {
+		h.logger.Error("stripe notify: tenant lookup failed",
+			"order_id", orderID, "tenant_id", payment.TenantID,
+			"event_id", event.ID, "error", err)
+		// Don't IncrCallbackRetries — DB error is transient, the
+		// compensate worker will retry the lookup on its next pass.
+		return
+	}
+	if t == nil || !t.IsActive {
+		h.logger.Warn("stripe notify: tenant missing or inactive; skipping callback",
+			"order_id", orderID, "tenant_id", payment.TenantID, "event_id", event.ID)
+		// Mark failed: a deleted/disabled tenant will never accept callbacks.
+		// Compensate worker should not retry forever.
+		h.store.MarkCallbackFailed(orderID)
+		return
+	}
+
+	target := CallbackTarget{URL: t.CallbackURL, Secret: t.CallbackSecret}
 	payload := DeliveryPayload{
 		OrderID:    orderID,
 		PaymentRef: payment.ID,
@@ -140,16 +160,13 @@ func (h *StripeNotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		PaidAmount: payment.Amount,
 		PaidAt:     paidAt.Format(time.RFC3339),
 	}
-	// TODO(Task 7): Update to pass CallbackTarget per-call
-	// cbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	// defer cancel()
-	// if err := h.callback.Send(cbCtx, payload); err != nil {
-	// 	h.logger.Warn("stripe notify: callback to modelserver failed, will retry",
-	// 		"order_id", orderID, "channel", "stripe",
-	// 		"trade_no", tradeNo, "event_id", event.ID, "error", err)
-	// 	h.store.IncrCallbackRetries(orderID)
-	// 	return
-	// }
-	// h.store.MarkCallbackSuccess(orderID)
-	_ = payload // TODO(Task 7): Remove once callback is updated
+	cbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.callback.Send(cbCtx, target, payload); err != nil {
+		h.logger.Warn("stripe notify: callback failed, will retry",
+			"order_id", orderID, "tenant_id", t.ID, "event_id", event.ID, "error", err)
+		h.store.IncrCallbackRetries(orderID)
+		return
+	}
+	h.store.MarkCallbackSuccess(orderID)
 }

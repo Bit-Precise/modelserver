@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -98,25 +99,35 @@ func (h *WeChatNotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"code": "SUCCESS", "message": "OK"})
 
-	// Phase 2: callback modelserver (best-effort, compensated if fails).
-	// Use a detached context since we already replied to WeChat.
+	// Phase 2: resolve tenant + deliver callback.
+	t, err := h.store.GetTenantByID(payment.TenantID)
+	if err != nil {
+		h.logger.Error("wechat notify: tenant lookup failed",
+			"order_id", orderID, "tenant_id", payment.TenantID, "error", err)
+		return
+	}
+	if t == nil || !t.IsActive {
+		h.logger.Warn("wechat notify: tenant missing or inactive; skipping callback",
+			"order_id", orderID, "tenant_id", payment.TenantID)
+		h.store.MarkCallbackFailed(orderID)
+		return
+	}
+
+	target := CallbackTarget{URL: t.CallbackURL, Secret: t.CallbackSecret}
 	payload := DeliveryPayload{
 		OrderID:    orderID,
 		PaymentRef: payment.ID,
 		Status:     "paid",
-		PaidAmount: payment.Amount, // Use DB-authoritative amount, not gateway amount
+		PaidAmount: payment.Amount,
 		PaidAt:     paidAt.Format(time.RFC3339),
 	}
-
-	// TODO(Task 7): Update to pass CallbackTarget per-call
-	// cbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	// defer cancel()
-	// if err := h.callback.Send(cbCtx, payload); err != nil {
-	// 	h.logger.Warn("wechat notify: callback to modelserver failed, will retry",
-	// 		"order_id", orderID, "error", err)
-	// 	h.store.IncrCallbackRetries(orderID)
-	// 	return
-	// }
-	// h.store.MarkCallbackSuccess(orderID)
-	_ = payload // TODO(Task 7): Remove once callback is updated
+	cbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.callback.Send(cbCtx, target, payload); err != nil {
+		h.logger.Warn("wechat notify: callback failed, will retry",
+			"order_id", orderID, "tenant_id", t.ID, "error", err)
+		h.store.IncrCallbackRetries(orderID)
+		return
+	}
+	h.store.MarkCallbackSuccess(orderID)
 }

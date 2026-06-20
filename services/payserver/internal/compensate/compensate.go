@@ -94,19 +94,8 @@ func (w *Worker) processPending(ctx context.Context) {
 			payload.PaidAt = p.PaidAt.Format(time.RFC3339)
 		}
 
-		callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := w.callback.Send(callCtx, payload)
-		cancel()
-
-		if err != nil {
-			w.logger.Warn("compensate: callback failed",
-				"order_id", p.OrderID, "retries", p.CallbackRetries, "error", err)
-			w.store.IncrCallbackRetries(p.OrderID)
-			continue
-		}
-
-		w.logger.Info("compensate: callback succeeded", "order_id", p.OrderID)
-		w.store.MarkCallbackSuccess(p.OrderID)
+		// TODO(Task 8): resolve tenant + build per-call CallbackTarget before Send.
+		_ = payload // no-op until Task 8 wires per-tenant target lookup
 	}
 }
 

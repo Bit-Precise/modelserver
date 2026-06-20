@@ -88,11 +88,8 @@ func main() {
 	logger.Info("connected to database")
 
 	// Callback client.
-	callbackClient := notifyPkg.NewCallbackClient(
-		cfg.Callback.ModelserverURL,
-		cfg.Callback.WebhookSecret,
-		cfg.Callback.Timeout,
-	)
+	// TODO(Task 9): drop cfg.Callback.ModelserverURL + cfg.Callback.WebhookSecret (now per-tenant).
+	callbackClient := notifyPkg.NewCallbackClient(cfg.Callback.Timeout)
 
 	// Initialize gateways.
 	gateways := make(map[string]gateway.Gateway)
