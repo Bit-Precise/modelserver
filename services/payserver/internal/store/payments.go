@@ -138,6 +138,67 @@ func (s *Store) MarkCallbackFailed(orderID string) error {
 	return err
 }
 
+// PaymentFilters holds optional filter criteria for ListPayments.
+type PaymentFilters struct {
+	TenantID string
+	Status   string
+	Channel  string
+}
+
+// ListPayments returns a paginated list of payments matching the given filters.
+// All filter values are bound as query parameters (no string interpolation of user data).
+func (s *Store) ListPayments(limit, offset int, f PaymentFilters) ([]Payment, int, error) {
+	ctx := context.Background()
+	where := "WHERE 1=1"
+	args := []any{}
+	i := 1
+	if f.TenantID != "" {
+		where += fmt.Sprintf(" AND tenant_id = $%d", i)
+		args = append(args, f.TenantID)
+		i++
+	}
+	if f.Status != "" {
+		where += fmt.Sprintf(" AND status = $%d", i)
+		args = append(args, f.Status)
+		i++
+	}
+	if f.Channel != "" {
+		where += fmt.Sprintf(" AND channel = $%d", i)
+		args = append(args, f.Channel)
+		i++
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM payments `+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count payments: %w", err)
+	}
+
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit, offset)
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, tenant_id, order_id, channel, trade_no, payment_url, amount, status,
+			callback_status, callback_retries, raw_notify, paid_at, created_at, updated_at
+		FROM payments `+where+
+			fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d OFFSET $%d`, i, i+1),
+		queryArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list payments: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Payment
+	for rows.Next() {
+		var p Payment
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.OrderID, &p.Channel, &p.TradeNo,
+			&p.PaymentURL, &p.Amount, &p.Status, &p.CallbackStatus, &p.CallbackRetries,
+			&p.RawNotify, &p.PaidAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan payment: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, total, rows.Err()
+}
+
 // ListPendingCallbacks returns paid payments with pending callbacks, using FOR UPDATE SKIP LOCKED
 // to prevent concurrent workers from processing the same rows.
 func (s *Store) ListPendingCallbacks(limit int, maxRetries int) ([]Payment, error) {

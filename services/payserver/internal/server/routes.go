@@ -48,7 +48,16 @@ func NewRouter(cfg Config) http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(cfg.OIDCAuth.RequireSession)
 				r.Get("/whoami", cfg.OIDCAuth.WhoamiHandler)
-				// Tenant + payment CRUD routes mounted in Task 12.
+
+				r.Get("/tenants", handleListTenants(cfg.Store))
+				r.Post("/tenants", handleCreateTenant(cfg.Store))
+				r.Get("/tenants/{id}", handleGetTenant(cfg.Store))
+				r.Patch("/tenants/{id}", handleUpdateTenant(cfg.Store))
+				r.Delete("/tenants/{id}", handleDeleteTenant(cfg.Store))
+				r.Post("/tenants/{id}/rotate-secret", handleRotateTenantSecret(cfg.Store))
+
+				r.Get("/payments", handleListPayments(cfg.Store))
+				r.Get("/payments/{id}", handleGetPayment(cfg.Store))
 			})
 		})
 	}
