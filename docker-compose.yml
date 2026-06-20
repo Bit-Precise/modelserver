@@ -45,8 +45,16 @@ services:
       hydra:
         condition: service_started
 
+  # Payserver source lives in its own repo (extracted from this monorepo
+  # in commit <this-PR-merge-sha>; see docs/payserver-extracted.md). The
+  # service still runs in this compose stack — it pulls a prebuilt image
+  # from the registry rather than building from a local subdirectory.
+  # Set PAYSERVER_IMAGE in your shell or .env to pin a specific tag
+  # (e.g. ghcr.io/yourorg/payserver:v1.2.3); defaults to :latest from
+  # the placeholder registry — update the default once the new repo is
+  # publishing images.
   payserver:
-    build: ./services/payserver
+    image: ${PAYSERVER_IMAGE:-ghcr.io/PLACEHOLDER-ORG/payserver:latest}
     env_file: .env.payserver
     expose:
       - "8090"
