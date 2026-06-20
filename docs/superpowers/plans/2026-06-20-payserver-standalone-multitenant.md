@@ -5012,13 +5012,16 @@ explicitly not a goal.
 
 ## What changes for modelserver
 
-One env swap during deploy. See **Cross-service env coupling** in the spec §3.
+One env-var split + one new field on modelserver. See **Cross-service env coupling** in the spec §3.
 
 ```bash
-# old
+# old (single joined string was awkward to rotate / reason about)
 MODELSERVER_BILLING_PAYMENT_API_KEY=<legacy-api-key>
-# new
-MODELSERVER_BILLING_PAYMENT_API_KEY=<default-tenant-uuid>:<PAYSERVER_DEFAULT_TENANT_SECRET>
+
+# new (tenant id and secret as separate fields; HTTP client joins as
+# `Bearer <id>:<secret>` at request time)
+MODELSERVER_BILLING_PAYMENT_TENANT_ID=<default-tenant-uuid>
+MODELSERVER_BILLING_PAYMENT_API_KEY=<PAYSERVER_DEFAULT_TENANT_SECRET>
 ```
 
 `MODELSERVER_BILLING_WEBHOOK_SECRET` stays exactly as-is — migration 002
@@ -5029,7 +5032,7 @@ copies it into the default tenant's `callback_secret` automatically.
 1. Set `PAYSERVER_DEFAULT_TENANT_SECRET` (32 random bytes from openssl).
 2. Set OIDC env vars (`PAYSERVER_OIDC_*`) plus `PAYSERVER_OIDC_SESSION_SECRET`.
 3. Deploy + restart payserver. Migration 002 runs once, prints `default tenant id=<uuid>`.
-4. Update modelserver's `MODELSERVER_BILLING_PAYMENT_API_KEY=<uuid>:<secret>`.
+4. On modelserver, set both `MODELSERVER_BILLING_PAYMENT_TENANT_ID=<uuid>` (from step 3) and `MODELSERVER_BILLING_PAYMENT_API_KEY=<secret>` (same plaintext as `PAYSERVER_DEFAULT_TENANT_SECRET`).
 5. Restart modelserver.
 
 Window between step 3 and 5: modelserver→payserver `POST /payments` returns 401 (old bearer format). Subscription ordering is low-frequency; minute-scale window is acceptable for a planned deploy.
