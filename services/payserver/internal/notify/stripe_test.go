@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/modelserver/modelserver/services/payserver/internal/store"
+	"github.com/modelserver/modelserver/services/payserver/internal/tenant"
 )
 
 const testStripeSecret = "whsec_test_dummy_secret_value_long_enough"
@@ -61,7 +62,7 @@ func buildCheckoutSessionEvent(orderID string, amount int64, paymentStatus strin
 }
 
 func TestStripeNotify_BadSignature(t *testing.T) {
-	h, _, _ := newStripeHarness(t)
+	h, _, _, _ := newStripeHarness(t)
 	req := httptest.NewRequest("POST", "/notify/stripe", bytes.NewReader([]byte("{}")))
 	req.Header.Set("Stripe-Signature", "t=0,v1=deadbeef")
 	w := httptest.NewRecorder()
@@ -72,8 +73,8 @@ func TestStripeNotify_BadSignature(t *testing.T) {
 }
 
 func TestStripeNotify_HappyPath(t *testing.T) {
-	h, st, cb := newStripeHarness(t)
-	orderID := seedPendingPayment(t, st, "stripe", 2000)
+	h, st, cb, tenantID := newStripeHarness(t)
+	orderID := seedPendingPayment(t, st, tenantID, "stripe", 2000)
 
 	body := buildCheckoutSessionEvent(strings.ReplaceAll(orderID, "-", ""), 2000, "paid")
 	sig, _ := signStripePayload(t, body, testStripeSecret)
@@ -95,7 +96,7 @@ func TestStripeNotify_HappyPath(t *testing.T) {
 }
 
 func TestStripeNotify_NonCheckoutCompletedAcked(t *testing.T) {
-	h, _, _ := newStripeHarness(t)
+	h, _, _, _ := newStripeHarness(t)
 	body := []byte(`{"id":"evt_test_2","object":"event","type":"payment_intent.created","api_version":"2026-05-27.dahlia","data":{"object":{}},"created":` +
 		strconv.FormatInt(time.Now().Unix(), 10) + `}`)
 	sig, _ := signStripePayload(t, body, testStripeSecret)
@@ -109,8 +110,8 @@ func TestStripeNotify_NonCheckoutCompletedAcked(t *testing.T) {
 }
 
 func TestStripeNotify_PaymentStatusNotPaidAcked(t *testing.T) {
-	h, st, cb := newStripeHarness(t)
-	orderID := seedPendingPayment(t, st, "stripe", 2000)
+	h, st, cb, tenantID := newStripeHarness(t)
+	orderID := seedPendingPayment(t, st, tenantID, "stripe", 2000)
 	body := buildCheckoutSessionEvent(strings.ReplaceAll(orderID, "-", ""), 2000, "unpaid")
 	sig, _ := signStripePayload(t, body, testStripeSecret)
 	req := httptest.NewRequest("POST", "/notify/stripe", bytes.NewReader(body))
@@ -126,7 +127,7 @@ func TestStripeNotify_PaymentStatusNotPaidAcked(t *testing.T) {
 }
 
 func TestStripeNotify_PaymentNotFound(t *testing.T) {
-	h, _, _ := newStripeHarness(t)
+	h, _, _, _ := newStripeHarness(t)
 	body := buildCheckoutSessionEvent("00000000000000000000000000000000", 2000, "paid")
 	sig, _ := signStripePayload(t, body, testStripeSecret)
 	req := httptest.NewRequest("POST", "/notify/stripe", bytes.NewReader(body))
@@ -139,8 +140,8 @@ func TestStripeNotify_PaymentNotFound(t *testing.T) {
 }
 
 func TestStripeNotify_ChannelMismatch(t *testing.T) {
-	h, st, _ := newStripeHarness(t)
-	orderID := seedPendingPayment(t, st, "wechat", 2000) // wrong channel
+	h, st, _, tenantID := newStripeHarness(t)
+	orderID := seedPendingPayment(t, st, tenantID, "wechat", 2000) // wrong channel
 	body := buildCheckoutSessionEvent(strings.ReplaceAll(orderID, "-", ""), 2000, "paid")
 	sig, _ := signStripePayload(t, body, testStripeSecret)
 	req := httptest.NewRequest("POST", "/notify/stripe", bytes.NewReader(body))
@@ -153,8 +154,8 @@ func TestStripeNotify_ChannelMismatch(t *testing.T) {
 }
 
 func TestStripeNotify_AmountMismatch(t *testing.T) {
-	h, st, _ := newStripeHarness(t)
-	orderID := seedPendingPayment(t, st, "stripe", 2000)
+	h, st, _, tenantID := newStripeHarness(t)
+	orderID := seedPendingPayment(t, st, tenantID, "stripe", 2000)
 	body := buildCheckoutSessionEvent(strings.ReplaceAll(orderID, "-", ""), 999, "paid")
 	sig, _ := signStripePayload(t, body, testStripeSecret)
 	req := httptest.NewRequest("POST", "/notify/stripe", bytes.NewReader(body))
@@ -167,8 +168,8 @@ func TestStripeNotify_AmountMismatch(t *testing.T) {
 }
 
 func TestStripeNotify_DuplicateAlreadyPaidAndCallbackSuccess(t *testing.T) {
-	h, st, cb := newStripeHarness(t)
-	orderID := seedPaidPayment(t, st, "stripe", 2000) // status=paid, callback_status=success
+	h, st, cb, tenantID := newStripeHarness(t)
+	orderID := seedPaidPayment(t, st, tenantID, "stripe", 2000) // status=paid, callback_status=success
 	body := buildCheckoutSessionEvent(strings.ReplaceAll(orderID, "-", ""), 2000, "paid")
 	sig, _ := signStripePayload(t, body, testStripeSecret)
 	req := httptest.NewRequest("POST", "/notify/stripe", bytes.NewReader(body))
@@ -184,9 +185,9 @@ func TestStripeNotify_DuplicateAlreadyPaidAndCallbackSuccess(t *testing.T) {
 }
 
 func TestStripeNotify_CallbackFailureIncrementsRetries(t *testing.T) {
-	h, st, cb := newStripeHarness(t)
+	h, st, cb, tenantID := newStripeHarness(t)
 	cb.setFail(true)
-	orderID := seedPendingPayment(t, st, "stripe", 2000)
+	orderID := seedPendingPayment(t, st, tenantID, "stripe", 2000)
 	body := buildCheckoutSessionEvent(strings.ReplaceAll(orderID, "-", ""), 2000, "paid")
 	sig, _ := signStripePayload(t, body, testStripeSecret)
 	req := httptest.NewRequest("POST", "/notify/stripe", bytes.NewReader(body))
@@ -221,13 +222,22 @@ func (s *stubCallback) setFail(v bool) {
 	s.shouldFail.Store(v)
 }
 
-func newStripeHarness(t *testing.T) (*StripeNotifyHandler, *store.Store, *stubCallback) {
+func newStripeHarness(t *testing.T) (*StripeNotifyHandler, *store.Store, *stubCallback, string) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	st := openTestPayserverStore(t)
 	cb := &stubCallback{}
-	cbClient := newStubCallbackClient(t, cb)
-	return NewStripeNotifyHandler(testStripeSecret, st, cbClient, logger), st, cb
+	cbClient, cbURL := newStubCallbackClient(t, cb)
+
+	tt := seedTenant(t, st)
+	if err := st.UpdateTenant(tt.ID, map[string]any{
+		"callback_url":    cbURL,
+		"callback_secret": "stub-secret",
+	}); err != nil {
+		t.Fatalf("update tenant callback: %v", err)
+	}
+
+	return NewStripeNotifyHandler(testStripeSecret, st, cbClient, logger), st, cb, tt.ID
 }
 
 // openTestPayserverStore opens a *store.Store against the test DB.
@@ -240,22 +250,24 @@ func openTestPayserverStore(t *testing.T) *store.Store {
 		t.Skip("PAYSERVER_TEST_DB_URL not set; skipping DB-dependent test")
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	st, err := store.New(dbURL, logger)
+	st, err := store.New(dbURL, logger, store.MigrationBootstrap{})
 	if err != nil {
 		t.Fatalf("open test store: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
 
 	// Truncate for a clean slate before each test.
-	if _, err := st.Pool().Exec(context.Background(), "TRUNCATE payments"); err != nil {
-		t.Fatalf("truncate payments: %v", err)
+	// payments must come before tenants (FK: payments.tenant_id -> tenants.id).
+	if _, err := st.Pool().Exec(context.Background(), "TRUNCATE payments, tenants RESTART IDENTITY CASCADE"); err != nil {
+		t.Fatalf("truncate payments, tenants: %v", err)
 	}
 	return st
 }
 
 // newStubCallbackClient creates a *CallbackClient backed by a temporary
 // httptest.Server that records calls and optionally returns 500.
-func newStubCallbackClient(t *testing.T, cb *stubCallback) *CallbackClient {
+// Returns the client and the server's URL (used as the tenant's callback_url).
+func newStubCallbackClient(t *testing.T, cb *stubCallback) (*CallbackClient, string) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if cb.shouldFail.Load() {
@@ -266,18 +278,37 @@ func newStubCallbackClient(t *testing.T, cb *stubCallback) *CallbackClient {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
-	return NewCallbackClient(srv.URL, "test-secret", 5*time.Second)
+	return NewCallbackClientWithOpts(5*time.Second, true), srv.URL
+}
+
+// seedTenant inserts an active tenant with a placeholder callback URL and returns it.
+// The callback_url should be overridden by the caller with the test stub server URL.
+func seedTenant(t *testing.T, st *store.Store) *tenant.Tenant {
+	t.Helper()
+	hash, _ := tenant.HashSecret("test-secret")
+	tt := &tenant.Tenant{
+		Name:           "notify-test-" + t.Name(),
+		SecretHash:     hash,
+		CallbackURL:    "https://will-be-overridden.example",
+		CallbackSecret: "stub",
+		IsActive:       true,
+	}
+	if err := st.CreateTenant(tt); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	return tt
 }
 
 // seedPendingPayment inserts a payment with status=pending and returns its order ID.
-func seedPendingPayment(t *testing.T, st *store.Store, channel string, amount int64) string {
+func seedPendingPayment(t *testing.T, st *store.Store, tenantID, channel string, amount int64) string {
 	t.Helper()
 	orderID := newTestUUID(t)
 	p := &store.Payment{
-		OrderID: orderID,
-		Channel: channel,
-		Amount:  amount,
-		Status:  "pending",
+		TenantID: tenantID,
+		OrderID:  orderID,
+		Channel:  channel,
+		Amount:   amount,
+		Status:   "pending",
 	}
 	_, err := st.InsertOrGetPayment(p)
 	if err != nil {
@@ -287,13 +318,13 @@ func seedPendingPayment(t *testing.T, st *store.Store, channel string, amount in
 }
 
 // seedPaidPayment inserts a payment with status=paid and callback_status=success.
-func seedPaidPayment(t *testing.T, st *store.Store, channel string, amount int64) string {
+func seedPaidPayment(t *testing.T, st *store.Store, tenantID, channel string, amount int64) string {
 	t.Helper()
-	orderID := seedPendingPayment(t, st, channel, amount)
-	if _, err := st.MarkPaymentPaid(orderID, "cs_seed", `{}`, time.Now()); err != nil {
+	orderID := seedPendingPayment(t, st, tenantID, channel, amount)
+	if _, err := st.MarkPaymentPaid(tenantID, orderID, "cs_seed", `{}`, time.Now()); err != nil {
 		t.Fatalf("seed paid: %v", err)
 	}
-	if err := st.MarkCallbackSuccess(orderID); err != nil {
+	if err := st.MarkCallbackSuccess(tenantID, orderID); err != nil {
 		t.Fatalf("seed callback success: %v", err)
 	}
 	return orderID

@@ -353,10 +353,13 @@ export PAYSERVER_DEFAULT_TENANT_SECRET="Xc2BkP9...=="
 #   "default tenant id=<uuid>"
 # Record <uuid>.
 
-# Step 4: modelserver: swap the auth header value. The webhook secret
-# stays exactly as it was (see §3.x "Cross-service env coupling" below).
+# Step 4: modelserver: set the new tenant-id env var and replace the
+# api-key with the plaintext secret (the HTTP client joins them as
+# `Bearer <id>:<secret>` at request time). The webhook secret stays
+# exactly as it was (see §3.x "Cross-service env coupling" below).
 # old: MODELSERVER_BILLING_PAYMENT_API_KEY=<old-payserver-api-key>
-# new: MODELSERVER_BILLING_PAYMENT_API_KEY=<uuid>:Xc2BkP9...==
+# new: MODELSERVER_BILLING_PAYMENT_TENANT_ID=<default-tenant-uuid>
+#      MODELSERVER_BILLING_PAYMENT_API_KEY=<same-as-PAYSERVER_DEFAULT_TENANT_SECRET>
 
 # Step 5: restart modelserver.
 ```
@@ -374,7 +377,8 @@ compensate worker retries and eventually marks `callback_status=failed`).
 | Side | Env | Used For | Action |
 |---|---|---|---|
 | modelserver | `MODELSERVER_BILLING_WEBHOOK_SECRET` | HMAC verifier on `/api/v1/admin/billing/webhook/delivery` route mount + signature check | **KEEP as-is.** Same string before and after this PR |
-| modelserver | `MODELSERVER_BILLING_PAYMENT_API_KEY` | Bearer header sent on `POST /payments` to payserver | **REPLACE** with `<default-tenant-uuid>:<PAYSERVER_DEFAULT_TENANT_SECRET>` |
+| modelserver | `MODELSERVER_BILLING_PAYMENT_TENANT_ID` | Default-tenant UUID (one half of the joined `Bearer <id>:<secret>` sent on `POST /payments`) | **NEW** — set to the UUID from step 3 |
+| modelserver | `MODELSERVER_BILLING_PAYMENT_API_KEY` | Plaintext secret (other half of the joined Bearer header). The HTTP client joins both fields at request time. | **REPLACE** with the same plaintext value as `PAYSERVER_DEFAULT_TENANT_SECRET` |
 | modelserver | `MODELSERVER_BILLING_PAYMENT_API_URL` | payserver base URL | **KEEP** |
 | modelserver | `MODELSERVER_BILLING_NOTIFY_URL` | (no longer sent on `PaymentRequest`; payserver derives from tenant.callback_url) | **DEPRECATED** — value is ignored by payserver going forward. Can be unset or left for documentation. |
 | modelserver | `MODELSERVER_BILLING_RETURN_URL` | per-order success_url prefix (PR #47) | **KEEP** |
@@ -398,8 +402,9 @@ Between "payserver restart" (Step 3) and "modelserver restart" (Step 5),
 Subscription ordering is a low-frequency operation; the window is
 typically 30–60s with rolling restarts. To minimize:
 
-- Pre-stage the `MODELSERVER_BILLING_PAYMENT_API_KEY` change so step 5
-  is just a process restart, not an env mutation
+- Pre-stage the `MODELSERVER_BILLING_PAYMENT_TENANT_ID` and
+  `MODELSERVER_BILLING_PAYMENT_API_KEY` changes so step 5 is just a
+  process restart, not an env mutation
 - Pick a low-traffic deploy window (e.g. 02:00–05:00 local)
 - If you cannot accept any window, add a **temporary auth shim**: in
   `auth.go`, before invoking the tenant middleware, check if the bearer
@@ -836,8 +841,8 @@ golang:1.26 stage copies that `dist/` into `admin_dist/` and runs
 ### Deployment Order
 
 1. Deploy new payserver (migration 002 runs with default tenant bootstrap).
-2. Capture default tenant id from logs.
-3. Update modelserver `MODELSERVER_BILLING_PAYMENT_API_KEY=<id>:<secret>`.
+2. Capture default tenant id from logs (or `SELECT id FROM tenants WHERE name='default'`).
+3. Update modelserver: set `MODELSERVER_BILLING_PAYMENT_TENANT_ID=<id>` and `MODELSERVER_BILLING_PAYMENT_API_KEY=<secret>` (the same plaintext as `PAYSERVER_DEFAULT_TENANT_SECRET`).
 4. Restart modelserver.
 
 During the window between step 1 and step 4, modelserver requests with the

@@ -1,186 +1,256 @@
 package config
 
 import (
-	"io"
-	"os"
+	"fmt"
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	DB       DBConfig       `yaml:"db"`
-	Callback CallbackConfig `yaml:"callback"`
-	APIKey   string         `yaml:"api_key"`
-	Log      LogConfig      `yaml:"log"`
-	WeChat   WeChatConfig   `yaml:"wechat"`
-	Alipay   AlipayConfig   `yaml:"alipay"`
-	Stripe   StripeConfig   `yaml:"stripe"`
+	Server   ServerConfig   `mapstructure:"server"     yaml:"server"`
+	DB       DBConfig       `mapstructure:"db"         yaml:"db"`
+	Callback CallbackConfig `mapstructure:"callback"   yaml:"callback"`
+	// APIKey is deprecated; kept for env var compatibility during migration.
+	// Use per-tenant credentials via the admin UI instead.
+	APIKey string `mapstructure:"api_key"    yaml:"api_key"`
+	Log    LogConfig `mapstructure:"log"        yaml:"log"`
+	WeChat   WeChatConfig   `mapstructure:"wechat"     yaml:"wechat"`
+	Alipay   AlipayConfig   `mapstructure:"alipay"     yaml:"alipay"`
+	Stripe   StripeConfig   `mapstructure:"stripe"     yaml:"stripe"`
+	OIDC     OIDCConfig     `mapstructure:"oidc"       yaml:"oidc"`
 }
 
 type ServerConfig struct {
-	Addr string `yaml:"addr"`
+	Addr string `mapstructure:"addr" yaml:"addr"`
 }
 
 type DBConfig struct {
-	URL string `yaml:"url"`
+	URL string `mapstructure:"url" yaml:"url"`
 }
 
 type CallbackConfig struct {
-	ModelserverURL string        `yaml:"modelserver_url"`
-	WebhookSecret  string        `yaml:"webhook_secret"`
-	Timeout        time.Duration `yaml:"timeout"`
+	ModelserverURL string        `mapstructure:"modelserver_url" yaml:"modelserver_url"`
+	WebhookSecret  string        `mapstructure:"webhook_secret"  yaml:"webhook_secret"`
+	Timeout        time.Duration `mapstructure:"timeout"         yaml:"timeout"`
+	// AllowPrivateNetworks: by default callback URLs that resolve to
+	// loopback, RFC1918, link-local, or other non-routable addresses are
+	// rejected (SSRF guard). Set true in test envs that genuinely target
+	// private hosts.
+	AllowPrivateNetworks bool `mapstructure:"allow_private_networks" yaml:"allow_private_networks"`
 }
 
 type LogConfig struct {
-	Level  string `yaml:"level"`
-	Format string `yaml:"format"`
+	Level  string `mapstructure:"level"  yaml:"level"`
+	Format string `mapstructure:"format" yaml:"format"`
 }
 
 type WeChatConfig struct {
-	AppID             string `yaml:"app_id"`
-	MchID             string `yaml:"mch_id"`
-	MchAPIv3Key       string `yaml:"mch_api_v3_key"`
-	MchSerialNo       string `yaml:"mch_serial_no"`
-	MchPrivateKeyPath string `yaml:"mch_private_key_path"`
-	MchPrivateKeyPEM  string `yaml:"mch_private_key_pem"`
-	NotifyURL         string `yaml:"notify_url"`
+	AppID             string `mapstructure:"app_id"               yaml:"app_id"`
+	MchID             string `mapstructure:"mch_id"               yaml:"mch_id"`
+	MchAPIv3Key       string `mapstructure:"mch_api_v3_key"       yaml:"mch_api_v3_key"`
+	MchSerialNo       string `mapstructure:"mch_serial_no"        yaml:"mch_serial_no"`
+	MchPrivateKeyPath string `mapstructure:"mch_private_key_path" yaml:"mch_private_key_path"`
+	MchPrivateKeyPEM  string `mapstructure:"mch_private_key_pem"  yaml:"mch_private_key_pem"`
+	NotifyURL         string `mapstructure:"notify_url"           yaml:"notify_url"`
 }
 
 type AlipayConfig struct {
-	AppID               string `yaml:"app_id"`
-	PrivateKeyPath      string `yaml:"private_key_path"`
-	PrivateKeyPEM       string `yaml:"private_key_pem"`
-	AlipayPublicKeyPath string `yaml:"alipay_public_key_path"`
-	AlipayPublicKeyPEM  string `yaml:"alipay_public_key_pem"`
-	NotifyURL           string `yaml:"notify_url"`
-	ReturnURL           string `yaml:"return_url"`
+	AppID               string `mapstructure:"app_id"                  yaml:"app_id"`
+	PrivateKeyPath      string `mapstructure:"private_key_path"        yaml:"private_key_path"`
+	PrivateKeyPEM       string `mapstructure:"private_key_pem"         yaml:"private_key_pem"`
+	AlipayPublicKeyPath string `mapstructure:"alipay_public_key_path"  yaml:"alipay_public_key_path"`
+	AlipayPublicKeyPEM  string `mapstructure:"alipay_public_key_pem"   yaml:"alipay_public_key_pem"`
+	NotifyURL           string `mapstructure:"notify_url"              yaml:"notify_url"`
+	ReturnURL           string `mapstructure:"return_url"              yaml:"return_url"`
 }
 
 type StripeConfig struct {
-	SecretKey     string `yaml:"secret_key"`
-	WebhookSecret string `yaml:"webhook_secret"`
-	SuccessURL    string `yaml:"success_url"`
-	CancelURL     string `yaml:"cancel_url"`
-	DefaultLocale string `yaml:"default_locale"`
+	SecretKey     string `mapstructure:"secret_key"     yaml:"secret_key"`
+	WebhookSecret string `mapstructure:"webhook_secret" yaml:"webhook_secret"`
+	SuccessURL    string `mapstructure:"success_url"    yaml:"success_url"`
+	CancelURL     string `mapstructure:"cancel_url"     yaml:"cancel_url"`
+	DefaultLocale string `mapstructure:"default_locale" yaml:"default_locale"`
 }
 
-func defaults() Config {
-	return Config{
-		Server: ServerConfig{Addr: ":8090"},
-		Callback: CallbackConfig{
-			Timeout: 10 * time.Second,
-		},
-		Log: LogConfig{Level: "info", Format: "json"},
-	}
+type OIDCConfig struct {
+	IssuerURL    string   `mapstructure:"issuer_url"    yaml:"issuer_url"`
+	ClientID     string   `mapstructure:"client_id"     yaml:"client_id"`
+	ClientSecret string   `mapstructure:"client_secret" yaml:"client_secret"`
+	RedirectURL  string   `mapstructure:"redirect_url"  yaml:"redirect_url"`
+	Scopes       []string `mapstructure:"scopes"        yaml:"scopes"`
+	// AllowedEmails restricts admin access to the listed email addresses.
+	// Either AllowedEmails must be non-empty OR AllowAnyAuthenticated must
+	// be true — Validate() rejects an OIDC config with neither set. Without
+	// the explicit opt-in, an operator who forgets to populate the list
+	// would silently expose admin to every user the IdP can authenticate.
+	AllowedEmails []string `mapstructure:"allowed_emails" yaml:"allowed_emails"`
+	// AllowAnyAuthenticated opts out of the AllowedEmails requirement.
+	// Set this to true ONLY when the IdP itself is already restricted to
+	// the same population that should have admin access (e.g. a dedicated
+	// Okta group). Default false.
+	AllowAnyAuthenticated bool   `mapstructure:"allow_any_authenticated" yaml:"allow_any_authenticated"`
+	SessionSecret         string `mapstructure:"session_secret"          yaml:"session_secret"`
 }
 
-func Load(r io.Reader) (*Config, error) {
-	cfg := defaults()
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, err
+// Validate performs fast, in-process checks of required fields so the
+// operator gets a clear single error early rather than a partial boot
+// that later fatals deep inside a gateway constructor. Should be called
+// immediately after Load.
+func (c *Config) Validate() error {
+	if c.Server.Addr == "" {
+		return fmt.Errorf("server.addr is required")
 	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+	if c.DB.URL == "" {
+		return fmt.Errorf("db.url is required (or PAYSERVER_DB_URL)")
 	}
+
+	// Per-gateway companion checks. Detect "gateway enabled" by the same
+	// trigger field main.go uses.
+	if c.WeChat.AppID != "" {
+		if c.WeChat.MchID == "" {
+			return fmt.Errorf("wechat.mch_id is required when wechat.app_id is set")
+		}
+		if c.WeChat.MchAPIv3Key == "" {
+			return fmt.Errorf("wechat.mch_api_v3_key is required when wechat.app_id is set")
+		}
+		if c.WeChat.MchSerialNo == "" {
+			return fmt.Errorf("wechat.mch_serial_no is required when wechat.app_id is set")
+		}
+		if c.WeChat.MchPrivateKeyPath == "" && c.WeChat.MchPrivateKeyPEM == "" {
+			return fmt.Errorf("wechat.mch_private_key_path or wechat.mch_private_key_pem is required when wechat.app_id is set")
+		}
+	}
+	if c.Alipay.AppID != "" {
+		if c.Alipay.PrivateKeyPath == "" && c.Alipay.PrivateKeyPEM == "" {
+			return fmt.Errorf("alipay.private_key_path or alipay.private_key_pem is required when alipay.app_id is set")
+		}
+		if c.Alipay.AlipayPublicKeyPath == "" && c.Alipay.AlipayPublicKeyPEM == "" {
+			return fmt.Errorf("alipay.alipay_public_key_path or alipay.alipay_public_key_pem is required when alipay.app_id is set")
+		}
+	}
+	if c.Stripe.SecretKey != "" {
+		if c.Stripe.WebhookSecret == "" {
+			return fmt.Errorf("stripe.webhook_secret is required when stripe.secret_key is set")
+		}
+	}
+
+	// OIDC enabled = issuer_url set. NewOIDCAuth re-checks these (defense
+	// in depth) but surfacing the error here gives a clean message before
+	// any provider discovery network call.
+	if c.OIDC.IssuerURL != "" {
+		if c.OIDC.ClientID == "" {
+			return fmt.Errorf("oidc.client_id is required when oidc.issuer_url is set")
+		}
+		if c.OIDC.ClientSecret == "" {
+			return fmt.Errorf("oidc.client_secret is required when oidc.issuer_url is set")
+		}
+		if c.OIDC.RedirectURL == "" {
+			return fmt.Errorf("oidc.redirect_url is required when oidc.issuer_url is set")
+		}
+		const minSessionSecretChars = 32
+		if len(c.OIDC.SessionSecret) < minSessionSecretChars {
+			return fmt.Errorf("oidc.session_secret must be at least %d characters", minSessionSecretChars)
+		}
+		// Empty allowed_emails + no explicit opt-in = misconfiguration
+		// footgun: every IdP-authenticated user gets admin. Force the
+		// operator to either list emails or acknowledge the broader
+		// access surface by setting allow_any_authenticated=true.
+		if len(c.OIDC.AllowedEmails) == 0 && !c.OIDC.AllowAnyAuthenticated {
+			return fmt.Errorf("oidc.allowed_emails is empty; either list emails or set oidc.allow_any_authenticated=true to explicitly grant admin to every IdP-validated user")
+		}
+	}
+	return nil
+}
+
+// Load reads the optional config file (path may be "") and overlays env vars
+// with the PAYSERVER_ prefix. Nested keys translate from dots/underscores:
+// PAYSERVER_DB_URL → db.url; PAYSERVER_STRIPE_SECRET_KEY → stripe.secret_key.
+// Env values always win over file values.
+func Load(path string) (*Config, error) {
+	v := viper.New()
+	v.SetEnvPrefix("PAYSERVER")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+
+	// Defaults
+	v.SetDefault("server.addr", ":8090")
+	v.SetDefault("callback.timeout", 10*time.Second)
+	v.SetDefault("log.level", "info")
+	v.SetDefault("log.format", "json")
+
+	// File (optional)
+	if path != "" {
+		v.SetConfigFile(path)
+		if err := v.ReadInConfig(); err != nil {
+			return nil, fmt.Errorf("read config %s: %w", path, err)
+		}
+	}
+
+	// Every leaf key must be explicitly bound for AutomaticEnv to find it
+	// through nested-struct unmarshal (viper's known limitation).
+	for _, key := range []string{
+		"server.addr",
+		"db.url",
+		"callback.modelserver_url",
+		"callback.webhook_secret",
+		"callback.timeout",
+		"callback.allow_private_networks",
+		"api_key",
+		"log.level",
+		"log.format",
+		"wechat.app_id",
+		"wechat.mch_id",
+		"wechat.mch_api_v3_key",
+		"wechat.mch_serial_no",
+		"wechat.mch_private_key_path",
+		"wechat.mch_private_key_pem",
+		"wechat.notify_url",
+		"alipay.app_id",
+		"alipay.private_key_path",
+		"alipay.private_key_pem",
+		"alipay.alipay_public_key_path",
+		"alipay.alipay_public_key_pem",
+		"alipay.notify_url",
+		"alipay.return_url",
+		"stripe.secret_key",
+		"stripe.webhook_secret",
+		"stripe.success_url",
+		"stripe.cancel_url",
+		"stripe.default_locale",
+		"oidc.issuer_url",
+		"oidc.client_id",
+		"oidc.client_secret",
+		"oidc.redirect_url",
+		"oidc.scopes",
+		"oidc.allowed_emails",
+		"oidc.session_secret",
+	} {
+		_ = v.BindEnv(key)
+	}
+
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
+
+	if len(cfg.OIDC.Scopes) == 0 {
+		cfg.OIDC.Scopes = []string{"openid", "profile", "email"}
+	}
+
+	cfg.WeChat.MchPrivateKeyPEM = normalizePEM(cfg.WeChat.MchPrivateKeyPEM, "PRIVATE KEY")
+	cfg.Alipay.PrivateKeyPEM = normalizePEM(cfg.Alipay.PrivateKeyPEM, "PRIVATE KEY")
+	cfg.Alipay.AlipayPublicKeyPEM = normalizePEM(cfg.Alipay.AlipayPublicKeyPEM, "PUBLIC KEY")
+
 	return &cfg, nil
 }
 
-func LoadFile(path string) (*Config, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return Load(f)
-}
-
-func (c *Config) ApplyEnvOverrides() {
-	if v := os.Getenv("PAYSERVER_DB_URL"); v != "" {
-		c.DB.URL = v
-	}
-	if v := os.Getenv("PAYSERVER_API_KEY"); v != "" {
-		c.APIKey = v
-	}
-	if v := os.Getenv("PAYSERVER_CALLBACK_WEBHOOK_SECRET"); v != "" {
-		c.Callback.WebhookSecret = v
-	}
-	if v := os.Getenv("PAYSERVER_CALLBACK_MODELSERVER_URL"); v != "" {
-		c.Callback.ModelserverURL = v
-	}
-	if v := os.Getenv("PAYSERVER_WECHAT_APP_ID"); v != "" {
-		c.WeChat.AppID = v
-	}
-	if v := os.Getenv("PAYSERVER_WECHAT_MCH_ID"); v != "" {
-		c.WeChat.MchID = v
-	}
-	if v := os.Getenv("PAYSERVER_WECHAT_MCH_API_V3_KEY"); v != "" {
-		c.WeChat.MchAPIv3Key = v
-	}
-	if v := os.Getenv("PAYSERVER_WECHAT_MCH_SERIAL_NO"); v != "" {
-		c.WeChat.MchSerialNo = v
-	}
-	if v := os.Getenv("PAYSERVER_WECHAT_MCH_PRIVATE_KEY_PATH"); v != "" {
-		c.WeChat.MchPrivateKeyPath = v
-	}
-	if v := os.Getenv("PAYSERVER_WECHAT_MCH_PRIVATE_KEY_PEM"); v != "" {
-		c.WeChat.MchPrivateKeyPEM = v
-	}
-	if v := os.Getenv("PAYSERVER_WECHAT_NOTIFY_URL"); v != "" {
-		c.WeChat.NotifyURL = v
-	}
-	if v := os.Getenv("PAYSERVER_ALIPAY_APP_ID"); v != "" {
-		c.Alipay.AppID = v
-	}
-	if v := os.Getenv("PAYSERVER_ALIPAY_PRIVATE_KEY_PATH"); v != "" {
-		c.Alipay.PrivateKeyPath = v
-	}
-	if v := os.Getenv("PAYSERVER_ALIPAY_PRIVATE_KEY_PEM"); v != "" {
-		c.Alipay.PrivateKeyPEM = v
-	}
-	if v := os.Getenv("PAYSERVER_ALIPAY_PUBLIC_KEY_PATH"); v != "" {
-		c.Alipay.AlipayPublicKeyPath = v
-	}
-	if v := os.Getenv("PAYSERVER_ALIPAY_PUBLIC_KEY_PEM"); v != "" {
-		c.Alipay.AlipayPublicKeyPEM = v
-	}
-	if v := os.Getenv("PAYSERVER_ALIPAY_NOTIFY_URL"); v != "" {
-		c.Alipay.NotifyURL = v
-	}
-	if v := os.Getenv("PAYSERVER_ALIPAY_RETURN_URL"); v != "" {
-		c.Alipay.ReturnURL = v
-	}
-	if v := os.Getenv("PAYSERVER_STRIPE_SECRET_KEY"); v != "" {
-		c.Stripe.SecretKey = v
-	}
-	if v := os.Getenv("PAYSERVER_STRIPE_WEBHOOK_SECRET"); v != "" {
-		c.Stripe.WebhookSecret = v
-	}
-	if v := os.Getenv("PAYSERVER_STRIPE_SUCCESS_URL"); v != "" {
-		c.Stripe.SuccessURL = v
-	}
-	if v := os.Getenv("PAYSERVER_STRIPE_CANCEL_URL"); v != "" {
-		c.Stripe.CancelURL = v
-	}
-	if v := os.Getenv("PAYSERVER_STRIPE_DEFAULT_LOCALE"); v != "" {
-		c.Stripe.DefaultLocale = v
-	}
-
-	// Normalize PEM strings — detect raw base64 and wrap with proper headers.
-	c.WeChat.MchPrivateKeyPEM = normalizePEM(c.WeChat.MchPrivateKeyPEM, "PRIVATE KEY")
-	c.Alipay.PrivateKeyPEM = normalizePEM(c.Alipay.PrivateKeyPEM, "PRIVATE KEY")
-	c.Alipay.AlipayPublicKeyPEM = normalizePEM(c.Alipay.AlipayPublicKeyPEM, "PUBLIC KEY")
-}
-
-// normalizePEM accepts PEM content in any of these forms:
+// normalizePEM accepts PEM content in any of these forms and returns a
+// valid multi-line PEM string:
 //   - Standard multi-line PEM with headers
 //   - Single-line PEM with literal \n separators
 //   - Raw base64 without headers (output of scripts/pem-encode.sh)
-//
-// It always returns a valid multi-line PEM string.
 func normalizePEM(s, label string) string {
 	if s == "" {
 		return s
@@ -192,7 +262,6 @@ func normalizePEM(s, label string) string {
 		return s
 	}
 
-	// Raw base64 — fold to 64-char lines and wrap with headers.
 	var lines []string
 	lines = append(lines, "-----BEGIN "+label+"-----")
 	for len(s) > 64 {

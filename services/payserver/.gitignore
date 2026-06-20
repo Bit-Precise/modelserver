@@ -1,0 +1,7 @@
+admin/node_modules/
+admin/dist/
+cmd/payserver/admin_dist/*
+!cmd/payserver/admin_dist/index.html
+!cmd/payserver/admin_dist/.gitkeep
+# Local-build binary produced by `make build` or `go build ./cmd/payserver`
+payserver

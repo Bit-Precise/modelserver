@@ -80,10 +80,26 @@ func (w *Worker) processPending(ctx context.Context) {
 
 		if p.CallbackRetries >= MaxRetries {
 			w.logger.Error("compensate: max retries reached", "order_id", p.OrderID)
-			w.store.MarkCallbackFailed(p.OrderID)
+			w.store.MarkCallbackFailed(p.TenantID, p.OrderID)
 			continue
 		}
 
+		t, err := w.store.GetTenantByID(p.TenantID)
+		if err != nil {
+			w.logger.Error("compensate: tenant lookup failed; skipping this pass",
+				"payment_id", p.ID, "tenant_id", p.TenantID, "error", err)
+			continue
+		}
+		if t == nil || !t.IsActive {
+			w.logger.Warn("compensate: tenant missing or inactive; marking failed",
+				"payment_id", p.ID, "tenant_id", p.TenantID)
+			if err := w.store.MarkCallbackFailed(p.TenantID, p.OrderID); err != nil {
+				w.logger.Error("compensate: mark failed", "order_id", p.OrderID, "error", err)
+			}
+			continue
+		}
+
+		target := notify.CallbackTarget{URL: t.CallbackURL, Secret: t.CallbackSecret}
 		payload := notify.DeliveryPayload{
 			OrderID:    p.OrderID,
 			PaymentRef: p.ID,
@@ -94,19 +110,13 @@ func (w *Worker) processPending(ctx context.Context) {
 			payload.PaidAt = p.PaidAt.Format(time.RFC3339)
 		}
 
-		callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := w.callback.Send(callCtx, payload)
-		cancel()
-
-		if err != nil {
-			w.logger.Warn("compensate: callback failed",
-				"order_id", p.OrderID, "retries", p.CallbackRetries, "error", err)
-			w.store.IncrCallbackRetries(p.OrderID)
+		if err := w.callback.Send(ctx, target, payload); err != nil {
+			w.logger.Warn("compensate: callback failed; retrying later",
+				"order_id", p.OrderID, "tenant_id", t.ID, "error", err)
+			w.store.IncrCallbackRetries(p.TenantID, p.OrderID)
 			continue
 		}
-
-		w.logger.Info("compensate: callback succeeded", "order_id", p.OrderID)
-		w.store.MarkCallbackSuccess(p.OrderID)
+		w.store.MarkCallbackSuccess(p.TenantID, p.OrderID)
 	}
 }
 

@@ -83,7 +83,7 @@ func (h *WeChatNotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Phase 1: mark as paid (if not already)
 	if payment.Status == "pending" {
 		rawNotify, _ := json.Marshal(tx)
-		updated, err := h.store.MarkPaymentPaid(orderID, tradeNo, string(rawNotify), paidAt)
+		updated, err := h.store.MarkPaymentPaid(payment.TenantID, orderID, tradeNo, string(rawNotify), paidAt)
 		if err != nil {
 			h.logger.Error("wechat notify: mark paid failed", "order_id", orderID, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -99,23 +99,37 @@ func (h *WeChatNotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"code": "SUCCESS", "message": "OK"})
 
-	// Phase 2: callback modelserver (best-effort, compensated if fails).
-	// Use a detached context since we already replied to WeChat.
+	// Phase 2: resolve tenant + deliver callback.
+	t, err := h.store.GetTenantByID(payment.TenantID)
+	if err != nil {
+		h.logger.Error("wechat notify: tenant lookup failed",
+			"order_id", orderID, "tenant_id", payment.TenantID, "error", err)
+		return
+	}
+	if t == nil || !t.IsActive {
+		h.logger.Warn("wechat notify: tenant missing or inactive; skipping callback",
+			"order_id", orderID, "tenant_id", payment.TenantID)
+		if err := h.store.MarkCallbackFailed(payment.TenantID, orderID); err != nil {
+			h.logger.Warn("wechat notify: mark callback failed", "order_id", orderID, "err", err)
+		}
+		return
+	}
+
+	target := CallbackTarget{URL: t.CallbackURL, Secret: t.CallbackSecret}
 	payload := DeliveryPayload{
 		OrderID:    orderID,
 		PaymentRef: payment.ID,
 		Status:     "paid",
-		PaidAmount: payment.Amount, // Use DB-authoritative amount, not gateway amount
+		PaidAmount: payment.Amount,
 		PaidAt:     paidAt.Format(time.RFC3339),
 	}
-
 	cbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := h.callback.Send(cbCtx, payload); err != nil {
-		h.logger.Warn("wechat notify: callback to modelserver failed, will retry",
-			"order_id", orderID, "error", err)
-		h.store.IncrCallbackRetries(orderID)
+	if err := h.callback.Send(cbCtx, target, payload); err != nil {
+		h.logger.Warn("wechat notify: callback failed, will retry",
+			"order_id", orderID, "tenant_id", t.ID, "error", err)
+		h.store.IncrCallbackRetries(payment.TenantID, orderID)
 		return
 	}
-	h.store.MarkCallbackSuccess(orderID)
+	h.store.MarkCallbackSuccess(payment.TenantID, orderID)
 }

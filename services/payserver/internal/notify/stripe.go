@@ -112,7 +112,7 @@ func (h *StripeNotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Phase 1: mark payment as paid (CAS on status='pending').
 	if payment.Status == "pending" {
 		rawNotify, _ := json.Marshal(sess)
-		updated, err := h.store.MarkPaymentPaid(orderID, tradeNo, string(rawNotify), paidAt)
+		updated, err := h.store.MarkPaymentPaid(payment.TenantID, orderID, tradeNo, string(rawNotify), paidAt)
 		if err != nil {
 			h.logger.Error("stripe notify: mark paid failed",
 				"order_id", orderID, "channel", "stripe",
@@ -133,7 +133,28 @@ func (h *StripeNotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Ack Stripe before calling modelserver.
 	w.WriteHeader(http.StatusOK)
 
-	// Phase 2: callback modelserver (best-effort; increment retries on failure).
+	// Phase 2: resolve tenant + deliver callback.
+	t, err := h.store.GetTenantByID(payment.TenantID)
+	if err != nil {
+		h.logger.Error("stripe notify: tenant lookup failed",
+			"order_id", orderID, "tenant_id", payment.TenantID,
+			"event_id", event.ID, "error", err)
+		// Don't IncrCallbackRetries — DB error is transient, the
+		// compensate worker will retry the lookup on its next pass.
+		return
+	}
+	if t == nil || !t.IsActive {
+		h.logger.Warn("stripe notify: tenant missing or inactive; skipping callback",
+			"order_id", orderID, "tenant_id", payment.TenantID, "event_id", event.ID)
+		// Mark failed: a deleted/disabled tenant will never accept callbacks.
+		// Compensate worker should not retry forever.
+		if err := h.store.MarkCallbackFailed(payment.TenantID, orderID); err != nil {
+			h.logger.Warn("stripe notify: mark callback failed", "order_id", orderID, "err", err)
+		}
+		return
+	}
+
+	target := CallbackTarget{URL: t.CallbackURL, Secret: t.CallbackSecret}
 	payload := DeliveryPayload{
 		OrderID:    orderID,
 		PaymentRef: payment.ID,
@@ -143,12 +164,11 @@ func (h *StripeNotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 	cbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := h.callback.Send(cbCtx, payload); err != nil {
-		h.logger.Warn("stripe notify: callback to modelserver failed, will retry",
-			"order_id", orderID, "channel", "stripe",
-			"trade_no", tradeNo, "event_id", event.ID, "error", err)
-		h.store.IncrCallbackRetries(orderID)
+	if err := h.callback.Send(cbCtx, target, payload); err != nil {
+		h.logger.Warn("stripe notify: callback failed, will retry",
+			"order_id", orderID, "tenant_id", t.ID, "event_id", event.ID, "error", err)
+		h.store.IncrCallbackRetries(payment.TenantID, orderID)
 		return
 	}
-	h.store.MarkCallbackSuccess(orderID)
+	h.store.MarkCallbackSuccess(payment.TenantID, orderID)
 }
