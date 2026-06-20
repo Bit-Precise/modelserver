@@ -180,7 +180,7 @@ func runServer() {
 
 	// Callback client.
 	// TODO(Task 9): drop cfg.Callback.ModelserverURL + cfg.Callback.WebhookSecret (now per-tenant).
-	callbackClient := notifyPkg.NewCallbackClient(cfg.Callback.Timeout)
+	callbackClient := notifyPkg.NewCallbackClientWithOpts(cfg.Callback.Timeout, cfg.Callback.AllowPrivateNetworks)
 
 	// Initialize gateways.
 	gateways := make(map[string]gateway.Gateway)

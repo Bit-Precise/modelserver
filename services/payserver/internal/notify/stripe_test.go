@@ -278,7 +278,7 @@ func newStubCallbackClient(t *testing.T, cb *stubCallback) (*CallbackClient, str
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
-	return NewCallbackClient(5 * time.Second), srv.URL
+	return NewCallbackClientWithOpts(5*time.Second, true), srv.URL
 }
 
 // seedTenant inserts an active tenant with a placeholder callback URL and returns it.

@@ -34,6 +34,11 @@ type CallbackConfig struct {
 	ModelserverURL string        `mapstructure:"modelserver_url" yaml:"modelserver_url"`
 	WebhookSecret  string        `mapstructure:"webhook_secret"  yaml:"webhook_secret"`
 	Timeout        time.Duration `mapstructure:"timeout"         yaml:"timeout"`
+	// AllowPrivateNetworks: by default callback URLs that resolve to
+	// loopback, RFC1918, link-local, or other non-routable addresses are
+	// rejected (SSRF guard). Set true in test envs that genuinely target
+	// private hosts.
+	AllowPrivateNetworks bool `mapstructure:"allow_private_networks" yaml:"allow_private_networks"`
 }
 
 type LogConfig struct {
@@ -174,6 +179,7 @@ func Load(path string) (*Config, error) {
 		"callback.modelserver_url",
 		"callback.webhook_secret",
 		"callback.timeout",
+		"callback.allow_private_networks",
 		"api_key",
 		"log.level",
 		"log.format",

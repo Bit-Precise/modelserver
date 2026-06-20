@@ -205,7 +205,7 @@ func newStubCallbackClient(t *testing.T, cb *stubCallback) (*notify.CallbackClie
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
-	return notify.NewCallbackClient(5 * time.Second), srv.URL
+	return notify.NewCallbackClientWithOpts(5*time.Second, true), srv.URL
 }
 
 func seedTenant(t *testing.T, st *store.Store, callbackURL string) string {

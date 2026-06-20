@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -24,10 +25,18 @@ const maxCallbackURLLen = 2048
 //   - missing host
 //   - embedded userinfo
 //   - oversize URLs (>2048 chars)
-// It does NOT block private-network destinations or apply DNS-rebind
-// defenses — those would require a custom transport and are out of scope
-// for v1; tenants are trusted internal products at this stage.
-func validateCallbackURL(raw string) error {
+//   - literal IP that is loopback/private/link-local/multicast/unspecified
+//     (the SSRF guard — protects against tenant rows pointing at
+//     169.254.169.254 cloud metadata, 127.0.0.1 admin interfaces, etc.)
+//
+// DNS resolution of hostnames is NOT performed here — a v2 hardening
+// item is to add a custom dialer that re-validates the resolved IP on
+// every request to defeat DNS rebinding. Today we accept that risk;
+// tenants are vetted internal products.
+//
+// allowPrivate=true skips the IP-class check (for test environments
+// that genuinely target private hosts).
+func validateCallbackURL(raw string, allowPrivate bool) error {
 	if len(raw) > maxCallbackURLLen {
 		return fmt.Errorf("callback url too long")
 	}
@@ -44,7 +53,27 @@ func validateCallbackURL(raw string) error {
 	if u.User != nil {
 		return fmt.Errorf("callback url must not contain userinfo")
 	}
+	if !allowPrivate {
+		host := u.Hostname()
+		if ip := net.ParseIP(host); ip != nil {
+			if isNonRoutable(ip) {
+				return fmt.Errorf("callback URL resolves to a non-routable address")
+			}
+		}
+	}
 	return nil
+}
+
+// isNonRoutable returns true for IPs that must not be reachable from a
+// webhook delivery: loopback, RFC1918 (IsPrivate), link-local, multicast,
+// unspecified (0.0.0.0). Catches both v4 and v6.
+func isNonRoutable(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified()
 }
 
 type DeliveryPayload struct {
@@ -65,12 +94,22 @@ type CallbackTarget struct {
 }
 
 type CallbackClient struct {
-	httpClient *http.Client
+	httpClient   *http.Client
+	allowPrivate bool
 }
 
 func NewCallbackClient(timeout time.Duration) *CallbackClient {
 	return &CallbackClient{
 		httpClient: &http.Client{Timeout: timeout},
+	}
+}
+
+// NewCallbackClientWithOpts is the production constructor: pass
+// allowPrivate=true only in test environments.
+func NewCallbackClientWithOpts(timeout time.Duration, allowPrivate bool) *CallbackClient {
+	return &CallbackClient{
+		httpClient:   &http.Client{Timeout: timeout},
+		allowPrivate: allowPrivate,
 	}
 }
 
@@ -87,7 +126,7 @@ func (c *CallbackClient) Send(ctx context.Context, target CallbackTarget, payloa
 	if target.URL == "" {
 		return nil
 	}
-	if err := validateCallbackURL(target.URL); err != nil {
+	if err := validateCallbackURL(target.URL, c.allowPrivate); err != nil {
 		return fmt.Errorf("invalid callback target: %w", err)
 	}
 	if target.Secret == "" {
