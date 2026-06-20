@@ -18,6 +18,7 @@ type Config struct {
 	WeChatNotify *notify.WeChatNotifyHandler
 	AlipayNotify *notify.AlipayNotifyHandler
 	StripeNotify *notify.StripeNotifyHandler
+	OIDCAuth     *OIDCAuth // nil = admin disabled
 	Logger       *slog.Logger
 }
 
@@ -36,6 +37,21 @@ func NewRouter(cfg Config) http.Handler {
 		r.Use(tenantAuthMiddleware(cfg.Store, cfg.Logger))
 		r.Post("/payments", handleCreatePayment(cfg.Store, cfg.Gateways, cfg.Logger))
 	})
+
+	// Admin panel: OIDC-protected routes (only when OIDCAuth is configured).
+	if cfg.OIDCAuth != nil {
+		r.Route("/admin", func(r chi.Router) {
+			r.Get("/login", cfg.OIDCAuth.LoginHandler)
+			r.Get("/callback", cfg.OIDCAuth.CallbackHandler)
+			r.Post("/logout", cfg.OIDCAuth.LogoutHandler)
+			// Everything else under /admin requires a session.
+			r.Group(func(r chi.Router) {
+				r.Use(cfg.OIDCAuth.RequireSession)
+				r.Get("/whoami", cfg.OIDCAuth.WhoamiHandler)
+				// Tenant + payment CRUD routes mounted in Task 12.
+			})
+		})
+	}
 
 	// Payment platform callbacks (no bearer auth, platform-native verification)
 	r.Route("/notify", func(r chi.Router) {

@@ -187,6 +187,16 @@ func main() {
 	compWorker.Start()
 	defer compWorker.Stop()
 
+	// OIDC admin auth (optional).
+	var oidcAuth *server.OIDCAuth
+	if cfg.OIDC.IssuerURL != "" {
+		oidcAuth, err = server.NewOIDCAuth(ctx, cfg.OIDC, logger)
+		if err != nil {
+			log.Fatalf("oidc init: %v", err)
+		}
+		logger.Info("oidc enabled", "issuer", cfg.OIDC.IssuerURL)
+	}
+
 	// HTTP server.
 	router := server.NewRouter(server.Config{
 		Store:        st,
@@ -194,6 +204,7 @@ func main() {
 		WeChatNotify: wechatNotify,
 		AlipayNotify: alipayNotify,
 		StripeNotify: stripeNotify,
+		OIDCAuth:     oidcAuth,
 		Logger:       logger,
 	})
 
