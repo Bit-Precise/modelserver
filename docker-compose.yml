@@ -45,8 +45,21 @@ services:
       hydra:
         condition: service_started
 
+  # Payserver source lives in its own repo (extracted from this monorepo;
+  # see docs/payserver-extracted.md). The service still runs in this
+  # compose stack — it pulls a prebuilt image from the registry rather
+  # than building from a local subdirectory.
+  #
+  # PAYSERVER_IMAGE MUST be set explicitly (in .env or your shell) — no
+  # default. Pinning to an immutable tag or digest is the operator's
+  # responsibility:
+  #   PAYSERVER_IMAGE=ghcr.io/yourorg/payserver:v1.2.3
+  #   PAYSERVER_IMAGE=ghcr.io/yourorg/payserver@sha256:<digest>   # safer
+  # Shipping a default like `ghcr.io/PLACEHOLDER/payserver:latest` would
+  # be a supply-chain footgun: anyone who registers PLACEHOLDER on ghcr
+  # could push a malicious image and have it pulled silently.
   payserver:
-    build: ./services/payserver
+    image: ${PAYSERVER_IMAGE:?PAYSERVER_IMAGE must be set to the payserver image (e.g. ghcr.io/yourorg/payserver:vX.Y.Z or @sha256:digest); see docs/payserver-extracted.md}
     env_file: .env.payserver
     expose:
       - "8090"
