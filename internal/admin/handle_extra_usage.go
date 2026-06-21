@@ -40,13 +40,18 @@ func handleGetExtraUsage(st *store.Store, cfg config.ExtraUsageConfig) http.Hand
 			writeError(w, http.StatusInternalServerError, "internal", "failed to load extra usage settings")
 			return
 		}
-		spent, err := st.GetMonthlyExtraSpendFen(projectID)
+		monthStart, err := store.MonthWindowStart(cfg.MonthlyWindowTZ)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "invalid monthly window timezone")
+			return
+		}
+		spent, err := st.GetMonthlyExtraSpendFen(projectID, monthStart)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to sum monthly spend")
 			return
 		}
 		resp := extraUsageGetResponse{
-			MonthlyWindowStart: monthWindowStart(cfg.MonthlyWindowTZ).Format(time.RFC3339),
+			MonthlyWindowStart: monthStart.Format(time.RFC3339),
 			CreditPriceFen:     cfg.CreditPriceFen,
 			MinTopupFen:        cfg.MinTopupFen,
 			MaxTopupFen:        cfg.MaxTopupFen,
@@ -162,7 +167,12 @@ func handleCreateExtraUsageTopup(st *store.Store, payClient billing.PaymentClien
 		}
 
 		// Daily accumulated limit.
-		daily, err := st.SumDailyExtraUsageTopupFen(projectID)
+		dayStart, err := store.DayWindowStart(euCfg.MonthlyWindowTZ)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "invalid daily window timezone")
+			return
+		}
+		daily, err := st.SumDailyExtraUsageTopupFen(projectID, dayStart)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to check daily topup cap")
 			return
@@ -368,14 +378,3 @@ func handleAdminExtraUsageSetBypass(st *store.Store) http.HandlerFunc {
 	}
 }
 
-// monthWindowStart returns the start of the current month in the configured
-// timezone (default Asia/Shanghai). Only used to tell the dashboard when the
-// window resets — the store uses its own SQL-side computation.
-func monthWindowStart(tzName string) time.Time {
-	loc, err := time.LoadLocation(tzName)
-	if err != nil {
-		loc, _ = time.LoadLocation("Asia/Shanghai")
-	}
-	now := time.Now().In(loc)
-	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
-}

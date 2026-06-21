@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -301,6 +302,12 @@ func unmarshal(v *viper.Viper) (*Config, error) {
 		),
 	)); err != nil {
 		return nil, err
+	}
+	// Validate MonthlyWindowTZ at startup: an unparseable timezone
+	// would only surface later as failed deductions / dashboard errors,
+	// which is hard to debug. Fail loudly here instead.
+	if _, err := time.LoadLocation(cfg.ExtraUsage.MonthlyWindowTZ); err != nil {
+		return nil, fmt.Errorf("invalid extra_usage.monthly_window_tz %q: %w", cfg.ExtraUsage.MonthlyWindowTZ, err)
 	}
 	return &cfg, nil
 }

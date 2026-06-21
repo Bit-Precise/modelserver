@@ -1656,12 +1656,24 @@ func (e *Executor) settleExtraUsage(ctx context.Context, rc *RequestContext, usa
 	}
 	rc.ExtraUsageCostFen = costFen
 
+	monthStart, mErr := store.MonthWindowStart(e.extraUsageCfg.MonthlyWindowTZ)
+	if mErr != nil {
+		// MonthlyWindowTZ is validated at startup; an error here means
+		// the tzdb file changed under a running process. Log + skip the
+		// deduction (no charge) rather than panic — we want the request
+		// to complete normally.
+		e.logger.Error("extra_usage_monthwindow_failed",
+			"project_id", rc.ProjectID, "tz", e.extraUsageCfg.MonthlyWindowTZ, "error", mErr)
+		metrics.IncExtraUsageDeduction("err:tz")
+		return
+	}
 	newBal, err := e.store.DeductExtraUsage(store.DeductExtraUsageReq{
-		ProjectID:   rc.ProjectID,
-		AmountFen:   costFen,
-		RequestID:   rc.RequestID,
-		Reason:      euCtx.Reason,
-		Description: fmt.Sprintf("%s | credits=%.2f | model=%s", euCtx.Reason, credits, rc.Model),
+		ProjectID:        rc.ProjectID,
+		AmountFen:        costFen,
+		RequestID:        rc.RequestID,
+		Reason:           euCtx.Reason,
+		Description:      fmt.Sprintf("%s | credits=%.2f | model=%s", euCtx.Reason, credits, rc.Model),
+		MonthWindowStart: monthStart,
 	})
 	switch {
 	case err == nil:
@@ -1725,12 +1737,20 @@ func (e *Executor) settleImageExtraUsage(ctx context.Context, rc *RequestContext
 	}
 	rc.ExtraUsageCostFen = costFen
 
+	monthStart, mErr := store.MonthWindowStart(e.extraUsageCfg.MonthlyWindowTZ)
+	if mErr != nil {
+		e.logger.Error("extra_usage_monthwindow_failed",
+			"project_id", rc.ProjectID, "tz", e.extraUsageCfg.MonthlyWindowTZ, "error", mErr)
+		metrics.IncExtraUsageDeduction("err:tz")
+		return
+	}
 	newBal, err := e.store.DeductExtraUsage(store.DeductExtraUsageReq{
-		ProjectID:   rc.ProjectID,
-		AmountFen:   costFen,
-		RequestID:   rc.RequestID,
-		Reason:      euCtx.Reason,
-		Description: fmt.Sprintf("%s | credits=%.2f | model=%s | kind=%s", euCtx.Reason, credits, rc.Model, rc.RequestKind),
+		ProjectID:        rc.ProjectID,
+		AmountFen:        costFen,
+		RequestID:        rc.RequestID,
+		Reason:           euCtx.Reason,
+		Description:      fmt.Sprintf("%s | credits=%.2f | model=%s | kind=%s", euCtx.Reason, credits, rc.Model, rc.RequestKind),
+		MonthWindowStart: monthStart,
 	})
 	switch {
 	case err == nil:
