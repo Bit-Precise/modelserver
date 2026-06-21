@@ -187,9 +187,11 @@ func TestRefund_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRefund_Idempotent calls refund twice on the same order. The second call
-// must return 200 with the same balance, and exactly one 'refund' ledger row
-// must exist.
+// TestRefund_Idempotent calls refund twice on the same order. The first call
+// applies the refund (200 with new_balance_credits) and transitions the order
+// to OrderStatusRefunded. The second call hits the status-gate short-circuit
+// and returns 200 with `status: "already_refunded"` without re-mutating the
+// ledger. Exactly one 'refund' row must exist.
 func TestRefund_Idempotent(t *testing.T) {
 	rh := newRefundHarness(t)
 	projectID := rh.seedProject("idempotent")
@@ -197,22 +199,30 @@ func TestRefund_Idempotent(t *testing.T) {
 	const credits int64 = 10_000
 	order := rh.seedDeliveredTopup(projectID, credits)
 
-	// First refund.
+	// First refund — full mutation path.
 	rr1 := rh.postRefund(order.ID)
 	if rr1.Code != http.StatusOK {
 		t.Fatalf("first refund status = %d, want 200; body = %s", rr1.Code, rr1.Body.String())
 	}
-	bal1 := decodeRefundData(t, rr1)
+	if bal1 := decodeRefundData(t, rr1); bal1 != 0 {
+		t.Errorf("first refund balance = %d, want 0", bal1)
+	}
 
-	// Second refund (duplicate webhook).
+	// Second refund — must hit the OrderStatusRefunded short-circuit.
 	rr2 := rh.postRefund(order.ID)
 	if rr2.Code != http.StatusOK {
 		t.Fatalf("second refund status = %d, want 200; body = %s", rr2.Code, rr2.Body.String())
 	}
-	bal2 := decodeRefundData(t, rr2)
-
-	if bal1 != bal2 {
-		t.Errorf("idempotent: bal1=%d bal2=%d, want equal", bal1, bal2)
+	var resp2 struct {
+		Data struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("decode 2nd response: %v; raw=%s", err, rr2.Body.String())
+	}
+	if resp2.Data.Status != "already_refunded" {
+		t.Errorf("2nd-call data.status = %q, want already_refunded", resp2.Data.Status)
 	}
 
 	// Exactly one 'refund' row must exist.
@@ -226,6 +236,87 @@ func TestRefund_Idempotent(t *testing.T) {
 	}
 	if rowCount != 1 {
 		t.Errorf("refund ledger row count = %d, want 1 (idempotency broken)", rowCount)
+	}
+}
+
+// TestRefund_PartialAmountRejected verifies that a refund webhook whose
+// amount does not match the original order is rejected with 422 — V1 only
+// supports full reversal and silently applying a full refund for a partial
+// event would lose money in either direction.
+func TestRefund_PartialAmountRejected(t *testing.T) {
+	rh := newRefundHarness(t)
+	projectID := rh.seedProject("partial")
+	order := rh.seedDeliveredTopup(projectID, 10_000)
+
+	// Order was seeded with Amount=1000 (per seedDeliveredTopup); send 500.
+	body, _ := json.Marshal(map[string]any{
+		"order_id": order.ID,
+		"amount":   500, // ← != order.Amount (1000)
+		"currency": "CNY",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/billing/webhook/refund", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	rh.h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body = %s", rr.Code, rr.Body.String())
+	}
+
+	// No refund ledger row should have been inserted.
+	ctx := context.Background()
+	var rowCount int
+	if err := rh.st.Pool().QueryRow(ctx, `
+		SELECT COUNT(*) FROM extra_usage_transactions
+		WHERE order_id = $1 AND type = 'refund'`, order.ID,
+	).Scan(&rowCount); err != nil {
+		t.Fatalf("count refund rows: %v", err)
+	}
+	if rowCount != 0 {
+		t.Errorf("partial-refund rejection leaked a ledger row (%d rows)", rowCount)
+	}
+}
+
+// TestRefund_NotDeliveredRejected verifies that a refund webhook for an
+// order that is NOT in OrderStatusDelivered (e.g. failed, cancelled, paying)
+// is rejected with 409 — there is nothing to reverse.
+func TestRefund_NotDeliveredRejected(t *testing.T) {
+	rh := newRefundHarness(t)
+	projectID := rh.seedProject("notdelivered")
+
+	// Create a topup order in OrderStatusFailed (never delivered to wallet).
+	order := &types.Order{
+		ProjectID:               projectID,
+		Periods:                 1,
+		UnitPrice:               1000,
+		Amount:                  1000,
+		Currency:                "CNY",
+		Status:                  types.OrderStatusFailed,
+		Channel:                 "wechat",
+		Metadata:                "{}",
+		OrderType:               types.OrderTypeExtraUsageTopup,
+		ExtraUsageAmountCredits: 10_000,
+	}
+	if err := rh.st.CreateOrder(order); err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+
+	rr := rh.postRefund(order.ID)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body = %s", rr.Code, rr.Body.String())
+	}
+
+	// No refund ledger row, no balance mutation.
+	ctx := context.Background()
+	var rowCount int
+	if err := rh.st.Pool().QueryRow(ctx, `
+		SELECT COUNT(*) FROM extra_usage_transactions
+		WHERE order_id = $1`, order.ID,
+	).Scan(&rowCount); err != nil {
+		t.Fatalf("count tx rows: %v", err)
+	}
+	if rowCount != 0 {
+		t.Errorf("not-delivered rejection leaked ledger rows (%d rows)", rowCount)
 	}
 }
 

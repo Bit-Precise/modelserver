@@ -10,6 +10,7 @@ const (
 	OrderStatusDelivered = "delivered"
 	OrderStatusFailed    = "failed"
 	OrderStatusCancelled = "cancelled"
+	OrderStatusRefunded  = "refunded"
 )
 
 // Order represents a purchase order for a plan or an extra-usage top-up.
