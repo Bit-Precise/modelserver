@@ -10,8 +10,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-function fenToYuan(fen: number): string {
-  return (fen / 100).toFixed(2);
+function formatCredits(credits: number): string {
+  return credits.toLocaleString("en-US");
 }
 
 export function AdminExtraUsagePage() {
@@ -35,23 +35,23 @@ export function AdminExtraUsagePage() {
       className: "w-20",
     },
     {
-      header: "Balance ¥",
+      header: "Balance (credits)",
       accessor: (r) => (
-        <span className={r.balance_fen < 0 ? "text-red-600" : undefined}>
-          {fenToYuan(r.balance_fen)}
+        <span className={r.balance_credits < 0 ? "text-red-600" : undefined}>
+          {formatCredits(r.balance_credits)}
         </span>
       ),
-      className: "w-28 text-right",
+      className: "w-36 text-right",
     },
     {
-      header: "Monthly limit ¥",
-      accessor: (r) => (r.monthly_limit_fen > 0 ? fenToYuan(r.monthly_limit_fen) : "—"),
-      className: "w-32 text-right",
+      header: "Monthly limit (credits)",
+      accessor: (r) => (r.monthly_limit_credits > 0 ? formatCredits(r.monthly_limit_credits) : "—"),
+      className: "w-40 text-right",
     },
     {
-      header: "7d spend ¥",
-      accessor: (r) => fenToYuan(r.spend_7d_fen),
-      className: "w-28 text-right",
+      header: "7d spend (credits)",
+      accessor: (r) => formatCredits(r.spend_7d_credits),
+      className: "w-36 text-right",
     },
     {
       header: "Bypass",

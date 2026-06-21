@@ -2,26 +2,37 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { DataResponse, ListResponse, Order } from "./types";
 
+export interface CreditUnitPrices {
+  cny_fen_per_million: number;
+  usd_cents_per_million: number;
+  implicit_usd_to_cny_rate: number;
+}
+
+export interface TopupAmounts {
+  cny_fen: number;
+  usd_cents: number;
+}
+
 export interface ExtraUsageSettingsResponse {
   enabled: boolean;
-  balance_fen: number;
-  monthly_limit_fen: number;
-  monthly_spent_fen: number;
+  balance_credits: number;
+  monthly_limit_credits: number;
+  monthly_spent_credits: number;
   monthly_window_start: string;
-  credit_price_fen: number;
-  min_topup_fen: number;
-  max_topup_fen: number;
-  daily_topup_limit_fen: number;
   bypass_balance_check: boolean;
   updated_at?: string;
+  credit_unit_prices: CreditUnitPrices;
+  min_topup: TopupAmounts;
+  max_topup: TopupAmounts;
+  daily_topup_limit_credits: number;
 }
 
 export interface ExtraUsageTransaction {
   id: string;
   project_id: string;
   type: "topup" | "deduction" | "refund" | "adjust";
-  amount_fen: number;
-  balance_after_fen: number;
+  amount_credits: number;
+  balance_after_credits: number;
   request_id?: string;
   order_id?: string;
   reason?: string;
@@ -31,13 +42,12 @@ export interface ExtraUsageTransaction {
 
 export interface UpdateExtraUsageInput {
   enabled?: boolean;
-  monthly_limit_fen?: number;
+  monthly_limit_credits?: number;
 }
 
-export interface CreateTopupInput {
-  amount_fen: number;
-  channel: string;
-}
+export type CreateTopupInput =
+  | { channel: "wechat" | "alipay"; amount_fen: number }
+  | { channel: "stripe"; amount_cents: number };
 
 export function useExtraUsage(projectId: string) {
   return useQuery({
@@ -116,12 +126,12 @@ export function useExtraUsageTopupStatus(
 export interface AdminExtraUsageRow {
   project_id: string;
   enabled: boolean;
-  balance_fen: number;
-  monthly_limit_fen: number;
+  balance_credits: number;
+  monthly_limit_credits: number;
   bypass_balance_check: boolean;
   created_at: string;
   updated_at: string;
-  spend_7d_fen: number;
+  spend_7d_credits: number;
 }
 
 export function useAdminExtraUsageOverview() {

@@ -345,10 +345,6 @@ export function UsagePage() {
 }
 
 
-function formatFen(fen: number): string {
-  return `¥${(fen / 100).toFixed(2)}`;
-}
-
 function ExtraUsageCard({ projectId }: { projectId: string }) {
   const { data } = useExtraUsage(projectId);
   const s = data?.data;
@@ -360,11 +356,11 @@ function ExtraUsageCard({ projectId }: { projectId: string }) {
       <CardContent className="flex flex-1 flex-col justify-between">
         <div>
           <div className="text-2xl font-semibold">
-            {formatFen(s?.balance_fen ?? 0)}
+            {(s?.balance_credits ?? 0).toLocaleString("en-US")} credits
           </div>
           <div className="mt-1 text-xs text-muted-foreground">
             {s?.enabled ? "Enabled" : "Disabled"} · this month{" "}
-            {formatFen(s?.monthly_spent_fen ?? 0)}
+            {(s?.monthly_spent_credits ?? 0).toLocaleString("en-US")} credits
           </div>
         </div>
         <Link
