@@ -48,6 +48,10 @@ func New(databaseURL string, logger *slog.Logger) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
+	if err := s.convertExtraUsageDataToCredits(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("extra-usage credits conversion: %w", err)
+	}
 	return s, nil
 }
 
