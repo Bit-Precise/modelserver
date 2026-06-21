@@ -57,7 +57,7 @@ func TestCreateTopup_OrderStoresCreditsNotFen(t *testing.T) {
 	}
 
 	// CreditPriceCNYFen=5438 matches production default.
-	// For amount_fen=1000: credits = (1000 × 1_000_000) / 5438 = 183_890.
+	// For amount_fen=1000: credits = (1000 × 1_000_000) / 5438 = 183_891.
 	euCfg := config.ExtraUsageConfig{
 		CreditPriceCNYFen:      5438,
 		MinTopupCNYFen:         1000,
@@ -117,9 +117,9 @@ func TestCreateTopup_OrderStoresCreditsNotFen(t *testing.T) {
 
 	// The critical invariant: ExtraUsageAmountCredits must be credits,
 	// not fen. With CreditPriceCNYFen=5438 and amount_fen=1000:
-	//   credits = (1000 × 1_000_000) / 5438 = 183_890
+	//   credits = (1000 × 1_000_000) / 5438 = 183_891
 	// If the bug is present, the field will equal 1000 (fen stored as credits).
-	const wantCredits int64 = 183_890
+	const wantCredits int64 = 183_891
 	if order.ExtraUsageAmountCredits != wantCredits {
 		t.Errorf("ExtraUsageAmountCredits = %d, want %d\n"+
 			"  (bug: storing fen=%d instead of credits=%d in ExtraUsageAmountCredits)",
