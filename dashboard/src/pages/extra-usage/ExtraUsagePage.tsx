@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { QRCodeSVG } from "qrcode.react";
-import { ExternalLink, Loader2, Zap } from "lucide-react";
+import { Loader2, Zap } from "lucide-react";
 
 import { useCurrentProject } from "@/hooks/useCurrentProject";
 import {
@@ -603,19 +603,6 @@ export function ExtraUsagePage() {
                         ? formatUSD(paymentResult.order.amount)
                         : formatYuan(paymentResult.order.amount)}
                     </p>
-                  </div>
-                )}
-                {paymentResult.order.payment_url && (
-                  <div className="flex justify-center">
-                    <a
-                      className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"
-                      href={paymentResult.order.payment_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open payment page
-                      <ExternalLink className="ml-1 h-3 w-3" />
-                    </a>
                   </div>
                 )}
               </div>
