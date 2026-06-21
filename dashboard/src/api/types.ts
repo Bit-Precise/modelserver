@@ -291,7 +291,7 @@ export interface Order {
 export interface CostBreakdown {
   api_standard_fen: number;
   subscription_fen: number;
-  extra_usage_fen: number;
+  extra_usage_credits: number;
   actual_paid_fen: number;
   saved_fen: number;
   period_start: string;

@@ -224,8 +224,8 @@ export function OverviewPage() {
                 value={formatYuan(overview.cost_breakdown.actual_paid_fen)}
                 description={
                   overview.cost_breakdown.has_active_subscription
-                    ? `Subscription ${formatYuan(overview.cost_breakdown.subscription_fen)} + Extra ${formatYuan(overview.cost_breakdown.extra_usage_fen)}`
-                    : `Extra usage ${formatYuan(overview.cost_breakdown.extra_usage_fen)}`
+                    ? `Subscription ${formatYuan(overview.cost_breakdown.subscription_fen)} + Extra ${overview.cost_breakdown.extra_usage_credits.toLocaleString("en-US")} credits`
+                    : `Extra usage ${overview.cost_breakdown.extra_usage_credits.toLocaleString("en-US")} credits`
                 }
                 icon={<Wallet className="h-4 w-4" />}
               />
@@ -235,7 +235,7 @@ export function OverviewPage() {
                 <div>actual_paid = subscription_price + extra_usage_spend</div>
                 <div>
                   = {formatYuan(overview.cost_breakdown.subscription_fen)} +{" "}
-                  {formatYuan(overview.cost_breakdown.extra_usage_fen)}
+                  {overview.cost_breakdown.extra_usage_credits.toLocaleString("en-US")} credits
                 </div>
               </div>
             </TooltipContent>
