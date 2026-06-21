@@ -2,13 +2,14 @@ package admin
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/modelserver/modelserver/internal/auth"
 	"github.com/modelserver/modelserver/internal/billing"
-	"github.com/modelserver/modelserver/internal/httplog"
 	"github.com/modelserver/modelserver/internal/config"
+	"github.com/modelserver/modelserver/internal/httplog"
 	"github.com/modelserver/modelserver/internal/modelcatalog"
 	"github.com/modelserver/modelserver/internal/store"
 )
@@ -83,6 +84,7 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 			r.Route("/billing/webhook", func(r chi.Router) {
 				r.Use(billing.HMACAuthMiddleware(cfg.Billing.WebhookSecret))
 				r.Post("/delivery", handleDeliveryWebhook(st))
+				r.Post("/refund", handleBillingRefundWebhook(st, slog.Default()))
 			})
 		}
 
