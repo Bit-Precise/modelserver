@@ -15,19 +15,34 @@ import (
 	"github.com/modelserver/modelserver/internal/types"
 )
 
+// creditUnitPrices holds the per-million-credit price in each supported
+// currency and the implicit exchange rate (for informational display only).
+type creditUnitPrices struct {
+	CNYFenPerMillion   int64   `json:"cny_fen_per_million"`
+	USDCentsPerMillion int64   `json:"usd_cents_per_million"`
+	ImplicitUSDToCNY   float64 `json:"implicit_usd_to_cny_rate"`
+}
+
+// topupAmounts holds the topup bound (min or max) in each supported currency.
+type topupAmounts struct {
+	CNYFen   int64 `json:"cny_fen"`
+	USDCents int64 `json:"usd_cents"`
+}
+
 // extraUsageGetResponse packs settings + derived counters for the dashboard.
 type extraUsageGetResponse struct {
-	Enabled            bool      `json:"enabled"`
-	BalanceFen         int64     `json:"balance_fen"`
-	MonthlyLimitFen    int64     `json:"monthly_limit_fen"`
-	MonthlySpentFen    int64     `json:"monthly_spent_fen"`
-	MonthlyWindowStart string    `json:"monthly_window_start"`
-	CreditPriceFen     int64     `json:"credit_price_fen"`
-	MinTopupFen        int64     `json:"min_topup_fen"`
-	MaxTopupFen        int64     `json:"max_topup_fen"`
-	DailyTopupLimitFen int64     `json:"daily_topup_limit_fen"`
-	BypassBalanceCheck bool      `json:"bypass_balance_check"`
-	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+	Enabled             bool             `json:"enabled"`
+	BalanceCredits      int64            `json:"balance_credits"`
+	MonthlyLimitCredits int64            `json:"monthly_limit_credits"`
+	MonthlySpentCredits int64            `json:"monthly_spent_credits"`
+	MonthlyWindowStart  string           `json:"monthly_window_start"`
+	BypassBalanceCheck  bool             `json:"bypass_balance_check"`
+	UpdatedAt           time.Time        `json:"updated_at,omitempty"`
+
+	CreditUnitPrices creditUnitPrices `json:"credit_unit_prices"`
+	MinTopup         topupAmounts     `json:"min_topup"`
+	MaxTopup         topupAmounts     `json:"max_topup"`
+	DailyTopupLimit  int64            `json:"daily_topup_limit_credits"`
 }
 
 // handleGetExtraUsage returns the project's extra-usage state + policy
@@ -41,26 +56,34 @@ func handleGetExtraUsage(st *store.Store, cfg config.ExtraUsageConfig) http.Hand
 			return
 		}
 		monthStart := store.MonthWindowStart()
-		spent, err := st.GetMonthlyExtraSpendFen(projectID, monthStart)
+		spent, err := st.GetMonthlyExtraSpendCredits(projectID, monthStart)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to sum monthly spend")
 			return
 		}
+		implicitUSDToCNY := 0.0
+		if cfg.CreditPriceUSDCents > 0 {
+			implicitUSDToCNY = float64(cfg.CreditPriceCNYFen) / float64(cfg.CreditPriceUSDCents)
+		}
 		resp := extraUsageGetResponse{
 			MonthlyWindowStart: monthStart.Format(time.RFC3339),
-			CreditPriceFen:     cfg.CreditPriceFen,
-			MinTopupFen:        cfg.MinTopupFen,
-			MaxTopupFen:        cfg.MaxTopupFen,
-			DailyTopupLimitFen: cfg.DailyTopupLimitFen,
+			CreditUnitPrices: creditUnitPrices{
+				CNYFenPerMillion:   cfg.CreditPriceCNYFen,
+				USDCentsPerMillion: cfg.CreditPriceUSDCents,
+				ImplicitUSDToCNY:   implicitUSDToCNY,
+			},
+			MinTopup:        topupAmounts{CNYFen: cfg.MinTopupCNYFen, USDCents: cfg.MinTopupUSDCents},
+			MaxTopup:        topupAmounts{CNYFen: cfg.MaxTopupCNYFen, USDCents: cfg.MaxTopupUSDCents},
+			DailyTopupLimit: cfg.DailyTopupLimitCredits,
 		}
 		if settings != nil {
 			resp.Enabled = settings.Enabled
-			resp.BalanceFen = settings.BalanceFen
-			resp.MonthlyLimitFen = settings.MonthlyLimitFen
+			resp.BalanceCredits = settings.BalanceCredits
+			resp.MonthlyLimitCredits = settings.MonthlyLimitCredits
 			resp.BypassBalanceCheck = settings.BypassBalanceCheck
 			resp.UpdatedAt = settings.UpdatedAt
 		}
-		resp.MonthlySpentFen = spent
+		resp.MonthlySpentCredits = spent
 		writeData(w, http.StatusOK, resp)
 	}
 }
@@ -77,8 +100,8 @@ func handleUpdateExtraUsage(st *store.Store) http.HandlerFunc {
 		}
 		projectID := chi.URLParam(r, "projectID")
 		var body struct {
-			Enabled         *bool  `json:"enabled"`
-			MonthlyLimitFen *int64 `json:"monthly_limit_fen"`
+			Enabled             *bool  `json:"enabled"`
+			MonthlyLimitCredits *int64 `json:"monthly_limit_credits"`
 		}
 		if err := decodeBody(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
@@ -95,17 +118,17 @@ func handleUpdateExtraUsage(st *store.Store) http.HandlerFunc {
 		var monthlyLimit int64
 		if existing != nil {
 			enabled = existing.Enabled
-			monthlyLimit = existing.MonthlyLimitFen
+			monthlyLimit = existing.MonthlyLimitCredits
 		}
 		if body.Enabled != nil {
 			enabled = *body.Enabled
 		}
-		if body.MonthlyLimitFen != nil {
-			if *body.MonthlyLimitFen < 0 {
-				writeError(w, http.StatusBadRequest, "bad_request", "monthly_limit_fen must be >= 0")
+		if body.MonthlyLimitCredits != nil {
+			if *body.MonthlyLimitCredits < 0 {
+				writeError(w, http.StatusBadRequest, "bad_request", "monthly_limit_credits must be >= 0")
 				return
 			}
-			monthlyLimit = *body.MonthlyLimitFen
+			monthlyLimit = *body.MonthlyLimitCredits
 		}
 
 		out, err := st.UpsertExtraUsageSettings(projectID, enabled, monthlyLimit)
@@ -136,6 +159,9 @@ func handleListExtraUsageTransactions(st *store.Store) http.HandlerFunc {
 // provider, and returns the payment URL. Owners/Maintainers only —
 // allowing Developers/Viewers to mint payment intents would let any
 // member trigger billing the Owner did not authorize.
+//
+// Request body: exactly one of amount_fen (CNY channels) or amount_cents
+// (Stripe) must be present. Both or neither → 400.
 func handleCreateExtraUsageTopup(st *store.Store, payClient billing.PaymentClient, billingCfg config.BillingConfig, euCfg config.ExtraUsageConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireRole(w, r, types.RoleOwner, types.RoleMaintainer) {
@@ -144,47 +170,103 @@ func handleCreateExtraUsageTopup(st *store.Store, payClient billing.PaymentClien
 		projectID := chi.URLParam(r, "projectID")
 
 		var body struct {
-			AmountFen int64  `json:"amount_fen"`
-			Channel   string `json:"channel"`
+			Channel     string `json:"channel"`
+			AmountFen   *int64 `json:"amount_fen,omitempty"`
+			AmountCents *int64 `json:"amount_cents,omitempty"`
 		}
 		if err := decodeBody(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
 			return
 		}
-		if body.AmountFen < euCfg.MinTopupFen {
+
+		var (
+			credits       int64
+			currency      string
+			paymentAmount int64
+		)
+		switch body.Channel {
+		case "wechat", "alipay":
+			if body.AmountFen == nil {
+				writeError(w, http.StatusBadRequest, "bad_request",
+					"amount_fen is required for channel="+body.Channel)
+				return
+			}
+			if body.AmountCents != nil {
+				writeError(w, http.StatusBadRequest, "bad_request",
+					"amount_cents is not valid for channel="+body.Channel)
+				return
+			}
+			amt := *body.AmountFen
+			if amt < euCfg.MinTopupCNYFen {
+				writeError(w, http.StatusBadRequest, "bad_request",
+					fmt.Sprintf("amount_fen must be >= %d", euCfg.MinTopupCNYFen))
+				return
+			}
+			if amt > euCfg.MaxTopupCNYFen {
+				writeError(w, http.StatusBadRequest, "bad_request",
+					fmt.Sprintf("amount_fen must be <= %d", euCfg.MaxTopupCNYFen))
+				return
+			}
+			credits = (amt * 1_000_000) / euCfg.CreditPriceCNYFen
+			currency = "CNY"
+			paymentAmount = amt
+
+		case "stripe":
+			if body.AmountCents == nil {
+				writeError(w, http.StatusBadRequest, "bad_request",
+					"amount_cents is required for channel=stripe")
+				return
+			}
+			if body.AmountFen != nil {
+				writeError(w, http.StatusBadRequest, "bad_request",
+					"amount_fen is not valid for channel=stripe")
+				return
+			}
+			amt := *body.AmountCents
+			if amt < euCfg.MinTopupUSDCents {
+				writeError(w, http.StatusBadRequest, "bad_request",
+					fmt.Sprintf("amount_cents must be >= %d", euCfg.MinTopupUSDCents))
+				return
+			}
+			if amt > euCfg.MaxTopupUSDCents {
+				writeError(w, http.StatusBadRequest, "bad_request",
+					fmt.Sprintf("amount_cents must be <= %d", euCfg.MaxTopupUSDCents))
+				return
+			}
+			credits = (amt * 1_000_000) / euCfg.CreditPriceUSDCents
+			currency = "USD"
+			paymentAmount = amt
+
+		default:
 			writeError(w, http.StatusBadRequest, "bad_request",
-				fmt.Sprintf("amount_fen must be >= %d", euCfg.MinTopupFen))
-			return
-		}
-		if body.AmountFen > euCfg.MaxTopupFen {
-			writeError(w, http.StatusBadRequest, "bad_request",
-				fmt.Sprintf("amount_fen must be <= %d", euCfg.MaxTopupFen))
+				"channel must be one of: wechat, alipay, stripe")
 			return
 		}
 
-		// Daily accumulated limit.
-		daily, err := st.SumDailyExtraUsageTopupFen(projectID, store.DayWindowStart())
+		// Daily cap is currency-agnostic; always expressed in credits.
+		dayStart := store.DayWindowStart()
+		todayCredits, err := st.SumDailyExtraUsageTopupCredits(projectID, dayStart)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to check daily topup cap")
 			return
 		}
-		if euCfg.DailyTopupLimitFen > 0 && daily+body.AmountFen > euCfg.DailyTopupLimitFen {
+		if euCfg.DailyTopupLimitCredits > 0 && todayCredits+credits > euCfg.DailyTopupLimitCredits {
 			writeError(w, http.StatusConflict, "daily_topup_limit",
-				fmt.Sprintf("daily topup limit %d fen reached", euCfg.DailyTopupLimitFen))
+				fmt.Sprintf("daily topup limit %d credits reached", euCfg.DailyTopupLimitCredits))
 			return
 		}
 
 		order := &types.Order{
-			ProjectID:           projectID,
-			Periods:             1,
-			UnitPrice:           body.AmountFen,
-			Amount:              body.AmountFen,
-			Currency:            "CNY",
-			Status:              types.OrderStatusPending,
-			Channel:             body.Channel,
-			Metadata:            "{}",
-			OrderType:           types.OrderTypeExtraUsageTopup,
-			ExtraUsageAmountFen: body.AmountFen,
+			ProjectID:               projectID,
+			Periods:                 1,
+			UnitPrice:               paymentAmount,
+			Amount:                  paymentAmount,
+			Currency:                currency,
+			Status:                  types.OrderStatusPending,
+			Channel:                 body.Channel,
+			Metadata:                "{}",
+			OrderType:               types.OrderTypeExtraUsageTopup,
+			ExtraUsageAmountCredits: credits,
 		}
 		if err := st.CreateOrder(order); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to create order: "+err.Error())
@@ -198,27 +280,37 @@ func handleCreateExtraUsageTopup(st *store.Store, payClient billing.PaymentClien
 		}
 		payResp, err := payClient.CreatePayment(r.Context(), billing.PaymentRequest{
 			OrderID:     order.ID,
-			ProductName: fmt.Sprintf("extra-usage topup ¥%.2f", float64(body.AmountFen)/100),
+			ProductName: fmt.Sprintf("extra-usage topup %d credits", credits),
 			Channel:     body.Channel,
-			Currency:    order.Currency,
-			Amount:      order.Amount,
+			Currency:    currency,
+			Amount:      paymentAmount,
 			NotifyURL:   billingCfg.NotifyURL,
 			ReturnURL:   billingCfg.ReturnURL,
 		})
 		if err != nil {
+			slog.Default().Error("payment provider create failed",
+				"order_id", order.ID, "channel", body.Channel, "err", err)
 			_ = st.UpdateOrderStatus(order.ID, types.OrderStatusFailed)
-			writeError(w, http.StatusBadGateway, "payment_error", "failed to create payment")
+			writeError(w, http.StatusServiceUnavailable, "payment_provider_error",
+				"payment provider is unavailable")
 			return
 		}
 		if err := st.UpdateOrderPayment(order.ID, payResp.PaymentRef, payResp.PaymentURL, types.OrderStatusPaying); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to update order payment")
 			return
 		}
-		order.PaymentRef = payResp.PaymentRef
-		order.PaymentURL = payResp.PaymentURL
-		order.Status = types.OrderStatusPaying
 
-		writeData(w, http.StatusCreated, order)
+		metrics.IncExtraUsageTopupIntent(body.Channel)
+
+		writeData(w, http.StatusCreated, map[string]any{
+			"order_id":    order.ID,
+			"channel":     body.Channel,
+			"currency":    currency,
+			"amount":      paymentAmount,
+			"credits":     credits,
+			"payment_url": payResp.PaymentURL,
+			"payment_ref": payResp.PaymentRef,
+		})
 	}
 }
 
@@ -244,7 +336,7 @@ func handleGetExtraUsageTopup(st *store.Store) http.HandlerFunc {
 // recent spend. Superadmin only.
 type adminExtraUsageOverviewRow struct {
 	types.ExtraUsageSettings
-	Spend7DaysFen int64 `json:"spend_7d_fen"`
+	Spend7DaysCredits int64 `json:"spend_7d_credits"`
 }
 
 func handleAdminExtraUsageOverview(st *store.Store) http.HandlerFunc {
@@ -256,12 +348,12 @@ func handleAdminExtraUsageOverview(st *store.Store) http.HandlerFunc {
 		}
 		out := make([]adminExtraUsageOverviewRow, 0, len(rows))
 		for _, s := range rows {
-			spend, err := st.SumRecentExtraUsageSpendFen(s.ProjectID, 7)
+			spend, err := st.SumRecentExtraUsageSpendCredits(s.ProjectID, 7)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "internal", "failed to sum recent spend")
 				return
 			}
-			out = append(out, adminExtraUsageOverviewRow{ExtraUsageSettings: s, Spend7DaysFen: spend})
+			out = append(out, adminExtraUsageOverviewRow{ExtraUsageSettings: s, Spend7DaysCredits: spend})
 		}
 		writeData(w, http.StatusOK, out)
 	}
@@ -273,22 +365,22 @@ func handleAdminExtraUsageDirectTopup(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projectID := chi.URLParam(r, "projectID")
 		var body struct {
-			AmountFen   int64  `json:"amount_fen"`
-			Description string `json:"description"`
+			AmountCredits int64  `json:"amount_credits"`
+			Description   string `json:"description"`
 		}
 		if err := decodeBody(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
 			return
 		}
-		if body.AmountFen <= 0 {
-			writeError(w, http.StatusBadRequest, "bad_request", "amount_fen must be > 0")
+		if body.AmountCredits <= 0 {
+			writeError(w, http.StatusBadRequest, "bad_request", "amount_credits must be > 0")
 			return
 		}
 		bal, err := st.TopUpExtraUsage(store.TopUpExtraUsageReq{
-			ProjectID:   projectID,
-			AmountFen:   body.AmountFen,
-			Reason:      types.ExtraUsageReasonAdminAdjust,
-			Description: body.Description,
+			ProjectID:     projectID,
+			AmountCredits: body.AmountCredits,
+			Reason:        types.ExtraUsageReasonAdminAdjust,
+			Description:   body.Description,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to top up: "+err.Error())
@@ -296,8 +388,8 @@ func handleAdminExtraUsageDirectTopup(st *store.Store) http.HandlerFunc {
 		}
 		metrics.SetExtraUsageBalance(projectID, bal)
 		writeData(w, http.StatusOK, map[string]interface{}{
-			"project_id":  projectID,
-			"balance_fen": bal,
+			"project_id":      projectID,
+			"balance_credits": bal,
 		})
 	}
 }
@@ -309,15 +401,15 @@ func deliverExtraUsageTopupOrder(st *store.Store, order *types.Order) (int64, er
 	if order.OrderType != types.OrderTypeExtraUsageTopup {
 		return 0, errors.New("not an extra-usage topup order")
 	}
-	if order.ExtraUsageAmountFen <= 0 {
+	if order.ExtraUsageAmountCredits <= 0 {
 		return 0, errors.New("topup order has zero amount")
 	}
 	bal, err := st.TopUpExtraUsage(store.TopUpExtraUsageReq{
-		ProjectID:   order.ProjectID,
-		AmountFen:   order.ExtraUsageAmountFen,
-		OrderID:     order.ID,
-		Reason:      types.ExtraUsageReasonUserTopup,
-		Description: fmt.Sprintf("order=%s channel=%s", order.ID, order.Channel),
+		ProjectID:     order.ProjectID,
+		AmountCredits: order.ExtraUsageAmountCredits,
+		OrderID:       order.ID,
+		Reason:        types.ExtraUsageReasonUserTopup,
+		Description:   fmt.Sprintf("order=%s channel=%s currency=%s", order.ID, order.Channel, order.Currency),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("apply topup: %w", err)
@@ -327,7 +419,7 @@ func deliverExtraUsageTopupOrder(st *store.Store, order *types.Order) (int64, er
 		// webhook/delivery will mark the status.
 		return bal, fmt.Errorf("topup applied but mark delivered failed: %w", err)
 	}
-	metrics.IncExtraUsageTopup(order.Channel)
+	metrics.IncExtraUsageTopupDelivered(order.Channel)
 	metrics.SetExtraUsageBalance(order.ProjectID, bal)
 	return bal, nil
 }

@@ -56,9 +56,9 @@ func handleDeliveryWebhook(st *store.Store) http.HandlerFunc {
 				return
 			}
 			writeData(w, http.StatusOK, map[string]interface{}{
-				"order_id":    order.ID,
-				"status":      "delivered",
-				"balance_fen": bal,
+				"order_id":        order.ID,
+				"status":          "delivered",
+				"balance_credits": bal,
 			})
 			return
 

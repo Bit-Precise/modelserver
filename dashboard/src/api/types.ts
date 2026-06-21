@@ -282,7 +282,7 @@ export interface Order {
   existing_subscription_id?: string;
   metadata?: string;
   order_type: "subscription" | "extra_usage_topup";
-  extra_usage_amount_fen?: number;
+  extra_usage_amount_credits?: number;
   created_at: string;
   updated_at: string;
 }
@@ -291,7 +291,7 @@ export interface Order {
 export interface CostBreakdown {
   api_standard_fen: number;
   subscription_fen: number;
-  extra_usage_fen: number;
+  extra_usage_credits: number;
   actual_paid_fen: number;
   saved_fen: number;
   period_start: string;
