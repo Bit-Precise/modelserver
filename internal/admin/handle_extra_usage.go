@@ -168,7 +168,11 @@ func handleCreateExtraUsageTopup(st *store.Store, payClient billing.PaymentClien
 			writeError(w, http.StatusInternalServerError, "internal", "failed to check daily topup cap")
 			return
 		}
-		if euCfg.DailyTopupLimitCredits > 0 && daily+body.AmountFen > euCfg.DailyTopupLimitCredits {
+		// Convert the requested fen amount to credits-equivalent for the cap
+		// comparison. Topup credits = amount_fen × 1M / credit_price_cny_fen
+		// (matches the conversion the delivery handler will apply later).
+		creditsRequested := (body.AmountFen * 1_000_000) / euCfg.CreditPriceCNYFen
+		if euCfg.DailyTopupLimitCredits > 0 && daily+creditsRequested > euCfg.DailyTopupLimitCredits {
 			writeError(w, http.StatusConflict, "daily_topup_limit",
 				fmt.Sprintf("daily topup limit %d credits reached", euCfg.DailyTopupLimitCredits))
 			return
