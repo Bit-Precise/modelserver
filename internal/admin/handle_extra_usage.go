@@ -23,8 +23,11 @@ type extraUsageGetResponse struct {
 	MonthlySpentCredits    int64     `json:"monthly_spent_credits"`
 	MonthlyWindowStart     string    `json:"monthly_window_start"`
 	CreditPriceCNYFen      int64     `json:"credit_price_cny_fen"`
+	CreditPriceUSDCents    int64     `json:"credit_price_usd_cents"`
 	MinTopupCNYFen         int64     `json:"min_topup_cny_fen"`
 	MaxTopupCNYFen         int64     `json:"max_topup_cny_fen"`
+	MinTopupUSDCents       int64     `json:"min_topup_usd_cents"`
+	MaxTopupUSDCents       int64     `json:"max_topup_usd_cents"`
 	DailyTopupLimitCredits int64     `json:"daily_topup_limit_credits"`
 	BypassBalanceCheck     bool      `json:"bypass_balance_check"`
 	UpdatedAt              time.Time `json:"updated_at,omitempty"`
@@ -49,8 +52,11 @@ func handleGetExtraUsage(st *store.Store, cfg config.ExtraUsageConfig) http.Hand
 		resp := extraUsageGetResponse{
 			MonthlyWindowStart:     monthStart.Format(time.RFC3339),
 			CreditPriceCNYFen:      cfg.CreditPriceCNYFen,
+			CreditPriceUSDCents:    cfg.CreditPriceUSDCents,
 			MinTopupCNYFen:         cfg.MinTopupCNYFen,
 			MaxTopupCNYFen:         cfg.MaxTopupCNYFen,
+			MinTopupUSDCents:       cfg.MinTopupUSDCents,
+			MaxTopupUSDCents:       cfg.MaxTopupUSDCents,
 			DailyTopupLimitCredits: cfg.DailyTopupLimitCredits,
 		}
 		if settings != nil {

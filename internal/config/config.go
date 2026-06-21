@@ -153,8 +153,12 @@ type BillingConfig struct {
 type ExtraUsageConfig struct {
 	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
 
-	// Per-channel unit prices. fen and cents are minor-unit integers
-	// in each currency. Independent — no auto-derived rate between them.
+	// Per-channel unit prices. fen and cents are minor-unit integers in
+	// each respective currency (Chinese mass-noun "fen" stays singular per
+	// existing codebase convention; English "cents" pluralizes — matches
+	// existing PriceUSDCents in plan.go). Independent — no auto-derived
+	// rate between them. Operator may price them however the business
+	// decides (e.g. promotional USD pricing).
 	CreditPriceCNYFen   int64 `yaml:"credit_price_cny_fen"   mapstructure:"credit_price_cny_fen"`
 	CreditPriceUSDCents int64 `yaml:"credit_price_usd_cents" mapstructure:"credit_price_usd_cents"`
 
