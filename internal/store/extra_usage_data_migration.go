@@ -22,14 +22,26 @@ import (
 // CNY divisor is the unambiguous correct one for converting every
 // affected row.
 func (s *Store) convertExtraUsageDataToCredits(ctx context.Context) error {
-	// Idempotency: skip if already applied.
-	var existingCount int
-	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM extra_usage_credit_migration_audit`).Scan(&existingCount)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Serialize concurrent converters across the cluster so two pods starting
+	// simultaneously cannot both pass the idempotency check and double-convert.
+	// The advisory lock is released automatically when the transaction ends.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7295356544049729359)`); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+
+	// Re-check inside the lock: skip if a peer already converted.
+	var existingCount int
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM extra_usage_credit_migration_audit`).Scan(&existingCount); err != nil {
 		return fmt.Errorf("check audit table: %w", err)
 	}
 	if existingCount > 0 {
-		return nil
+		return nil // rollback is fine; we changed nothing
 	}
 
 	envName := "MODELSERVER_MIGRATION_052_CREDIT_PRICE_CNY_FEN"
@@ -45,12 +57,6 @@ func (s *Store) convertExtraUsageDataToCredits(ctx context.Context) error {
 	if divisor <= 0 {
 		return fmt.Errorf("%s must be > 0, got %d", envName, divisor)
 	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
 
 	// Convert in deterministic order; each statement is a single UPDATE.
 	for _, stmt := range []string{
