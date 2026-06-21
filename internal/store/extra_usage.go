@@ -483,7 +483,9 @@ func (s *Store) RefundExtraUsageTopup(orderID string) (int64, error) {
 			// Already refunded — roll back the balance decrement and report current.
 			tx.Rollback(ctx)
 			var curBalance int64
-			_ = s.pool.QueryRow(ctx, `SELECT balance_credits FROM extra_usage_settings WHERE project_id = $1`, projectID).Scan(&curBalance)
+			if readErr := s.pool.QueryRow(ctx, `SELECT balance_credits FROM extra_usage_settings WHERE project_id = $1`, projectID).Scan(&curBalance); readErr != nil {
+				return 0, fmt.Errorf("refund: idempotent read balance: %w", readErr)
+			}
 			return curBalance, nil
 		}
 		return 0, fmt.Errorf("refund: insert ledger row: %w", err)

@@ -61,12 +61,16 @@ func handleGetExtraUsage(st *store.Store, cfg config.ExtraUsageConfig) http.Hand
 			writeError(w, http.StatusInternalServerError, "internal", "failed to sum monthly spend")
 			return
 		}
+		implicitUSDToCNY := 0.0
+		if cfg.CreditPriceUSDCents > 0 {
+			implicitUSDToCNY = float64(cfg.CreditPriceCNYFen) / float64(cfg.CreditPriceUSDCents)
+		}
 		resp := extraUsageGetResponse{
 			MonthlyWindowStart: monthStart.Format(time.RFC3339),
 			CreditUnitPrices: creditUnitPrices{
 				CNYFenPerMillion:   cfg.CreditPriceCNYFen,
 				USDCentsPerMillion: cfg.CreditPriceUSDCents,
-				ImplicitUSDToCNY:   float64(cfg.CreditPriceCNYFen) / float64(cfg.CreditPriceUSDCents),
+				ImplicitUSDToCNY:   implicitUSDToCNY,
 			},
 			MinTopup:        topupAmounts{CNYFen: cfg.MinTopupCNYFen, USDCents: cfg.MinTopupUSDCents},
 			MaxTopup:        topupAmounts{CNYFen: cfg.MaxTopupCNYFen, USDCents: cfg.MaxTopupUSDCents},

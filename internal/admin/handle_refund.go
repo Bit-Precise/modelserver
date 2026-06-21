@@ -63,6 +63,19 @@ func handleBillingRefundWebhook(st *store.Store, logger *slog.Logger) http.Handl
 
 		switch order.OrderType {
 		case types.OrderTypeExtraUsageTopup:
+			// Amount/currency parity gate: V1 only supports full reversal.
+			// Check this first so a mismatched follow-up after a full refund
+			// surfaces a 422 rather than a silent 200 already_refunded.
+			if body.Amount != order.Amount || body.Currency != order.Currency {
+				logger.Error("partial or mismatched refund webhook — not supported in V1",
+					"order_id", body.OrderID,
+					"event_amount", body.Amount, "order_amount", order.Amount,
+					"event_currency", body.Currency, "order_currency", order.Currency)
+				writeError(w, http.StatusUnprocessableEntity, "partial_refund_unsupported",
+					"refund amount/currency must match the original order exactly; "+
+						"partial refunds are not supported in this version")
+				return
+			}
 			// Status idempotency: already-refunded orders return cleanly
 			// without re-mutating the ledger.
 			if order.Status == types.OrderStatusRefunded {
@@ -81,17 +94,6 @@ func handleBillingRefundWebhook(st *store.Store, logger *slog.Logger) http.Handl
 					"status", order.Status)
 				writeError(w, http.StatusConflict, "not_refundable",
 					"order cannot be refunded in its current state")
-				return
-			}
-			// Amount/currency parity gate: V1 only supports full reversal.
-			if body.Amount != order.Amount || body.Currency != order.Currency {
-				logger.Error("partial or mismatched refund webhook — not supported in V1",
-					"order_id", body.OrderID,
-					"event_amount", body.Amount, "order_amount", order.Amount,
-					"event_currency", body.Currency, "order_currency", order.Currency)
-				writeError(w, http.StatusUnprocessableEntity, "partial_refund_unsupported",
-					"refund amount/currency must match the original order exactly; "+
-						"partial refunds are not supported in this version")
 				return
 			}
 
