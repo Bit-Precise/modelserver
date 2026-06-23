@@ -89,6 +89,50 @@ type RequestContext struct {
 	CapturedClientTruncated bool
 }
 
+// buildEarlyErrorRequest constructs the *types.Request used by Execute's
+// early-return paths (router-match failure, no candidates, body read failures,
+// oversize body, etc.) to finalize the in-flight 'processing' row. Without
+// this, the row would stay on 'processing' indefinitely even though the
+// client already received a 4xx/5xx — issue surfaced for "no route" requests.
+//
+// Extra-usage attribution is preserved so requests that the guard admitted
+// but the executor rejected early still show up correctly in dashboards.
+// ExtraUsageCostCredits stays at whatever the caller had (typically 0,
+// because settle never ran).
+func buildEarlyErrorRequest(reqCtx *RequestContext, startTime time.Time, errorMessage string) *types.Request {
+	return &types.Request{
+		OAuthGrantID:          reqCtx.OAuthGrantID,
+		Status:                types.RequestStatusError,
+		LatencyMs:             time.Since(startTime).Milliseconds(),
+		ErrorMessage:          errorMessage,
+		ClientIP:              reqCtx.ClientIP,
+		IsExtraUsage:          reqCtx.IsExtraUsage,
+		ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
+		ExtraUsageReason:      reqCtx.ExtraUsageReason,
+	}
+}
+
+// finalizeEarlyError completes the pending request row when Execute bails
+// out before any upstream is attempted (or before reaching the canonical
+// completion paths). Safe to call with reqCtx.RequestID == "" — that just
+// signals the pending insert itself failed and there's nothing to update.
+//
+// Runs the DB write in a goroutine so a slow CompleteRequest never blocks
+// the early-return path — matches the pattern used by the all-upstreams-
+// failed branch further down in Execute.
+func (e *Executor) finalizeEarlyError(reqCtx *RequestContext, startTime time.Time, errorMessage string) {
+	if reqCtx.RequestID == "" {
+		return
+	}
+	req := buildEarlyErrorRequest(reqCtx, startTime, errorMessage)
+	requestID := reqCtx.RequestID
+	go func() {
+		if err := e.store.CompleteRequest(requestID, req); err != nil {
+			e.logger.Error("failed to complete early-error request", "request_id", requestID, "error", err)
+		}
+	}()
+}
+
 // proxyResult classifies the outcome of a single upstream attempt.
 type proxyResult int
 
@@ -193,10 +237,17 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 		reqCtx.ExtraUsageReason = euCtx.Reason
 	}
 
+	// executeStart is the entry-time stamp used by finalizeEarlyError to set
+	// LatencyMs on pending rows that bail out before any upstream is attempted.
+	// The retry loop further down has its own `startTime` for upstream timing;
+	// the two clocks intentionally don't overlap.
+	executeStart := time.Now()
+
 	// 1. Match the request to an upstream group.
 	group, err := e.router.Match(reqCtx.ProjectID, reqCtx.Model, reqCtx.RequestKind)
 	if err != nil {
 		writeProxyError(w, http.StatusNotFound, err.Error())
+		e.finalizeEarlyError(reqCtx, executeStart, "no route matched: "+err.Error())
 		return
 	}
 
@@ -222,6 +273,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 
 	if len(candidates) == 0 {
 		writeProxyError(w, http.StatusServiceUnavailable, "no upstreams available")
+		e.finalizeEarlyError(reqCtx, executeStart, "no upstreams available")
 		return
 	}
 
@@ -237,10 +289,12 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 	originalBody, err := io.ReadAll(io.LimitReader(r.Body, bodyLimit+1))
 	if err != nil {
 		writeProxyError(w, http.StatusBadRequest, "failed to read request body")
+		e.finalizeEarlyError(reqCtx, executeStart, "failed to read request body: "+err.Error())
 		return
 	}
 	if int64(len(originalBody)) > bodyLimit {
 		writeProxyError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		e.finalizeEarlyError(reqCtx, executeStart, "request body too large")
 		return
 	}
 
@@ -285,7 +339,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 	// 6. Retry loop: try each candidate in order.
 	for attempt, candidate := range candidates {
 		upstream := candidate.Upstream
-		transformer := GetProviderTransformer(upstream.Provider)
+		transformer := GetProviderTransformer(upstream.Provider, reqCtx.RequestKind)
 
 		logger := e.logger.With(
 			"project_id", reqCtx.ProjectID,
@@ -536,24 +590,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 				logger.Warn("claudecode OAuth refresh failed on 401/403, returning original error", "error", refreshErr)
 				writeProxyError(w, resp.StatusCode, "upstream authentication failed")
 				// Complete the request record so it doesn't stay in "processing" forever.
-				if reqCtx.RequestID != "" {
-					duration := time.Since(startTime).Milliseconds()
-					failReq := types.Request{
-						OAuthGrantID:          reqCtx.OAuthGrantID,
-						Status:                types.RequestStatusError,
-						LatencyMs:             duration,
-						ErrorMessage:          "claudecode OAuth refresh failed",
-						ClientIP:              reqCtx.ClientIP,
-						IsExtraUsage:          reqCtx.IsExtraUsage,
-						ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
-						ExtraUsageReason:      reqCtx.ExtraUsageReason,
-					}
-					go func() {
-						if err := e.store.CompleteRequest(reqCtx.RequestID, &failReq); err != nil {
-							e.logger.Error("failed to complete request", "request_id", reqCtx.RequestID, "error", err)
-						}
-					}()
-				}
+				e.finalizeEarlyError(reqCtx, startTime, "claudecode OAuth refresh failed")
 				return
 			}
 
@@ -607,24 +644,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 				logger.Warn("codex OAuth refresh failed on 401/403, returning original error", "error", refreshErr)
 				writeProxyError(w, resp.StatusCode, "upstream authentication failed")
 				// Complete the request record so it doesn't stay in "processing" forever.
-				if reqCtx.RequestID != "" {
-					duration := time.Since(startTime).Milliseconds()
-					failReq := types.Request{
-						OAuthGrantID:          reqCtx.OAuthGrantID,
-						Status:                types.RequestStatusError,
-						LatencyMs:             duration,
-						ErrorMessage:          "codex OAuth refresh failed",
-						ClientIP:              reqCtx.ClientIP,
-						IsExtraUsage:          reqCtx.IsExtraUsage,
-						ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
-						ExtraUsageReason:      reqCtx.ExtraUsageReason,
-					}
-					go func() {
-						if err := e.store.CompleteRequest(reqCtx.RequestID, &failReq); err != nil {
-							e.logger.Error("failed to complete request", "request_id", reqCtx.RequestID, "error", err)
-						}
-					}()
-				}
+				e.finalizeEarlyError(reqCtx, startTime, "codex OAuth refresh failed")
 				return
 			}
 
@@ -764,26 +784,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 
 	// 7. All candidates exhausted.
 	writeProxyError(w, http.StatusBadGateway, "all upstreams failed")
-
-	// Record the overall failure.
-	if reqCtx.RequestID != "" {
-		duration := time.Since(startTime).Milliseconds()
-		req := types.Request{
-			OAuthGrantID:          reqCtx.OAuthGrantID,
-			Status:                types.RequestStatusError,
-			LatencyMs:             duration,
-			ErrorMessage:          "all upstreams exhausted",
-			ClientIP:              reqCtx.ClientIP,
-			IsExtraUsage:          reqCtx.IsExtraUsage,
-			ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
-			ExtraUsageReason:      reqCtx.ExtraUsageReason,
-		}
-		go func() {
-			if err := e.store.CompleteRequest(reqCtx.RequestID, &req); err != nil {
-				e.logger.Error("failed to complete request", "request_id", reqCtx.RequestID, "error", err)
-			}
-		}()
-	}
+	e.finalizeEarlyError(reqCtx, startTime, "all upstreams exhausted")
 }
 
 // evaluateResponse determines whether a response is retryable based on the
@@ -849,6 +850,7 @@ func (e *Executor) commitResponse(
 			cancelFn()
 		}
 		writeProxyError(w, http.StatusBadGateway, "upstream returned no response")
+		e.finalizeEarlyError(reqCtx, startTime, "upstream returned no response")
 		return
 	}
 
@@ -1240,6 +1242,7 @@ func (e *Executor) commitNonStreamingResponse(
 			w.Header().Del(k)
 		}
 		writeProxyError(w, http.StatusBadGateway, "failed to read upstream response body")
+		e.finalizeEarlyError(reqCtx, startTime, "failed to read upstream response body: "+err.Error())
 		return
 	}
 

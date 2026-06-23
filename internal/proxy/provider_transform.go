@@ -54,6 +54,13 @@ type ProviderTransformer interface {
 // providerTransformers maps provider name to its transformer implementation.
 var providerTransformers = map[string]ProviderTransformer{}
 
+// openaiChatCompletionsTransformer handles the openai provider when the
+// request kind is openai_chat_completions. It's stored separately rather than
+// in providerTransformers because it shares its provider key with
+// OpenAITransformer (Responses API); the per-kind branch in
+// GetProviderTransformer chooses between them.
+var openaiChatCompletionsTransformer ProviderTransformer = &OpenAIChatCompletionsTransformer{}
+
 func init() {
 	providerTransformers[types.ProviderAnthropic] = &AnthropicTransformer{}
 	providerTransformers[types.ProviderBedrockAnthropic] = &BedrockTransformer{}
@@ -67,9 +74,17 @@ func init() {
 	providerTransformers[types.ProviderCodex] = &CodexTransformer{}
 }
 
-// GetProviderTransformer returns the transformer for the given provider name.
-// Falls back to the Anthropic transformer if the provider is unknown.
-func GetProviderTransformer(provider string) ProviderTransformer {
+// GetProviderTransformer returns the transformer for the given (provider, kind)
+// pair. Falls back to the Anthropic transformer if the provider is unknown.
+//
+// The kind parameter exists because a single provider may serve multiple
+// wire formats that need different stream interceptors. Currently only the
+// openai provider needs this split (Responses API vs Chat Completions, see
+// issue #57); other providers ignore kind.
+func GetProviderTransformer(provider, kind string) ProviderTransformer {
+	if provider == types.ProviderOpenAI && kind == types.KindOpenAIChatCompletions {
+		return openaiChatCompletionsTransformer
+	}
 	if t, ok := providerTransformers[provider]; ok {
 		return t
 	}

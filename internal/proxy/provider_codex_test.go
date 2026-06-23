@@ -55,7 +55,7 @@ func TestCodexTransformer_TransformBody_PassThrough(t *testing.T) {
 }
 
 func TestGetProviderTransformer_Codex(t *testing.T) {
-	got := GetProviderTransformer(types.ProviderCodex)
+	got := GetProviderTransformer(types.ProviderCodex, types.KindOpenAIResponses)
 	if _, ok := got.(*CodexTransformer); !ok {
 		t.Errorf("GetProviderTransformer(codex) = %T, want *CodexTransformer", got)
 	}
