@@ -64,6 +64,22 @@ func MountRoutes(
 		wire(r)
 		r.Post("/models/*", handler.HandleGemini)
 	})
+
+	// Identity-echo endpoint: returns the caller's account + project
+	// for a given OAuth access token. Path borrows Anthropic's Claude
+	// Code path so third-party tooling that already knows /api/oauth/
+	// can find it; response shape is modelserver-native (single
+	// `project` object, not Anthropic's multi-tenant `organization`).
+	// OAuth-only — the handler 401s API-key callers.
+	//
+	// Goes through the same wire() chain as the rest of /v1 so it
+	// inherits Trace + RateLimit + ExtraUsageGuard — without those it
+	// would be an un-throttled token-validity oracle (a Bearer that
+	// 200s is a valid Bearer) with no audit trail.
+	r.Route("/api/oauth", func(r chi.Router) {
+		wire(r)
+		r.Get("/profile", handler.HandleOAuthProfile)
+	})
 }
 
 // HandleListModels returns available models in OpenAI or Anthropic format

@@ -77,6 +77,15 @@ const (
 	ctxOAuthGrantID     contextKey = "oauth_grant_id"
 )
 
+// syntheticOAuthAPIKeyName is the value handleTokenIntrospectionAuth sets on
+// the synthetic APIKey it injects into the request context for OAuth-token
+// callers. Identity handlers (me_handler.go) discriminate API-key vs
+// OAuth-token requests by checking apiKey.ID == "" && apiKey.Name ==
+// syntheticOAuthAPIKeyName, so this constant is load-bearing — both the
+// producer here and any consumer must reference it by name, never inline
+// the string.
+const syntheticOAuthAPIKeyName = "hydra-token"
+
 // TokenIntrospectResult holds the result of a token introspection call.
 type TokenIntrospectResult struct {
 	// Active indicates whether the token is currently valid.
@@ -130,6 +139,12 @@ func setIntrospectCache(tokenHash string, result *TokenIntrospectResult) {
 		result:   result,
 		cachedAt: time.Now(),
 	})
+}
+
+// deleteIntrospectCache removes a single entry. Used by tests via t.Cleanup
+// so per-test seeded entries don't leak across packages or test runs.
+func deleteIntrospectCache(tokenHash string) {
+	introspectCache.Delete(tokenHash)
 }
 
 // APIKeyFromContext returns the API key from the request context.
@@ -421,7 +436,7 @@ func handleTokenIntrospectionAuth(w http.ResponseWriter, r *http.Request, next h
 		ID:        "", // empty → NULL in requests table (no real API key for token auth)
 		ProjectID: project.ID,
 		CreatedBy: userID,
-		Name:      "hydra-token",
+		Name:      syntheticOAuthAPIKeyName,
 		Status:    types.APIKeyStatusActive,
 	}
 
