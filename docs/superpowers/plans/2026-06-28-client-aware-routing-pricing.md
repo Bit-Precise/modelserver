@@ -2729,9 +2729,451 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-> **End of installment 6 (Task 8).** Admin API now exposes the new dimensions. Backend is complete after this commit. Only the dashboard UI (Task 9) remains.
+### Task 9: Dashboard — Routes page columns + dialog selectors + Matrix filters
+
+**Files:**
+- Modify: `dashboard/src/api/types.ts` (extend `RoutingRoute` + `RoutingMatrixCell`)
+- Modify: `dashboard/src/api/upstreams.ts` (add `useClientBuckets`, `useBillingModes`; extend `useRoutingMatrix` to accept optional `{ client?, billingMode? }`)
+- Modify: `dashboard/src/pages/admin/RoutesPage.tsx` (two new table columns; two new toggle-button rows in the Create/Edit dialog)
+- Modify: `dashboard/src/pages/admin/RoutesMatrixView.tsx` (two filter dropdowns at the top; cell subscript hint when route is mode-specific)
+
+**Interfaces:**
+- Consumes: admin endpoints from Task 8 (`GET /routing/clients`, `GET /routing/billing-modes`, the extended `GET /routing/matrix` with query params, the route create/update accepting the two new fields).
+- Produces:
+  - `useClientBuckets(): UseQueryResult<DataResponse<string[]>>` — mirrors `useRequestKinds`.
+  - `useBillingModes(): UseQueryResult<DataResponse<string[]>>` — mirrors `useRequestKinds`.
+  - `useRoutingMatrix(opts?: { client?: string; billingMode?: string })` — query key includes the two filters so React Query caches independently per slice.
+  - `RoutingRoute` TS type grows `clients: string[]` + `billing_modes: string[]`.
+  - `RoutingMatrixCell` TS type grows `client?: string`, `billing_mode?: string`, `clients?: string[]`, `billing_modes?: string[]`.
+  - Dashboard Routes page shows the two new columns + lets operators pick the two new dimensions on create/edit.
+  - Matrix view has Client + Billing Mode dropdowns at the top; URL state survives reload.
+
+No new test framework — verification is `pnpm exec tsc -b && pnpm build` + manual smoke listed in Step 5.
+
+- [ ] **Step 1: Extend TS types**
+
+In `dashboard/src/api/types.ts`, find `RoutingRoute` (around line 488) and add the two new fields:
+
+```ts
+export interface RoutingRoute {
+  id: string;
+  project_id?: string;
+  model_names: string[];
+  request_kinds: string[];
+  clients: string[];          // NEW — ClientBucket values; [] = match any
+  billing_modes: string[];    // NEW — BillingMode values; [] = match any
+  upstream_group_id: string;
+  match_priority: number;
+  conditions?: Record<string, string>;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+```
+
+Find `RoutingMatrixCell` in the same file and add four optional fields:
+
+```ts
+export interface RoutingMatrixCell {
+  model: string;
+  kind: string;
+  client?: string;             // NEW — bucket this cell was resolved for
+  billing_mode?: string;       // NEW — mode this cell was resolved for
+  upstream_group_id: string;
+  upstream_group_name: string;
+  route_id: string;
+  match_priority: number;
+  clients?: string[];          // NEW — verbatim from the winning route
+  billing_modes?: string[];    // NEW — verbatim from the winning route
+}
+```
+
+- [ ] **Step 2: Add `useClientBuckets` + `useBillingModes`; extend `useRoutingMatrix`**
+
+In `dashboard/src/api/upstreams.ts`, find `useRequestKinds` (around line 317) and add two siblings immediately below:
+
+```ts
+// useClientBuckets returns the catalog of valid route client buckets,
+// fetched once per session (server-side enum is static).
+export function useClientBuckets() {
+  return useQuery({
+    queryKey: ["routing-clients"],
+    queryFn: () => api.get<DataResponse<string[]>>("/api/v1/routing/clients"),
+    staleTime: Infinity,
+  });
+}
+
+// useBillingModes returns the catalog of valid route billing modes.
+export function useBillingModes() {
+  return useQuery({
+    queryKey: ["routing-billing-modes"],
+    queryFn: () => api.get<DataResponse<string[]>>("/api/v1/routing/billing-modes"),
+    staleTime: Infinity,
+  });
+}
+```
+
+Find `useRoutingMatrix` (around line 329) and replace with the filter-aware version. Query key includes the filters so React Query caches each slice independently:
+
+```ts
+export interface RoutingMatrixOpts {
+  client?: string;
+  billingMode?: string;
+}
+
+// useRoutingMatrix returns the global-route Model x Kind matrix. Cells
+// are sparse. Optional filters narrow the matrix to a single client and/or
+// billing_mode slice; the dashboard Matrix tab uses them for the two
+// dropdown filters.
+export function useRoutingMatrix(opts: RoutingMatrixOpts = {}) {
+  const client = opts.client ?? "";
+  const billingMode = opts.billingMode ?? "";
+  const qs = new URLSearchParams();
+  if (client) qs.set("client", client);
+  if (billingMode) qs.set("billing_mode", billingMode);
+  const url = qs.toString()
+    ? `/api/v1/routing/matrix?${qs.toString()}`
+    : "/api/v1/routing/matrix";
+  return useQuery({
+    queryKey: ["routing-matrix", client, billingMode],
+    queryFn: () => api.get<DataResponse<RoutingMatrix>>(url),
+  });
+}
+```
+
+If the existing hook uses a different React Query option set (e.g. `keepPreviousData: true` to avoid flicker when switching filters), preserve it.
+
+- [ ] **Step 3: Extend `RoutesPage.tsx` — table columns + dialog selectors**
+
+In `dashboard/src/pages/admin/RoutesPage.tsx`, three changes:
+
+**(a) Extend the form state** (around line 68):
+
+```tsx
+const [form, setForm] = useState({
+  model_names: [] as string[],
+  request_kinds: ["anthropic_messages"] as string[],
+  clients: [] as string[],          // NEW — empty = match any
+  billing_modes: [] as string[],    // NEW — empty = match any
+  upstream_group_id: "",
+  match_priority: 0,
+  status: "active",
+  project_id: "",
+});
+```
+
+**(b) Add table columns.** Find the column where `request_kinds` is rendered (around line 245) and append two siblings:
+
+```tsx
+{
+  header: "Clients",
+  cell: (r: RoutingRoute) =>
+    r.clients?.length ? (
+      <div className="flex flex-wrap gap-1">
+        {r.clients.map((c) => (
+          <Badge key={c} variant="outline">{c}</Badge>
+        ))}
+      </div>
+    ) : (
+      <span className="text-muted-foreground">Any</span>
+    ),
+},
+{
+  header: "Billing Modes",
+  cell: (r: RoutingRoute) =>
+    r.billing_modes?.length ? (
+      <div className="flex flex-wrap gap-1">
+        {r.billing_modes.map((m) => (
+          <Badge key={m} variant="outline">{m}</Badge>
+        ))}
+      </div>
+    ) : (
+      <span className="text-muted-foreground">Any</span>
+    ),
+},
+```
+
+The exact column descriptor shape may differ — match whatever the existing table uses for the `Kinds`/`Endpoints`/`Model Names` columns. The two new entries should sit between "Endpoints" (request_kinds) and "Upstream Group".
+
+**(c) Add toggle-button selectors in the Create/Edit dialog.** Find the existing `request_kinds` toggle-button group (around line 433). Add two parallel blocks immediately below it.
+
+First, load the bucket / mode lists at the top of the component (next to where `useRequestKinds` is already called — around line 76 in the existing file):
+
+```tsx
+const { data: clientsList } = useClientBuckets();
+const { data: billingModesList } = useBillingModes();
+const clientBuckets = clientsList?.data ?? [];
+const billingModes = billingModesList?.data ?? [];
+```
+
+Then add the two toggle-button groups (the exact JSX shape mirrors the existing `request_kinds` one):
+
+```tsx
+<div className="space-y-2">
+  <Label>Clients (optional)</Label>
+  <div className="flex flex-wrap gap-2">
+    {clientBuckets.map((c) => {
+      const selected = form.clients.includes(c);
+      return (
+        <Button
+          key={c}
+          type="button"
+          size="sm"
+          variant={selected ? "default" : "outline"}
+          onClick={() =>
+            setForm((p) => ({
+              ...p,
+              clients: selected
+                ? p.clients.filter((x) => x !== c)
+                : [...p.clients, c],
+            }))
+          }
+        >
+          {c}
+        </Button>
+      );
+    })}
+  </div>
+  <p className="text-xs text-muted-foreground">
+    When set, the route only matches requests from one of these client
+    buckets. Leave empty to match any client.
+  </p>
+</div>
+
+<div className="space-y-2">
+  <Label>Billing Modes (optional)</Label>
+  <div className="flex flex-wrap gap-2">
+    {billingModes.map((m) => {
+      const selected = form.billing_modes.includes(m);
+      return (
+        <Button
+          key={m}
+          type="button"
+          size="sm"
+          variant={selected ? "default" : "outline"}
+          onClick={() =>
+            setForm((p) => ({
+              ...p,
+              billing_modes: selected
+                ? p.billing_modes.filter((x) => x !== m)
+                : [...p.billing_modes, m],
+            }))
+          }
+        >
+          {m}
+        </Button>
+      );
+    })}
+  </div>
+  <p className="text-xs text-muted-foreground">
+    When set, the route only matches requests of these billing modes
+    (subscription = consumes the project's plan credits; extra_usage =
+    consumes the project's extra-usage balance at catalog rates). Leave
+    empty to match any mode.
+  </p>
+</div>
+```
+
+Find the form-reset block (around line 130, where `request_kinds: ["anthropic_messages"]` is set) and reset the two new fields to `[]`:
+
+```tsx
+function openCreate() {
+  setForm({
+    model_names: [],
+    request_kinds: ["anthropic_messages"],
+    clients: [],          // NEW
+    billing_modes: [],    // NEW
+    upstream_group_id: "",
+    match_priority: 0,
+    status: "active",
+    project_id: "",
+  });
+  setEditingId(null);
+  setDialogOpen(true);
+}
+```
+
+Find the edit-route loader (around line 143):
+
+```tsx
+function openEdit(route: RoutingRoute) {
+  setForm({
+    model_names: [...(route.model_names ?? [])],
+    request_kinds: [...(route.request_kinds ?? [])],
+    clients: [...(route.clients ?? [])],            // NEW
+    billing_modes: [...(route.billing_modes ?? [])], // NEW
+    upstream_group_id: route.upstream_group_id,
+    match_priority: route.match_priority,
+    status: route.status,
+    project_id: route.project_id ?? "",
+  });
+  setEditingId(route.id);
+  setDialogOpen(true);
+}
+```
+
+Find the submit handler (around line 163) and pass the two new fields:
+
+```tsx
+const payload = {
+  ...form,
+  project_id: form.project_id || undefined,
+  clients: form.clients,            // explicit even though spread covers it — guard against future struct prunes
+  billing_modes: form.billing_modes,
+};
+```
+
+(If the spread already covers the new fields, the explicit lines are belt-and-suspenders — keep them as documentation.)
+
+- [ ] **Step 4: Extend `RoutesMatrixView.tsx` — filter dropdowns + URL state + cell subscript**
+
+In `dashboard/src/pages/admin/RoutesMatrixView.tsx`:
+
+**(a) Read filters from URL search params** (mirrors the existing `?view=` URL state pattern in `RoutesPage.tsx`):
+
+```tsx
+const [params, setParams] = useSearchParams();
+const clientFilter = params.get("client") ?? "";
+const billingModeFilter = params.get("billing_mode") ?? "";
+```
+
+**(b) Load the bucket / mode catalogs** for the dropdowns:
+
+```tsx
+const { data: clientsList } = useClientBuckets();
+const { data: billingModesList } = useBillingModes();
+```
+
+**(c) Pass filters to the hook**:
+
+```tsx
+const { data, isLoading, error } = useRoutingMatrix({
+  client: clientFilter,
+  billingMode: billingModeFilter,
+});
+```
+
+**(d) Render the two filter dropdowns above the matrix table**. Use the existing `Select` primitive (same as the Create dialog uses). Each dropdown writes back to the URL on change:
+
+```tsx
+<div className="flex gap-3 mb-4">
+  <div className="space-y-1">
+    <Label className="text-xs">Client</Label>
+    <Select
+      value={clientFilter || "all"}
+      onValueChange={(v) => {
+        const next = new URLSearchParams(params);
+        if (v === "all") next.delete("client");
+        else next.set("client", v);
+        setParams(next, { replace: true });
+      }}
+    >
+      <SelectTrigger className="w-[180px]">
+        <SelectValue placeholder="All clients" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">All clients</SelectItem>
+        {(clientsList?.data ?? []).map((c) => (
+          <SelectItem key={c} value={c}>{c}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  </div>
+  <div className="space-y-1">
+    <Label className="text-xs">Billing Mode</Label>
+    <Select
+      value={billingModeFilter || "all"}
+      onValueChange={(v) => {
+        const next = new URLSearchParams(params);
+        if (v === "all") next.delete("billing_mode");
+        else next.set("billing_mode", v);
+        setParams(next, { replace: true });
+      }}
+    >
+      <SelectTrigger className="w-[180px]">
+        <SelectValue placeholder="All modes" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">All modes</SelectItem>
+        {(billingModesList?.data ?? []).map((m) => (
+          <SelectItem key={m} value={m}>{m}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  </div>
+</div>
+```
+
+**(e) Cell subscript hint when route is mode-specific.** Find the cell render (a `<Badge>` carrying the group name). When the cell carries non-empty `billing_modes`, append a small subscript:
+
+```tsx
+<Badge variant="outline">
+  {cell.upstream_group_name}
+  {cell.billing_modes && cell.billing_modes.length > 0 ? (
+    <span className="ml-1 text-[10px] text-muted-foreground">
+      ·{cell.billing_modes.includes("subscription") ? "sub" : "eu"}
+    </span>
+  ) : null}
+</Badge>
+```
+
+(The `sub`/`eu` mnemonic is a tight subscript — operators recognize it from the spec. If both modes are present in the cell's source route, prefer the leftmost — neither is a misrepresentation.)
+
+- [ ] **Step 5: Type-check, build, manual smoke**
+
+Run:
+
+```bash
+cd /root/coding/modelserver/dashboard
+pnpm exec tsc -b
+pnpm build
+```
+
+Expected: both green. No new dependencies.
+
+**Manual smoke checklist** (perform after committing, NOT in CI):
+
+1. **Routes List tab:** open `/admin/routes`. The two new columns (`Clients`, `Billing Modes`) appear between `Endpoints` and `Upstream Group`. Existing routes (pre-migration) render `Any` in both new columns.
+2. **Create a client-specific route:** click `+ Add Route`. Pick a model, an endpoint, an upstream group. Toggle `claude-code-cli` in the new Clients block. Leave Billing Modes empty. Save. The new row in the table shows `claude-code-cli` badge under Clients and `Any` under Billing Modes.
+3. **Edit:** open the edit dialog on the route you just created. The Clients block should show `claude-code-cli` selected. Untoggle it. Save. Row updates to `Any`.
+4. **Create a mode-specific route:** new route with `Billing Modes` = `subscription`. Verify it shows in the table.
+5. **Matrix tab:** switch to `/admin/routes?view=matrix`. Two new filter dropdowns appear at the top, both defaulting to "All clients" / "All modes". Cells display the group name badge. Cells whose source route is mode-specific should show a `· sub` or `· eu` subscript.
+6. **Matrix filter — by client:** change the Client filter to `claude-code-cli`. URL becomes `…?view=matrix&client=claude-code-cli`. Cells redraw to show only what claude-code-cli requests would resolve to.
+7. **Matrix filter — by mode:** change Billing Mode to `subscription`. URL becomes `…?view=matrix&client=claude-code-cli&billing_mode=subscription`. Cells redraw again.
+8. **URL state survives reload:** hit refresh on the filtered URL. Both dropdowns restore to their selected values.
+9. **Bad filter via URL:** manually navigate to `?view=matrix&client=bogus`. Backend should return 400; the matrix view should display a friendly error (not crash). If the existing error-handling pattern in `RoutesMatrixView` doesn't surface the message gracefully, that's a separate dashboard polish issue — note it in the report rather than fixing here.
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /root/coding/modelserver
+git add dashboard/src/api/types.ts dashboard/src/api/upstreams.ts \
+        dashboard/src/pages/admin/RoutesPage.tsx dashboard/src/pages/admin/RoutesMatrixView.tsx
+git commit -m "feat(dashboard): client + billing_mode columns + matrix filters
+
+Routes table grows two columns (Clients, Billing Modes). The Create/Edit
+dialog gets two parallel toggle-button rows fed by the new
+useClientBuckets() and useBillingModes() hooks against the admin API
+endpoints added in the previous commit. Both default to empty = 'match
+any', matching the legacy semantics of pre-migration routes.
+
+The Matrix tab gains two filter dropdowns at the top (Client, Billing
+Mode), each with an 'All' option. Filter state is persisted in the URL
+(?view=matrix&client=…&billing_mode=…), so reload + back-button preserve
+the slice. Filled cells whose source route is mode-specific carry a
+subscript ' · sub' / ' · eu' next to the group badge.
+
+No new dependencies; verified by pnpm tsc -b + pnpm build + manual
+smoke list in the plan.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+> **End of installment 7 (Task 9).** Backend + frontend are both complete. The plan body covers all 9 tasks. One final installment adds the plan-level self-review and execution handoff at the end of the document.
 >
-> Remaining installments:
-> - **Installment 7 (Task 9):** dashboard Routes page columns + Create/Edit dialog selectors + Matrix tab filter dropdowns + manual smoke checklist.
-> - **Final installment:** plan self-review section + execution handoff.
+> Final installment:
+> - Plan self-review section (spec coverage, placeholder scan, type consistency)
+> - Execution Handoff offering Subagent-Driven Development vs Inline Execution
 
