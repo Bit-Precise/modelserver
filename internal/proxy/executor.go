@@ -158,7 +158,11 @@ type Executor struct {
 	// streaming responses (server.stream_idle_timeout). 0 disables the
 	// watchdog. See idleTimeoutReader for semantics.
 	streamIdleTimeout time.Duration
-	httpLogger        *httplog.Logger
+	// sseKeepaliveInterval is the gap of downstream silence after which
+	// a ":\n\n" SSE comment is injected to reset client stall timers.
+	// 0 disables. See keepaliveWriter for semantics.
+	sseKeepaliveInterval time.Duration
+	httpLogger           *httplog.Logger
 	httpLogCfg        config.HttpLogConfig
 }
 
@@ -174,6 +178,7 @@ func NewExecutor(
 	imagesMaxBodySize int64,
 	extraUsageCfg config.ExtraUsageConfig,
 	streamIdleTimeout time.Duration,
+	sseKeepaliveInterval time.Duration,
 	bl *httplog.Logger,
 	blCfg config.HttpLogConfig,
 ) *Executor {
@@ -199,8 +204,9 @@ func NewExecutor(
 		logger:            logger,
 		maxBodySize:       maxBodySize,
 		imagesMaxBodySize: imagesMaxBodySize,
-		streamIdleTimeout: streamIdleTimeout,
-		httpLogger:        bl,
+		streamIdleTimeout:    streamIdleTimeout,
+		sseKeepaliveInterval: sseKeepaliveInterval,
+		httpLogger:           bl,
 		httpLogCfg:        blCfg,
 	}
 }
@@ -1013,6 +1019,14 @@ func (e *Executor) commitStreamingResponse(
 		upstreamBody = newIdleTimeoutReader(resp.Body, e.streamIdleTimeout)
 	}
 
+	// interruptErrPtr is set by the stream-flush block below when
+	// copyWithFlush fails. The WrapStream callback closes over this pointer
+	// and reads it at callback time (after the copy block runs) so that
+	// completeStreamingRequest receives the correct error. Image requests
+	// do not use this pointer but it is declared here for scope.
+	var interruptErr error
+	interruptErrPtr := &interruptErr
+
 	var wrapped io.ReadCloser
 	if isImageRequestKind(reqCtx.RequestKind) {
 		wrapped = newImageStreamInterceptor(upstreamBody, startTime, func(usage ImageTokenUsage, usagePresent bool, ttftMs int64) {
@@ -1020,6 +1034,7 @@ func (e *Executor) commitStreamingResponse(
 		})
 	} else {
 		wrapped = transformer.WrapStream(upstreamBody, startTime, func(metrics StreamMetrics) {
+			metrics.InterruptErr = *interruptErrPtr
 			e.completeStreamingRequest(candidate, reqCtx, metrics, startTime, cancelFn, logger)
 		})
 	}
@@ -1048,10 +1063,16 @@ func (e *Executor) commitStreamingResponse(
 		})
 	}
 
-	// Flush streaming data to the client.
-	flusher, _ := w.(http.Flusher)
+	// Wrap w in a keepaliveWriter so a ":\n\n" SSE comment is injected
+	// during upstream silence windows, preventing client stall detection
+	// (Claude Code et al.) and middlebox idle ceilings from cutting long
+	// reasoning turns mid-stream. The wrapper itself implements
+	// http.Flusher and serialises heartbeats vs data writes through a
+	// single mutex, so SSE events are never torn.
+	kw := newKeepaliveWriter(w, e.sseKeepaliveInterval)
+	defer kw.Close()
 
-	n, copyErr := copyWithFlush(streamReader, w, flusher)
+	n, copyErr := copyWithFlush(streamReader, kw, kw)
 	if copyErr != nil {
 		logger.Warn("stream_interrupted",
 			"request_id", reqCtx.RequestID,
@@ -1060,6 +1081,12 @@ func (e *Executor) commitStreamingResponse(
 			"error", copyErr.Error(),
 		)
 		e.router.Metrics().RecordError(candidate.Upstream.ID)
+		// Publish the error so completeStreamingRequest can flip the
+		// request row from success→error and record the cause. The
+		// callback registered with transformer.WrapStream above closes
+		// over `interruptErrPtr`; the interceptor's finish() runs from
+		// streamReader.Close() below and will read it.
+		*interruptErrPtr = copyErr
 	}
 
 	streamReader.Close()
