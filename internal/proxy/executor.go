@@ -73,11 +73,11 @@ type RequestContext struct {
 	// Execute() from the inbound r.Context so the deferred streaming callback
 	// (which fires after r is gone) can still settle. The remaining fields
 	// are outputs populated by settleExtraUsage.
-	HasExtraUsageCtx             bool
-	ExtraUsageCtx                ExtraUsageContext
-	IsExtraUsage                 bool
-	ExtraUsageCostCredits        int64 // was ExtraUsageCostFen
-	ExtraUsageReason             string
+	HasExtraUsageCtx              bool
+	ExtraUsageCtx                 ExtraUsageContext
+	IsExtraUsage                  bool
+	ExtraUsageCostCredits         int64 // was ExtraUsageCostFen
+	ExtraUsageReason              string
 	ExtraUsageBalanceAfterCredits int64 // was ExtraUsageBalanceAfterFen
 
 	// HTTP logging state. HttpLogEnabled is set by the handler based on
@@ -163,7 +163,7 @@ type Executor struct {
 	// 0 disables. See keepaliveWriter for semantics.
 	sseKeepaliveInterval time.Duration
 	httpLogger           *httplog.Logger
-	httpLogCfg        config.HttpLogConfig
+	httpLogCfg           config.HttpLogConfig
 }
 
 // NewExecutor creates a new Executor wired to the given Router and dependencies.
@@ -198,16 +198,16 @@ func NewExecutor(
 				DisableCompression: true,
 			},
 		},
-		store:             st,
-		collector:         coll,
-		rateLimiter:       limiter,
-		logger:            logger,
-		maxBodySize:       maxBodySize,
-		imagesMaxBodySize: imagesMaxBodySize,
+		store:                st,
+		collector:            coll,
+		rateLimiter:          limiter,
+		logger:               logger,
+		maxBodySize:          maxBodySize,
+		imagesMaxBodySize:    imagesMaxBodySize,
 		streamIdleTimeout:    streamIdleTimeout,
 		sseKeepaliveInterval: sseKeepaliveInterval,
 		httpLogger:           bl,
-		httpLogCfg:        blCfg,
+		httpLogCfg:           blCfg,
 	}
 }
 
@@ -1022,15 +1022,15 @@ func (e *Executor) commitStreamingResponse(
 	// interruptErrPtr is set by the stream-flush block below when
 	// copyWithFlush fails. The WrapStream callback closes over this pointer
 	// and reads it at callback time (after the copy block runs) so that
-	// completeStreamingRequest receives the correct error. Image requests
-	// do not use this pointer but it is declared here for scope.
+	// completeStreamingRequest receives the correct error.
+	// Both image and non-image streaming branches read the pointer at callback time.
 	var interruptErr error
 	interruptErrPtr := &interruptErr
 
 	var wrapped io.ReadCloser
 	if isImageRequestKind(reqCtx.RequestKind) {
 		wrapped = newImageStreamInterceptor(upstreamBody, startTime, func(usage ImageTokenUsage, usagePresent bool, ttftMs int64) {
-			e.completeImageStreamingRequest(candidate, reqCtx, usage, usagePresent, ttftMs, startTime, cancelFn, logger)
+			e.completeImageStreamingRequest(candidate, reqCtx, usage, usagePresent, *interruptErrPtr, ttftMs, startTime, cancelFn, logger)
 		})
 	} else {
 		wrapped = transformer.WrapStream(upstreamBody, startTime, func(metrics StreamMetrics) {
@@ -1185,6 +1185,7 @@ func (e *Executor) completeImageStreamingRequest(
 	reqCtx *RequestContext,
 	usage ImageTokenUsage,
 	usagePresent bool,
+	interruptErr error,
 	ttftMs int64,
 	startTime time.Time,
 	cancelFn context.CancelFunc,
@@ -1223,7 +1224,7 @@ func (e *Executor) completeImageStreamingRequest(
 		RequestKind:           reqCtx.RequestKind,
 		Model:                 model,
 		Streaming:             true,
-		Status:                types.RequestStatusSuccess,
+		Status:                "", // set below from interruptErr
 		InputTokens:           tokenUsage.InputTokens,
 		OutputTokens:          tokenUsage.OutputTokens,
 		CacheCreationTokens:   tokenUsage.CacheCreationTokens,
@@ -1235,6 +1236,12 @@ func (e *Executor) completeImageStreamingRequest(
 		IsExtraUsage:          reqCtx.IsExtraUsage,
 		ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
 		ExtraUsageReason:      reqCtx.ExtraUsageReason,
+	}
+	if interruptErr != nil {
+		req.Status = types.RequestStatusError
+		req.ErrorMessage = "stream_interrupted: " + interruptErr.Error()
+	} else {
+		req.Status = types.RequestStatusSuccess
 	}
 	if usagePresent {
 		req.Metadata = imageUsageMetadata(usage)
@@ -1250,7 +1257,7 @@ func (e *Executor) completeImageStreamingRequest(
 	}
 
 	logger.Info("request completed",
-		"status", types.RequestStatusSuccess,
+		"status", req.Status,
 		"streaming", true,
 		"input_tokens", tokenUsage.InputTokens,
 		"output_tokens", tokenUsage.OutputTokens,
