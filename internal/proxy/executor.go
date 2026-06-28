@@ -1135,7 +1135,7 @@ func (e *Executor) completeStreamingRequest(
 
 	var credits float64
 	if reqCtx.Policy != nil {
-		credits = reqCtx.Policy.ComputeCreditsWithDefault(model, e.catalogDefaultRate(model), metrics.InputTokens, metrics.OutputTokens, metrics.CacheCreationTokens, metrics.CacheReadTokens)
+		credits = reqCtx.Policy.ComputeCreditsForClient(model, reqCtx.ClientBucket, e.catalogDefaultRate(model), metrics.InputTokens, metrics.OutputTokens, metrics.CacheCreationTokens, metrics.CacheReadTokens)
 	}
 
 	usage := types.TokenUsage{
@@ -1383,7 +1383,7 @@ func (e *Executor) commitNonStreamingResponse(
 
 	var credits float64
 	if reqCtx.Policy != nil {
-		credits = reqCtx.Policy.ComputeCreditsWithDefault(model, e.catalogDefaultRate(model), respMetrics.InputTokens, respMetrics.OutputTokens, respMetrics.CacheCreationTokens, respMetrics.CacheReadTokens)
+		credits = reqCtx.Policy.ComputeCreditsForClient(model, reqCtx.ClientBucket, e.catalogDefaultRate(model), respMetrics.InputTokens, respMetrics.OutputTokens, respMetrics.CacheCreationTokens, respMetrics.CacheReadTokens)
 	}
 
 	req := types.Request{

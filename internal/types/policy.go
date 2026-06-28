@@ -112,36 +112,70 @@ type ImageCreditRate struct {
 }
 
 // ComputeCredits calculates credits using only the policy's own rate map.
-// Prefer ComputeCreditsWithDefault so the catalog-level default can act as a
-// fallback between the plan override and the plan's "_default".
+// Prefer ComputeCreditsForClient so the client-specific overlay and
+// catalog default can act as fallbacks between the plan override and the
+// plan's "_default".
 func (p *RateLimitPolicy) ComputeCredits(model string, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64) float64 {
-	return p.ComputeCreditsWithDefault(model, nil, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
+	return p.ComputeCreditsForClient(model, "", nil, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
 }
 
-// ComputeCreditsWithDefault resolves a credit rate in the order:
-//  1. policy.ModelCreditRates[model]  (explicit plan override)
-//  2. catalogDefault                  (per-model truth from the catalog)
-//  3. policy.ModelCreditRates["_default"]  (plan-wide safety net)
-//  4. zero rate                       (no billing)
-//
-// This mirrors the billing-fallback contract described in the model catalog
-// spec: plan overrides are most intentional; catalog defaults are the
-// per-model source of truth; the plan "_default" remains as a legacy safety
-// net for plans that rely on it.
+// ComputeCreditsWithDefault is a thin wrapper around ComputeCreditsForClient
+// for callers that don't (yet) thread the client bucket through. Passing
+// client="" makes resolver step 1 (per-client override) always miss; the
+// remaining steps are identical to the pre-refactor behavior.
 func (p *RateLimitPolicy) ComputeCreditsWithDefault(model string, catalogDefault *CreditRate, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64) float64 {
-	rate, ok := p.ModelCreditRates[model]
-	if !ok {
-		if catalogDefault != nil {
-			rate = *catalogDefault
-			ok = true
+	return p.ComputeCreditsForClient(model, "", catalogDefault, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
+}
+
+// ComputeCreditsForClient resolves a credit rate in the order:
+//  1. policy.ClientModelCreditRates[client][model] — per-client per-model override
+//  2. policy.ModelCreditRates[model]               — existing plan override
+//  3. catalogDefault                               — catalog per-model truth
+//  4. policy.ModelCreditRates["_default"]          — plan-wide safety net
+//  5. zero rate                                    — no billing
+//
+// IMPORTANT: this function is for SUBSCRIPTION consumption only.
+// Extra-usage billing bypasses it entirely via settleExtraUsage →
+// computeExtraUsageCostCredits, which reads catalog DefaultCreditRate
+// directly. Per-client overrides have no effect on extra-usage charges
+// by design.
+func (p *RateLimitPolicy) ComputeCreditsForClient(model, client string, catalogDefault *CreditRate, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64) float64 {
+	var rate CreditRate
+	var ok bool
+
+	// Step 1: per-client per-model override.
+	if client != "" {
+		if perClient, found := p.ClientModelCreditRates[client]; found {
+			if r, found := perClient[model]; found {
+				rate, ok = r, true
+			}
 		}
 	}
+
+	// Step 2: plan model override.
 	if !ok {
-		rate, ok = p.ModelCreditRates["_default"]
+		if r, found := p.ModelCreditRates[model]; found {
+			rate, ok = r, true
+		}
 	}
+
+	// Step 3: catalog default.
+	if !ok && catalogDefault != nil {
+		rate, ok = *catalogDefault, true
+	}
+
+	// Step 4: plan _default.
+	if !ok {
+		if r, found := p.ModelCreditRates["_default"]; found {
+			rate, ok = r, true
+		}
+	}
+
+	// Step 5: zero.
 	if !ok {
 		return 0
 	}
+
 	rate = ApplyLongContextCreditRate(rate, inputTokens+cacheCreationTokens+cacheReadTokens)
 	return rate.InputRate*float64(inputTokens) +
 		rate.OutputRate*float64(outputTokens) +
