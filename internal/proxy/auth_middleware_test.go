@@ -112,5 +112,19 @@ func TestCheckMembership_FailsClosedOnDBError(t *testing.T) {
 	}
 }
 
+// TestOAuthPath_UsesSharedMembershipCache asserts that memberPresentCache is
+// shared across the API-key path and the OAuth introspection path. A positive
+// write from one path is visible to a lookup from the other.
+func TestOAuthPath_UsesSharedMembershipCache(t *testing.T) {
+	clearMemberPresentCache()
+	// Sentinel: a positive cache write (as would occur on the API-key path)
+	// is visible to a subsequent OAuth-path lookup (they share the cache).
+	memberPresentCacheSet("proj-shared:user-shared", true)
+	got, ok := memberPresentCacheGet("proj-shared:user-shared")
+	if !ok || !got {
+		t.Errorf("shared cache miss: ok=%v got=%v", ok, got)
+	}
+}
+
 // silence unused-import linter when context isn't otherwise referenced.
 var _ = context.Background

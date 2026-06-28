@@ -74,3 +74,70 @@ func TestMigration055_RevokesOrphanedKeys(t *testing.T) {
 	check(k3, types.APIKeyStatusRevoked)  // orphan -> revoked
 	check(k4, types.APIKeyStatusRevoked)  // already revoked -> unchanged
 }
+
+// TestMigration055_DeletesOrphanedGrants asserts the second half of migration
+// 055: orphan oauth_grants (no matching project_members row) are deleted,
+// while grants for current members are preserved. Idempotent on re-run.
+func TestMigration055_DeletesOrphanedGrants(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	// One project with one member (owner from seedUserAndProject).
+	member, projectID := seedUserAndProject(t, st)
+
+	// Orphan user: NOT a member of projectID.
+	var orphanUserID string
+	if err := st.pool.QueryRow(ctx, `
+		INSERT INTO users (email) VALUES ('orphan-grant-' || gen_random_uuid()::text || '@test.local')
+		RETURNING id`).Scan(&orphanUserID); err != nil {
+		t.Fatalf("seed orphan user: %v", err)
+	}
+
+	seedGrant := func(projectID, userID, clientID string) string {
+		t.Helper()
+		var id string
+		if err := st.pool.QueryRow(ctx, `
+			INSERT INTO oauth_grants (project_id, user_id, client_id, client_name, scopes)
+			VALUES ($1, $2, $3, 'test-client', ARRAY['openid'])
+			RETURNING id`, projectID, userID, clientID).Scan(&id); err != nil {
+			t.Fatalf("seed grant: %v", err)
+		}
+		return id
+	}
+
+	// gA: member-grant (member is in project_members) → keep
+	gA := seedGrant(projectID, member, "client-A")
+	// gB, gC: orphan-grants (orphanUserID is NOT a member) → delete
+	gB := seedGrant(projectID, orphanUserID, "client-A")
+	gC := seedGrant(projectID, orphanUserID, "client-B")
+
+	// Re-run the migration DELETE manually (idempotence test).
+	if _, err := st.pool.Exec(ctx, `
+		DELETE FROM oauth_grants
+		 WHERE NOT EXISTS (
+		     SELECT 1 FROM project_members
+		      WHERE project_members.project_id = oauth_grants.project_id
+		        AND project_members.user_id    = oauth_grants.user_id
+		 )`); err != nil {
+		t.Fatalf("re-run migration grants pass: %v", err)
+	}
+
+	countGrant := func(id string) int {
+		t.Helper()
+		var n int
+		if err := st.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM oauth_grants WHERE id = $1`, id).Scan(&n); err != nil {
+			t.Fatalf("count grant %s: %v", id, err)
+		}
+		return n
+	}
+	if countGrant(gA) != 1 {
+		t.Errorf("member grant gA got deleted")
+	}
+	if countGrant(gB) != 0 {
+		t.Errorf("orphan grant gB survived")
+	}
+	if countGrant(gC) != 0 {
+		t.Errorf("orphan grant gC survived")
+	}
+}

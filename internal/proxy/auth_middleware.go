@@ -590,12 +590,15 @@ func handleTokenIntrospectionAuth(w http.ResponseWriter, r *http.Request, next h
 		policy = nil
 	}
 
-	// Load per-user credit quota + denylist (cached 10s each), shared
-	// with the API-key path. fail-open semantics identical.
+	// Triple-cache hydration mirroring the API-key path's Layer B
+	// membership check. See AuthMiddleware for the full security
+	// rationale (fail-closed on transient DB error).
 	var userQuotaPct *float64
 	var userDeniedModels []string
 	if userID != "" {
 		memberCacheKey := project.ID + ":" + userID
+
+		memberPresent, presenceHit := memberPresentCacheGet(memberCacheKey)
 		quotaCached, quotaHit := quotaCache.Get(memberCacheKey)
 		deniedCached, deniedHit := deniedModelsCacheGet(memberCacheKey)
 
@@ -607,11 +610,17 @@ func handleTokenIntrospectionAuth(w http.ResponseWriter, r *http.Request, next h
 			userDeniedModels = deniedCached
 		}
 
-		if !quotaHit || !deniedHit {
+		if !presenceHit || !quotaHit || !deniedHit {
 			member, memberErr := st.GetProjectMember(project.ID, userID)
 			if memberErr != nil {
-				// Fail open.
-			} else if member != nil {
+				writeProxyError(w, http.StatusServiceUnavailable,
+					"membership check unavailable, retry")
+				return
+			}
+			memberPresent = member != nil
+			memberPresentCacheSet(memberCacheKey, memberPresent)
+
+			if memberPresent {
 				if !quotaHit {
 					if member.CreditQuotaPct != nil {
 						userQuotaPct = member.CreditQuotaPct
@@ -632,6 +641,12 @@ func handleTokenIntrospectionAuth(w http.ResponseWriter, r *http.Request, next h
 					deniedModelsCacheSet(memberCacheKey, nil)
 				}
 			}
+		}
+
+		if !memberPresent {
+			writeProxyError(w, http.StatusUnauthorized,
+				"api key creator is no longer a project member")
+			return
 		}
 	}
 

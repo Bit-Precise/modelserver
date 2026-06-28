@@ -602,7 +602,7 @@ func normalizeDeniedModels(in []string) ([]string, bool) {
 	return out, true
 }
 
-func handleRemoveMember(st *store.Store) http.HandlerFunc {
+func handleRemoveMember(st *store.Store, hydra *HydraClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireRole(w, r, types.RoleOwner, types.RoleMaintainer) {
 			return
@@ -610,14 +610,30 @@ func handleRemoveMember(st *store.Store) http.HandlerFunc {
 		projectID := chi.URLParam(r, "projectID")
 		userID := chi.URLParam(r, "userID")
 
-		revokedCount, err := st.RemoveProjectMember(projectID, userID)
+		revokedKeys, deletedGrants, err := st.RemoveProjectMember(projectID, userID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal",
 				"failed to remove member")
 			return
 		}
+
+		// Best-effort: revoke each deleted grant's Hydra consent session.
+		// Failures here are logged but do not turn the response into an
+		// error — the grant row is already deleted in our DB, so the
+		// access token will be rejected by the AuthMiddleware membership
+		// check even if Hydra still has a stale consent.
+		if hydra != nil {
+			for _, g := range deletedGrants {
+				if err := hydra.RevokeConsent(r.Context(), g.UserID, g.ClientID); err != nil {
+					log.Printf("WARN remove_member: failed to revoke Hydra consent for user=%s client=%s: %v",
+						g.UserID, g.ClientID, err)
+				}
+			}
+		}
+
 		writeData(w, http.StatusOK, map[string]int{
-			"revoked_api_keys": revokedCount,
+			"revoked_api_keys":     revokedKeys,
+			"deleted_oauth_grants": len(deletedGrants),
 		})
 	}
 }

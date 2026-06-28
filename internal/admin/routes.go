@@ -172,7 +172,7 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 					r.Post("/members", handleAddMember(st))
 					r.Get("/members/usage", handleMembersUsage(st))
 					r.Put("/members/{userID}", handleUpdateMember(st))
-					r.Delete("/members/{userID}", handleRemoveMember(st))
+					r.Delete("/members/{userID}", handleRemoveMember(st, hydraClient))
 					r.Get("/members/{userID}/affected-keys", handleCountAffectedKeysOnRemove(st))
 					r.Get("/members/{userID}/quota-usage", handleQuotaUsage(st))
 					r.Get("/my-quota", handleMyQuota(st))

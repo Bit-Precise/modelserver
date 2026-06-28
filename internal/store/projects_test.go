@@ -59,7 +59,7 @@ func TestRemoveProjectMember_RevokesActiveKeys(t *testing.T) {
 	k3 := seedAPIKey(t, st, projectID, member, types.APIKeyStatusActive)
 	k4 := seedAPIKey(t, st, projectID, member, types.APIKeyStatusRevoked)
 
-	revoked, err := st.RemoveProjectMember(projectID, member)
+	revoked, _, err := st.RemoveProjectMember(projectID, member)
 	if err != nil {
 		t.Fatalf("RemoveProjectMember: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestRemoveProjectMember_DoesNotTouchOtherProjects(t *testing.T) {
 	kA := seedAPIKey(t, st, projectA, member, types.APIKeyStatusActive)
 	kB := seedAPIKey(t, st, projectB, member, types.APIKeyStatusActive)
 
-	if _, err := st.RemoveProjectMember(projectA, member); err != nil {
+	if _, _, err := st.RemoveProjectMember(projectA, member); err != nil {
 		t.Fatalf("RemoveProjectMember: %v", err)
 	}
 
@@ -137,7 +137,7 @@ func TestRemoveProjectMember_NoMemberStillRevokesKeys(t *testing.T) {
 
 	k1 := seedAPIKey(t, st, projectID, orphan, types.APIKeyStatusActive)
 
-	revoked, err := st.RemoveProjectMember(projectID, orphan)
+	revoked, _, err := st.RemoveProjectMember(projectID, orphan)
 	if err != nil {
 		t.Fatalf("RemoveProjectMember: %v", err)
 	}
@@ -150,6 +150,77 @@ func TestRemoveProjectMember_NoMemberStillRevokesKeys(t *testing.T) {
 	}
 	if got != types.APIKeyStatusRevoked {
 		t.Errorf("status = %q, want %q", got, types.APIKeyStatusRevoked)
+	}
+}
+
+// TestRemoveProjectMember_DeletesOAuthGrants verifies that RemoveProjectMember
+// deletes the member's oauth_grants in the same tx and returns them.
+// Grants for other projects must not be touched.
+func TestRemoveProjectMember_DeletesOAuthGrants(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+
+	member := seedSecondUser(t, st, "withgrants")
+	addMember(t, st, projectID, member, types.RoleDeveloper)
+
+	// Seed two grants for the member + one grant in a different project
+	// (must NOT be touched).
+	seedGrant := func(t *testing.T, st *Store, projectID, userID, clientID string) string {
+		t.Helper()
+		var id string
+		if err := st.pool.QueryRow(ctx, `
+			INSERT INTO oauth_grants (project_id, user_id, client_id, client_name, scopes)
+			VALUES ($1, $2, $3, 'test-client', ARRAY['openid','offline'])
+			RETURNING id`, projectID, userID, clientID).Scan(&id); err != nil {
+			t.Fatalf("seed grant: %v", err)
+		}
+		return id
+	}
+	g1 := seedGrant(t, st, projectID, member, "client-A")
+	g2 := seedGrant(t, st, projectID, member, "client-B")
+
+	// Different project — keep it untouched.
+	_, otherProject := seedUserAndProject(t, st)
+	addMember(t, st, otherProject, member, types.RoleDeveloper)
+	g3 := seedGrant(t, st, otherProject, member, "client-A")
+
+	_, deleted, err := st.RemoveProjectMember(projectID, member)
+	if err != nil {
+		t.Fatalf("RemoveProjectMember: %v", err)
+	}
+	if len(deleted) != 2 {
+		t.Errorf("deleted = %d grants, want 2", len(deleted))
+	}
+	deletedIDs := map[string]bool{}
+	for _, g := range deleted {
+		deletedIDs[g.ID] = true
+		if g.ProjectID != projectID || g.UserID != member {
+			t.Errorf("deleted grant scope wrong: %+v", g)
+		}
+	}
+	if !deletedIDs[g1] || !deletedIDs[g2] {
+		t.Errorf("expected g1=%s and g2=%s in deleted list, got %v", g1, g2, deletedIDs)
+	}
+
+	// g1 and g2 should be gone from DB; g3 must remain.
+	var stillThere int
+	if err := st.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM oauth_grants WHERE id = ANY($1)`,
+		[]string{g1, g2}).Scan(&stillThere); err != nil {
+		t.Fatalf("count deleted: %v", err)
+	}
+	if stillThere != 0 {
+		t.Errorf("deleted grants still present: %d", stillThere)
+	}
+	var otherKeep int
+	if err := st.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM oauth_grants WHERE id = $1`, g3).Scan(&otherKeep); err != nil {
+		t.Fatalf("count other: %v", err)
+	}
+	if otherKeep != 1 {
+		t.Errorf("other-project grant got touched: count=%d", otherKeep)
 	}
 }
 
