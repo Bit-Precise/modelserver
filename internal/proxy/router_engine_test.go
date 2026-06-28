@@ -519,10 +519,12 @@ func TestRouter_MatrixGlobal(t *testing.T) {
 		t.Errorf("disabled route produced a cell")
 	}
 
-	// Project-scoped route must produce no cell (project_id == "" filter).
-	// (Only check we don't accidentally pick rt-proj — the global rt-hi already wins anyway.)
-	if got.RouteID == "rt-proj" {
-		t.Errorf("project-scoped route appeared in global matrix")
+	// Project-scoped routes must never appear in the global matrix at any
+	// priority — scan every emitted cell.
+	for _, c := range cells {
+		if c.RouteID == "rt-proj" {
+			t.Errorf("project-scoped route appeared in global matrix: %+v", c)
+		}
 	}
 
 	// Multi-kind route produces two cells.

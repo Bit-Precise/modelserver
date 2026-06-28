@@ -213,6 +213,27 @@ func (r *Router) buildMaps(
 	}
 }
 
+// matchesGlobalRoute reports whether the route is a candidate for the
+// given (model, kind) under the global-route branch. Both Match and
+// MatrixGlobal must use this so they cannot drift apart. If you teach
+// this function to evaluate route.Conditions or any new criterion,
+// both consumers benefit automatically.
+func matchesGlobalRoute(route types.Route, projectID, model, kind string) bool {
+	if route.Status != "active" {
+		return false
+	}
+	if route.ProjectID != projectID {
+		return false
+	}
+	if !slices.Contains(route.ModelNames, model) {
+		return false
+	}
+	if !slices.Contains(route.RequestKinds, kind) {
+		return false
+	}
+	return true
+}
+
 // Match finds the upstream group for a request (project + model + kind).
 // It checks project-specific routes first, then global routes.
 // No auto-discovery fallback — all routing must go through explicit routes.
@@ -222,29 +243,21 @@ func (r *Router) Match(projectID, model, kind string) (*resolvedGroup, error) {
 
 	// 1. Try project-specific routes (highest match_priority first, routes are pre-sorted).
 	for _, route := range r.routes {
-		if route.Status != "active" {
+		if !matchesGlobalRoute(route, projectID, model, kind) {
 			continue
 		}
-		if route.ProjectID == projectID &&
-			slices.Contains(route.ModelNames, model) &&
-			slices.Contains(route.RequestKinds, kind) {
-			if g, ok := r.groups[route.UpstreamGroupID]; ok {
-				return g, nil
-			}
+		if g, ok := r.groups[route.UpstreamGroupID]; ok {
+			return g, nil
 		}
 	}
 
 	// 2. Fall back to global routes (projectID = "").
 	for _, route := range r.routes {
-		if route.Status != "active" {
+		if !matchesGlobalRoute(route, "", model, kind) {
 			continue
 		}
-		if route.ProjectID == "" &&
-			slices.Contains(route.ModelNames, model) &&
-			slices.Contains(route.RequestKinds, kind) {
-			if g, ok := r.groups[route.UpstreamGroupID]; ok {
-				return g, nil
-			}
+		if g, ok := r.groups[route.UpstreamGroupID]; ok {
+			return g, nil
 		}
 	}
 
@@ -465,8 +478,9 @@ type MatrixCell struct {
 //   - routes with Status != "active" are skipped
 //   - routes with ProjectID != "" are skipped (global view)
 //   - the first matching route wins
-//   - if the winning route's UpstreamGroupID is not present in r.groups,
-//     the pair is silently dropped (matches Match's "group missing" branch)
+//   - if a matching route's UpstreamGroupID is not present in r.groups,
+//     that route is skipped and the walk continues down the priority list
+//     (mirrors Match's behavior when a matching route's group is missing)
 func (r *Router) MatrixGlobal(models []string) []MatrixCell {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -479,20 +493,12 @@ func (r *Router) MatrixGlobal(models []string) []MatrixCell {
 	for _, model := range models {
 		for _, kind := range types.AllRequestKinds {
 			for _, route := range r.routes {
-				if route.Status != "active" {
-					continue
-				}
-				if route.ProjectID != "" {
-					continue
-				}
-				if !slices.Contains(route.ModelNames, model) {
-					continue
-				}
-				if !slices.Contains(route.RequestKinds, kind) {
+				if !matchesGlobalRoute(route, "", model, kind) {
 					continue
 				}
 				if _, ok := r.groups[route.UpstreamGroupID]; !ok {
-					// Mirror Match: skip this route and keep looking down the priority list.
+					// Mirror Match: skip this route and keep walking down the
+					// priority list.
 					continue
 				}
 				out = append(out, MatrixCell{
