@@ -80,6 +80,11 @@ type RequestContext struct {
 	ExtraUsageReason              string
 	ExtraUsageBalanceAfterCredits int64 // was ExtraUsageBalanceAfterFen
 
+	// ClientBucket populated in Execute() from ClientBucketFromContext(r.Context()).
+	// Always set (not only on the extra-usage branch) so the pricing path in
+	// Task 7 can read it from a cached location after r is gone.
+	ClientBucket string
+
 	// HTTP logging state. HttpLogEnabled is set by the handler based on
 	// model publisher. The Captured* fields are populated by Execute()
 	// before the retry loop, capturing the original client request data.
@@ -249,6 +254,10 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 		reqCtx.ExtraUsageReason = euCtx.Reason
 	}
 
+	// Populate ClientBucket unconditionally so downstream code (e.g. the
+	// pricing path in Task 7) can read it from reqCtx after r is gone.
+	reqCtx.ClientBucket = ClientBucketFromContext(r.Context())
+
 	// executeStart is the entry-time stamp used by finalizeEarlyError to set
 	// LatencyMs on pending rows that bail out before any upstream is attempted.
 	// The retry loop further down has its own `startTime` for upstream timing;
@@ -256,7 +265,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 	executeStart := time.Now()
 
 	// 1. Match the request to an upstream group.
-	group, err := e.router.Match(reqCtx.ProjectID, reqCtx.Model, reqCtx.RequestKind)
+	group, err := e.router.Match(reqCtx.ProjectID, reqCtx.Model, reqCtx.RequestKind, reqCtx.ClientBucket)
 	if err != nil {
 		writeProxyError(w, http.StatusNotFound, err.Error())
 		e.finalizeEarlyError(reqCtx, executeStart, "no route matched: "+err.Error())
@@ -1126,7 +1135,7 @@ func (e *Executor) completeStreamingRequest(
 
 	var credits float64
 	if reqCtx.Policy != nil {
-		credits = reqCtx.Policy.ComputeCreditsWithDefault(model, e.catalogDefaultRate(model), metrics.InputTokens, metrics.OutputTokens, metrics.CacheCreationTokens, metrics.CacheReadTokens)
+		credits = reqCtx.Policy.ComputeCreditsForClient(model, reqCtx.ClientBucket, e.catalogDefaultRate(model), metrics.InputTokens, metrics.OutputTokens, metrics.CacheCreationTokens, metrics.CacheReadTokens)
 	}
 
 	usage := types.TokenUsage{
@@ -1374,7 +1383,7 @@ func (e *Executor) commitNonStreamingResponse(
 
 	var credits float64
 	if reqCtx.Policy != nil {
-		credits = reqCtx.Policy.ComputeCreditsWithDefault(model, e.catalogDefaultRate(model), respMetrics.InputTokens, respMetrics.OutputTokens, respMetrics.CacheCreationTokens, respMetrics.CacheReadTokens)
+		credits = reqCtx.Policy.ComputeCreditsForClient(model, reqCtx.ClientBucket, e.catalogDefaultRate(model), respMetrics.InputTokens, respMetrics.OutputTokens, respMetrics.CacheCreationTokens, respMetrics.CacheReadTokens)
 	}
 
 	req := types.Request{

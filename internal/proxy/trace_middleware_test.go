@@ -2,8 +2,10 @@ package proxy
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/modelserver/modelserver/internal/config"
@@ -306,5 +308,74 @@ func TestTraceMiddleware_RequireSession_RejectsOpenAIResponses(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestTraceMiddleware_WritesClientBucket(t *testing.T) {
+	var gotKind, gotBucket string
+	probe := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKind = ClientKindFromContext(r.Context())
+		gotBucket = ClientBucketFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	cases := []struct {
+		name       string
+		setup      func(*http.Request)
+		wantKind   string
+		wantBucket string
+	}{
+		{
+			name:       "claude_code_cli",
+			setup:      func(r *http.Request) { r.Header.Set("User-Agent", "claude-cli/1.0 (external, cli)"); r.Body = io.NopCloser(strings.NewReader(`{"metadata":{"user_id":"user_` + strings.Repeat("a", 64) + `_account__session_00000000-0000-0000-0000-000000000000"}}`)) },
+			wantKind:   types.ClientKindClaudeCode,
+			wantBucket: types.ClientBucketClaudeCodeCLI,
+		},
+		{
+			name:       "claude_desktop",
+			setup:      func(r *http.Request) { r.Header.Set("User-Agent", "Mozilla/5.0 Claude/1.0 (Electron/30.0)") },
+			wantKind:   types.ClientKindClaudeDesktop,
+			wantBucket: types.ClientBucketClaudeDesktop,
+		},
+		{
+			name:       "codex_cli",
+			setup:      func(r *http.Request) { r.Header.Set("Session-Id", "00000000-0000-0000-0000-000000000000") },
+			wantKind:   types.ClientKindCodex,
+			wantBucket: types.ClientBucketCodexCLI,
+		},
+		{
+			name:       "opencode_other",
+			setup:      func(r *http.Request) { r.Header.Set("User-Agent", "opencode/0.1.0") },
+			wantKind:   types.ClientKindOpenCode,
+			wantBucket: types.ClientBucketOther,
+		},
+		{
+			name:       "unknown_other",
+			setup:      func(r *http.Request) { r.Header.Set("User-Agent", "curl/8.0") },
+			wantKind:   types.ClientKindUnknown,
+			wantBucket: types.ClientBucketOther,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gotKind, gotBucket = "", ""
+			mw := TraceMiddleware(config.TraceConfig{TraceHeader: "X-Trace-Id"}, nil, nil)
+			req := httptest.NewRequest("POST", "/v1/messages", nil)
+			c.setup(req)
+			mw(probe).ServeHTTP(httptest.NewRecorder(), req)
+			if gotKind != c.wantKind {
+				t.Errorf("client_kind = %q, want %q", gotKind, c.wantKind)
+			}
+			if gotBucket != c.wantBucket {
+				t.Errorf("client_bucket = %q, want %q", gotBucket, c.wantBucket)
+			}
+		})
+	}
+}
+
+func TestClientBucketFromContext_Default(t *testing.T) {
+	if got := ClientBucketFromContext(context.Background()); got != types.ClientBucketOther {
+		t.Errorf("ClientBucketFromContext(empty) = %q, want %q", got, types.ClientBucketOther)
 	}
 }

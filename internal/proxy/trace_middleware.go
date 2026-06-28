@@ -20,6 +20,7 @@ const (
 	ctxTraceID              contextKey = "trace_id"
 	ctxTraceSource          contextKey = "trace_source"
 	ctxClientKind           contextKey = "client_kind"
+	ctxClientBucket         contextKey = "client_bucket"
 	ctxClaudeAgentSDKSource contextKey = "claude_agent_sdk_source"
 )
 
@@ -112,6 +113,18 @@ func ClientKindFromContext(ctx context.Context) string {
 	return types.ClientKindUnknown
 }
 
+// ClientBucketFromContext returns the 5-value ClientBucket classification
+// derived by the trace middleware from ClientKindFromContext. Callers
+// that run outside the trace middleware (or in tests that don't set it)
+// see ClientBucketOther as a defensive default — never propagate a
+// misleading bucket if the upstream wiring drops.
+func ClientBucketFromContext(ctx context.Context) string {
+	if b, ok := ctx.Value(ctxClientBucket).(string); ok {
+		return b
+	}
+	return types.ClientBucketOther
+}
+
 // TraceMiddleware extracts trace IDs from multiple sources and, when one is
 // found, ensures a corresponding row exists in the traces table before any
 // downstream middleware runs. That matters for the FK on requests.trace_id:
@@ -159,6 +172,7 @@ func TraceMiddleware(traceCfg config.TraceConfig, st *store.Store, logger *slog.
 			// still be classified as claude-code for subscription-eligibility).
 			kind, sdkSource := deriveClientKind(r, traceCfg)
 			ctx = context.WithValue(ctx, ctxClientKind, kind)
+			ctx = context.WithValue(ctx, ctxClientBucket, types.MapClientKindToBucket(kind))
 			if sdkSource != "" {
 				ctx = context.WithValue(ctx, ctxClaudeAgentSDKSource, sdkSource)
 			}

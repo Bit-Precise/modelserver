@@ -191,3 +191,131 @@ func TestCreditRuleEffectiveScope(t *testing.T) {
 		t.Errorf("explicit key scope should stay key, got %s", r2.EffectiveScope())
 	}
 }
+
+func TestComputeCreditsForClient_FallbackOrder(t *testing.T) {
+	clientOverride := CreditRate{InputRate: 0.1, OutputRate: 0.5}
+	planOverride := CreditRate{InputRate: 1, OutputRate: 5}
+	catalogDef := CreditRate{InputRate: 10, OutputRate: 50}
+	planDefault := CreditRate{InputRate: 100, OutputRate: 500}
+
+	tests := []struct {
+		name           string
+		policy         *RateLimitPolicy
+		client         string
+		catalog        *CreditRate
+		expectedInput  float64
+		expectedOutput float64
+	}{
+		{
+			name: "client-model override wins (step 1)",
+			policy: &RateLimitPolicy{
+				ClientModelCreditRates: map[string]map[string]CreditRate{
+					"claude-code-cli": {"m": clientOverride},
+				},
+				ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: &catalogDef,
+			expectedInput: clientOverride.InputRate, expectedOutput: clientOverride.OutputRate,
+		},
+		{
+			name: "plan model override (step 2 — different client)",
+			policy: &RateLimitPolicy{
+				ClientModelCreditRates: map[string]map[string]CreditRate{
+					"claude-code-cli": {"m": clientOverride},
+				},
+				ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+			},
+			client: "codex-cli", catalog: &catalogDef,
+			expectedInput: planOverride.InputRate, expectedOutput: planOverride.OutputRate,
+		},
+		{
+			name: "plan model override (step 2 — client absent from outer map)",
+			policy: &RateLimitPolicy{
+				ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: &catalogDef,
+			expectedInput: planOverride.InputRate, expectedOutput: planOverride.OutputRate,
+		},
+		{
+			name: "plan model override (step 2 — client present but model absent)",
+			policy: &RateLimitPolicy{
+				ClientModelCreditRates: map[string]map[string]CreditRate{
+					"claude-code-cli": {"other-model": clientOverride},
+				},
+				ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: &catalogDef,
+			expectedInput: planOverride.InputRate, expectedOutput: planOverride.OutputRate,
+		},
+		{
+			name: "catalog default (step 3 — no plan overrides)",
+			policy: &RateLimitPolicy{
+				ModelCreditRates: map[string]CreditRate{"_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: &catalogDef,
+			expectedInput: catalogDef.InputRate, expectedOutput: catalogDef.OutputRate,
+		},
+		{
+			name: "plan _default (step 4 — no catalog default)",
+			policy: &RateLimitPolicy{
+				ModelCreditRates: map[string]CreditRate{"_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: nil,
+			expectedInput: planDefault.InputRate, expectedOutput: planDefault.OutputRate,
+		},
+		{
+			name:          "zero (step 5 — nothing matches)",
+			policy:        &RateLimitPolicy{},
+			client:        "claude-code-cli", catalog: nil,
+			expectedInput: 0, expectedOutput: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.policy.ComputeCreditsForClient("m", tt.client, tt.catalog, 1000, 500, 0, 0)
+			want := tt.expectedInput*1000 + tt.expectedOutput*500
+			if math.Abs(got-want) > 0.001 {
+				t.Errorf("ComputeCreditsForClient = %f, want %f", got, want)
+			}
+		})
+	}
+}
+
+func TestComputeCreditsWithDefault_BackwardCompat(t *testing.T) {
+	planOverride := CreditRate{InputRate: 1, OutputRate: 5, CacheCreationRate: 0.5, CacheReadRate: 0.1}
+	catalogDef := CreditRate{InputRate: 10, OutputRate: 50}
+	planDefault := CreditRate{InputRate: 100, OutputRate: 500}
+
+	policy := &RateLimitPolicy{
+		ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+		// ClientModelCreditRates intentionally absent.
+	}
+
+	cases := []struct {
+		model           string
+		in, out, cw, cr int64
+		expectedFromLegacy float64
+	}{
+		{"m", 1000, 500, 200, 100,
+			planOverride.InputRate*1000 + planOverride.OutputRate*500 + planOverride.CacheCreationRate*200 + planOverride.CacheReadRate*100},
+		{"unknown", 1000, 500, 0, 0,
+			catalogDef.InputRate*1000 + catalogDef.OutputRate*500},
+	}
+
+	for _, c := range cases {
+		want := c.expectedFromLegacy
+		gotLegacy := policy.ComputeCreditsWithDefault(c.model, &catalogDef, c.in, c.out, c.cw, c.cr)
+		if math.Abs(gotLegacy-want) > 0.001 {
+			t.Errorf("ComputeCreditsWithDefault(%s) = %f, want %f", c.model, gotLegacy, want)
+		}
+		gotNew := policy.ComputeCreditsForClient(c.model, "", &catalogDef, c.in, c.out, c.cw, c.cr)
+		if math.Abs(gotNew-want) > 0.001 {
+			t.Errorf("ComputeCreditsForClient(%s, \"\") = %f, want %f", c.model, gotNew, want)
+		}
+		gotAnyClient := policy.ComputeCreditsForClient(c.model, "claude-code-cli", &catalogDef, c.in, c.out, c.cw, c.cr)
+		if math.Abs(gotAnyClient-want) > 0.001 {
+			t.Errorf("ComputeCreditsForClient(%s, \"claude-code-cli\") with absent client map = %f, want %f", c.model, gotAnyClient, want)
+		}
+	}
+}
