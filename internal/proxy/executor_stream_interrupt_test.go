@@ -16,8 +16,7 @@ import (
 // the function does and asserting on them.
 //
 // We exercise the production code path indirectly through the helper
-// buildInterruptRequestFields (extracted in step 5.2), avoiding a fake
-// store roundtrip.
+// requestStatusFromMetrics, avoiding a fake store roundtrip.
 func TestCompleteStreamingRequest_InterruptSetsError(t *testing.T) {
 	metrics := StreamMetrics{
 		Model:        "claude-opus-4-8",
