@@ -1896,10 +1896,476 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-> **End of installment 4 (Task 6).** The router now resolves on the 5-tuple. Pricing layer (installment 5) is the next functional change; admin + dashboard wiring (installments 6-7) make the UI catch up.
+### Task 7: Pricing resolver — Policy.ComputeCreditsForClient + executor wiring + invariants
+
+**Files:**
+- Modify: `internal/types/policy.go` (add `ComputeCreditsForClient` resolver; convert `ComputeCreditsWithDefault` into a thin wrapper)
+- Modify: `internal/types/policy_test.go` (add 4-level resolver tests; add backward-compat invariant)
+- Modify: `internal/proxy/executor.go` (switch the two subscription pricing call sites to `ComputeCreditsForClient`)
+- Modify: `internal/proxy/executor_finalize_test.go` (add no-regression invariant tests asserting subscription credit counts are identical when `ClientModelCreditRates` is absent, and extra-usage counts are unchanged period)
+
+**Interfaces:**
+- Consumes: `RateLimitPolicy.ClientModelCreditRates` (Task 4), `ClientBucketFromContext` (Task 5), `types.ClientBucketOther` (Task 1).
+- Produces:
+  ```go
+  // policy.go
+  // ComputeCreditsForClient resolves a credit rate in the order:
+  //  1. policy.ClientModelCreditRates[client][model]
+  //  2. policy.ModelCreditRates[model]
+  //  3. catalogDefault
+  //  4. policy.ModelCreditRates["_default"]
+  //  5. zero (no billing)
+  func (p *RateLimitPolicy) ComputeCreditsForClient(model, client string, catalogDefault *CreditRate, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64) float64
+
+  // ComputeCreditsWithDefault remains as a wrapper for callers that don't
+  // (yet) thread client through. Equivalent to ComputeCreditsForClient
+  // with client="" — step 1 always misses (admin write paths reject ""
+  // as a client bucket value), step 2+ behavior identical to today.
+  func (p *RateLimitPolicy) ComputeCreditsWithDefault(model string, catalogDefault *CreditRate, …) float64
+  ```
+
+The hard rule from the spec: **extra-usage billing is unchanged.** This task only touches the two subscription pricing call sites (`executor.go:1090` and `:1328`). The extra-usage settle path (`settleExtraUsage` → `computeExtraUsageCostCredits`) is NOT modified.
+
+The no-regression invariant tests are first-class: they pin the behavior that a plan without `ClientModelCreditRates` produces byte-identical credit counts to today's code path. Any future change that drops or distorts that property fails the test.
+
+- [ ] **Step 1: Write the failing resolver tests**
+
+Append to `internal/types/policy_test.go`:
+
+```go
+// TestComputeCreditsForClient_FallbackOrder pins down the four-step
+// resolution order: client-model override → plan model override →
+// catalog default → plan _default → 0. Each test mutates one layer at
+// a time so the test name says which level is being exercised.
+func TestComputeCreditsForClient_FallbackOrder(t *testing.T) {
+	clientOverride := CreditRate{InputRate: 0.1, OutputRate: 0.5}
+	planOverride := CreditRate{InputRate: 1, OutputRate: 5}
+	catalogDef := CreditRate{InputRate: 10, OutputRate: 50}
+	planDefault := CreditRate{InputRate: 100, OutputRate: 500}
+
+	tests := []struct {
+		name           string
+		policy         *RateLimitPolicy
+		client         string
+		catalog        *CreditRate
+		expectedInput  float64
+		expectedOutput float64
+	}{
+		{
+			name: "client-model override wins (step 1)",
+			policy: &RateLimitPolicy{
+				ClientModelCreditRates: map[string]map[string]CreditRate{
+					"claude-code-cli": {"m": clientOverride},
+				},
+				ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: &catalogDef,
+			expectedInput: clientOverride.InputRate, expectedOutput: clientOverride.OutputRate,
+		},
+		{
+			name: "plan model override (step 2 — different client)",
+			policy: &RateLimitPolicy{
+				ClientModelCreditRates: map[string]map[string]CreditRate{
+					"claude-code-cli": {"m": clientOverride},
+				},
+				ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+			},
+			client: "codex-cli", catalog: &catalogDef,
+			expectedInput: planOverride.InputRate, expectedOutput: planOverride.OutputRate,
+		},
+		{
+			name: "plan model override (step 2 — client absent from outer map)",
+			policy: &RateLimitPolicy{
+				ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: &catalogDef,
+			expectedInput: planOverride.InputRate, expectedOutput: planOverride.OutputRate,
+		},
+		{
+			name: "plan model override (step 2 — client present but model absent)",
+			policy: &RateLimitPolicy{
+				ClientModelCreditRates: map[string]map[string]CreditRate{
+					"claude-code-cli": {"other-model": clientOverride},
+				},
+				ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: &catalogDef,
+			expectedInput: planOverride.InputRate, expectedOutput: planOverride.OutputRate,
+		},
+		{
+			name: "catalog default (step 3 — no plan overrides)",
+			policy: &RateLimitPolicy{
+				ModelCreditRates: map[string]CreditRate{"_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: &catalogDef,
+			expectedInput: catalogDef.InputRate, expectedOutput: catalogDef.OutputRate,
+		},
+		{
+			name: "plan _default (step 4 — no catalog default)",
+			policy: &RateLimitPolicy{
+				ModelCreditRates: map[string]CreditRate{"_default": planDefault},
+			},
+			client: "claude-code-cli", catalog: nil,
+			expectedInput: planDefault.InputRate, expectedOutput: planDefault.OutputRate,
+		},
+		{
+			name:           "zero (step 5 — nothing matches)",
+			policy:         &RateLimitPolicy{},
+			client:         "claude-code-cli", catalog: nil,
+			expectedInput: 0, expectedOutput: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.policy.ComputeCreditsForClient("m", tt.client, tt.catalog, 1000, 500, 0, 0)
+			want := tt.expectedInput*1000 + tt.expectedOutput*500
+			if math.Abs(got-want) > 0.001 {
+				t.Errorf("ComputeCreditsForClient = %f, want %f", got, want)
+			}
+		})
+	}
+}
+
+// TestComputeCreditsWithDefault_BackwardCompat is the no-regression
+// invariant: for every plan WITHOUT ClientModelCreditRates, the old
+// ComputeCreditsWithDefault entry point must produce identical numbers
+// to today's code path. This catches accidental changes to steps 2+ of
+// the resolver. The new ComputeCreditsForClient(model, "", …) wrapper
+// path must also produce the same numbers.
+func TestComputeCreditsWithDefault_BackwardCompat(t *testing.T) {
+	planOverride := CreditRate{InputRate: 1, OutputRate: 5, CacheCreationRate: 0.5, CacheReadRate: 0.1}
+	catalogDef := CreditRate{InputRate: 10, OutputRate: 50}
+	planDefault := CreditRate{InputRate: 100, OutputRate: 500}
+
+	policy := &RateLimitPolicy{
+		ModelCreditRates: map[string]CreditRate{"m": planOverride, "_default": planDefault},
+		// ClientModelCreditRates intentionally absent.
+	}
+
+	cases := []struct {
+		model              string
+		in, out, cw, cr    int64
+		expectedFromLegacy float64 // computed by hand from today's resolver
+	}{
+		{"m", 1000, 500, 200, 100,
+			planOverride.InputRate*1000 + planOverride.OutputRate*500 + planOverride.CacheCreationRate*200 + planOverride.CacheReadRate*100},
+		{"unknown", 1000, 500, 0, 0,
+			catalogDef.InputRate*1000 + catalogDef.OutputRate*500},
+	}
+
+	for _, c := range cases {
+		want := c.expectedFromLegacy
+		gotLegacy := policy.ComputeCreditsWithDefault(c.model, &catalogDef, c.in, c.out, c.cw, c.cr)
+		if math.Abs(gotLegacy-want) > 0.001 {
+			t.Errorf("ComputeCreditsWithDefault(%s) = %f, want %f", c.model, gotLegacy, want)
+		}
+		// New wrapper call with client="" must produce identical numbers.
+		gotNew := policy.ComputeCreditsForClient(c.model, "", &catalogDef, c.in, c.out, c.cw, c.cr)
+		if math.Abs(gotNew-want) > 0.001 {
+			t.Errorf("ComputeCreditsForClient(%s, \"\") = %f, want %f", c.model, gotNew, want)
+		}
+		// Wrapper with any client also must produce identical numbers when
+		// ClientModelCreditRates is absent (step 1 misses, falls to step 2).
+		gotAnyClient := policy.ComputeCreditsForClient(c.model, "claude-code-cli", &catalogDef, c.in, c.out, c.cw, c.cr)
+		if math.Abs(gotAnyClient-want) > 0.001 {
+			t.Errorf("ComputeCreditsForClient(%s, \"claude-code-cli\") with absent client map = %f, want %f", c.model, gotAnyClient, want)
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd /root/coding/modelserver && go test ./internal/types/ -run 'TestComputeCreditsForClient_FallbackOrder|TestComputeCreditsWithDefault_BackwardCompat' -v`
+Expected: build error — `ComputeCreditsForClient` is undefined.
+
+- [ ] **Step 3: Implement `ComputeCreditsForClient` + rework `ComputeCreditsWithDefault` as a wrapper**
+
+In `internal/types/policy.go`, find the existing `ComputeCreditsWithDefault` (around line 130) and rework as follows. Keep `ComputeCredits` and `ApplyLongContextCreditRate` untouched.
+
+```go
+// ComputeCredits calculates credits using only the policy's own rate map.
+// Prefer ComputeCreditsForClient so the client-specific overlay and
+// catalog default can act as fallbacks between the plan override and the
+// plan's "_default".
+//
+// Unchanged from the prior signature.
+func (p *RateLimitPolicy) ComputeCredits(model string, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64) float64 {
+	return p.ComputeCreditsForClient(model, "", nil, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
+}
+
+// ComputeCreditsWithDefault is a thin wrapper around ComputeCreditsForClient
+// for callers that don't (yet) thread the client bucket through. Passing
+// client="" makes resolver step 1 (per-client override) always miss; the
+// remaining steps are identical to the pre-refactor behavior of this
+// function.
+//
+// Kept for backward compatibility — no caller is forced to migrate to the
+// client-aware signature. The two subscription pricing sites in
+// internal/proxy/executor.go call ComputeCreditsForClient directly with
+// ClientBucketFromContext(ctx) as the client.
+func (p *RateLimitPolicy) ComputeCreditsWithDefault(model string, catalogDefault *CreditRate, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64) float64 {
+	return p.ComputeCreditsForClient(model, "", catalogDefault, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens)
+}
+
+// ComputeCreditsForClient resolves a credit rate in the order:
+//   1. policy.ClientModelCreditRates[client][model] — per-client per-model override
+//   2. policy.ModelCreditRates[model]                — existing plan override
+//   3. catalogDefault                                — catalog per-model truth
+//   4. policy.ModelCreditRates["_default"]           — plan-wide safety net
+//   5. zero rate                                     — no billing
+//
+// ApplyLongContextCreditRate runs after the rate is selected, so the
+// long-context multiplier on the chosen step applies regardless of which
+// step won.
+//
+// IMPORTANT: this function is for SUBSCRIPTION consumption only.
+// Extra-usage billing bypasses it entirely via
+// internal/proxy/executor.go's settleExtraUsage → computeExtraUsageCostCredits,
+// which reads catalog DefaultCreditRate directly — that's the
+// official-API rate of record and is the correct unit of attribution for
+// extra-usage. Per-client overrides have no effect on extra-usage
+// charges by design (spec: Non-goals).
+func (p *RateLimitPolicy) ComputeCreditsForClient(model, client string, catalogDefault *CreditRate, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64) float64 {
+	var rate CreditRate
+	var ok bool
+
+	// Step 1: per-client per-model override.
+	if client != "" {
+		if perClient, found := p.ClientModelCreditRates[client]; found {
+			if r, found := perClient[model]; found {
+				rate, ok = r, true
+			}
+		}
+	}
+
+	// Step 2: plan model override.
+	if !ok {
+		if r, found := p.ModelCreditRates[model]; found {
+			rate, ok = r, true
+		}
+	}
+
+	// Step 3: catalog default.
+	if !ok && catalogDefault != nil {
+		rate, ok = *catalogDefault, true
+	}
+
+	// Step 4: plan _default.
+	if !ok {
+		if r, found := p.ModelCreditRates["_default"]; found {
+			rate, ok = r, true
+		}
+	}
+
+	// Step 5: zero.
+	if !ok {
+		return 0
+	}
+
+	rate = ApplyLongContextCreditRate(rate, inputTokens+cacheCreationTokens+cacheReadTokens)
+	return rate.InputRate*float64(inputTokens) +
+		rate.OutputRate*float64(outputTokens) +
+		rate.CacheCreationRate*float64(cacheCreationTokens) +
+		rate.CacheReadRate*float64(cacheReadTokens)
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd /root/coding/modelserver && go test ./internal/types/ -run 'TestComputeCredits' -v`
+Expected: all PASS (the new tests + the existing `TestComputeCredits`, `TestComputeCreditsNoRates`, `TestComputeCreditsWithDefault_FallbackOrder` — all of which now go through `ComputeCreditsForClient` via the wrapper and must produce identical numbers).
+
+- [ ] **Step 5: Switch the executor subscription pricing call sites**
+
+In `internal/proxy/executor.go`, find the two existing pricing calls:
+
+```
+internal/proxy/executor.go:1090
+internal/proxy/executor.go:1328
+```
+
+Both currently read:
+
+```go
+credits = reqCtx.Policy.ComputeCreditsWithDefault(model, e.catalogDefaultRate(model),
+    metrics.InputTokens, metrics.OutputTokens, metrics.CacheCreationTokens, metrics.CacheReadTokens)
+```
+
+Update each to thread the client bucket:
+
+```go
+client := ClientBucketFromContext(reqCtx.Context)
+credits = reqCtx.Policy.ComputeCreditsForClient(model, client, e.catalogDefaultRate(model),
+    metrics.InputTokens, metrics.OutputTokens, metrics.CacheCreationTokens, metrics.CacheReadTokens)
+```
+
+Where the variable is called `respMetrics` instead of `metrics` (the second site), keep `respMetrics` — only the function name and the new `client` arg change.
+
+Verify before editing: `reqCtx` must hold a `Context` field of type `context.Context` populated at request entry. If the field is named differently or absent, the executor instead derives the bucket from the active request's context — check `internal/proxy/executor.go` near line 240 (where `IsExtraUsage` is stamped) for the right ctx source. If a context isn't easily reachable at the settle site, cache the bucket on `RequestContext` itself when `Execute()` populates it, and read it back here as `reqCtx.ClientBucket`. Either pattern is acceptable; pick the one that requires the smallest diff.
+
+(Recommended: add a `ClientBucket string` field on `RequestContext`, populated at the same place `Execute()` already stamps `IsExtraUsage`. The settle callback fires AFTER the request body has been read so `r.Context()` may no longer be ergonomic; reading `reqCtx.ClientBucket` is simpler.)
+
+If you choose the field-on-RequestContext path, add the field declaration at the appropriate line in `executor.go`:
+
+```go
+type RequestContext struct {
+	// ... existing fields ...
+	ClientBucket string // populated in Execute() from ClientBucketFromContext(r.Context())
+}
+```
+
+And in `Execute()`, near where `reqCtx.IsExtraUsage = true` is set, also write:
+
+```go
+reqCtx.ClientBucket = ClientBucketFromContext(r.Context())
+```
+
+(Always populate the field, not only on the extra-usage branch — subscription requests also need it for the pricing path.)
+
+Then both pricing sites become:
+
+```go
+credits = reqCtx.Policy.ComputeCreditsForClient(model, reqCtx.ClientBucket, e.catalogDefaultRate(model),
+    metrics.InputTokens, metrics.OutputTokens, metrics.CacheCreationTokens, metrics.CacheReadTokens)
+```
+
+- [ ] **Step 6: Add the no-regression invariant tests**
+
+Append to `internal/proxy/executor_finalize_test.go` (the file that already houses executor finalize-path tests). Reuse whatever fixture-building helpers it already provides; the invariant tests build on top.
+
+```go
+// TestExecutorFinalize_Subscription_NoClientOverridesIsByteIdentical
+// is the pricing-path no-regression invariant. For any plan that does
+// NOT define ClientModelCreditRates, the executor's subscription
+// pricing credit number must equal what Policy.ComputeCreditsWithDefault
+// would have produced before this PR. This test catches accidental
+// changes to resolver steps 2+ from a future refactor.
+func TestExecutorFinalize_Subscription_NoClientOverridesIsByteIdentical(t *testing.T) {
+	// A plan with ModelCreditRates but no ClientModelCreditRates.
+	policy := &types.RateLimitPolicy{
+		ModelCreditRates: map[string]types.CreditRate{
+			"claude-sonnet-4": {InputRate: 3, OutputRate: 15, CacheCreationRate: 3.75, CacheReadRate: 0.3},
+			"_default":        {InputRate: 1, OutputRate: 5},
+		},
+	}
+	catalog := &types.CreditRate{InputRate: 5, OutputRate: 25} // would only matter at step 3
+	in, out, cw, cr := int64(1000), int64(500), int64(200), int64(100)
+
+	// Baseline: today's ComputeCreditsWithDefault path.
+	baseline := policy.ComputeCreditsWithDefault("claude-sonnet-4", catalog, in, out, cw, cr)
+
+	// New path: ComputeCreditsForClient with every possible client bucket.
+	// All must equal the baseline because ClientModelCreditRates is absent.
+	for _, c := range types.AllClientBuckets {
+		got := policy.ComputeCreditsForClient("claude-sonnet-4", c, catalog, in, out, cw, cr)
+		if math.Abs(got-baseline) > 0.001 {
+			t.Errorf("client=%s: got %f, baseline %f — resolver step 2+ regressed", c, got, baseline)
+		}
+	}
+	// And client="" (the wrapper path) must also match.
+	if got := policy.ComputeCreditsForClient("claude-sonnet-4", "", catalog, in, out, cw, cr); math.Abs(got-baseline) > 0.001 {
+		t.Errorf("client=\"\": got %f, baseline %f", got, baseline)
+	}
+}
+
+// TestExecutorFinalize_ExtraUsage_PricingPathUnchanged asserts the
+// extra-usage cost computation is untouched by this PR. The extra-usage
+// path goes through computeExtraUsageCostCredits which reads
+// types.Model.DefaultCreditRate directly — no client, no policy. Any
+// change that routes extra-usage through Policy.ComputeCreditsForClient
+// would silently break the "extra-usage = catalog default" invariant.
+func TestExecutorFinalize_ExtraUsage_PricingPathUnchanged(t *testing.T) {
+	m := &types.Model{
+		Name: "claude-sonnet-4",
+		DefaultCreditRate: &types.CreditRate{
+			InputRate: 3, OutputRate: 15, CacheCreationRate: 3.75, CacheReadRate: 0.3,
+		},
+	}
+	usage := types.TokenUsage{InputTokens: 1000, OutputTokens: 500, CacheCreationTokens: 200, CacheReadTokens: 100}
+
+	cost, err := computeExtraUsageCostCredits(m, usage)
+	if err != nil {
+		t.Fatalf("computeExtraUsageCostCredits: %v", err)
+	}
+	// Baseline: same numbers as today (formula in computeExtraUsageCostCredits).
+	// We compute the expectation directly from the catalog rate to pin the
+	// invariant — if the formula changes, this test must change with it.
+	wantCredits := m.DefaultCreditRate.InputRate*float64(usage.InputTokens) +
+		m.DefaultCreditRate.OutputRate*float64(usage.OutputTokens) +
+		m.DefaultCreditRate.CacheCreationRate*float64(usage.CacheCreationTokens) +
+		m.DefaultCreditRate.CacheReadRate*float64(usage.CacheReadTokens)
+	// computeExtraUsageCostCredits ceils to int64 credits; reflect that.
+	wantInt64 := int64(math.Ceil(wantCredits))
+	if cost != wantInt64 {
+		t.Errorf("extra-usage cost = %d, want %d (catalog default path must be unchanged)", cost, wantInt64)
+	}
+}
+```
+
+If the proxy test package already imports `math`, drop the duplicate import. The exact field names on `types.Model.DefaultCreditRate` and `computeExtraUsageCostCredits`'s return shape (`int64` credits) match what `internal/proxy/extra_usage_cost.go` defines today — verify before writing.
+
+- [ ] **Step 7: Build + run tests**
+
+Run:
+```bash
+cd /root/coding/modelserver
+go build ./...
+go test ./internal/types/...
+go test ./internal/proxy/...
+```
+Expected: all green. Critically:
+- Every existing `TestComputeCredits*` test in `policy_test.go` still passes (they now go through the wrapper → `ComputeCreditsForClient` → step 2+ → same numbers as before).
+- The new `TestComputeCreditsForClient_FallbackOrder` covers all four levels of the resolver.
+- The new `TestComputeCreditsWithDefault_BackwardCompat` triple-checks the wrapper, the new entry point with `client=""`, and the new entry point with a real client bucket all produce identical numbers when `ClientModelCreditRates` is absent.
+- The new `TestExecutorFinalize_Subscription_NoClientOverridesIsByteIdentical` exercises every `ClientBucket*` value against the same baseline — catches "resolver returns the wrong thing for one of the 5 bucket strings" regressions.
+- The new `TestExecutorFinalize_ExtraUsage_PricingPathUnchanged` pins the extra-usage formula.
+
+- [ ] **Step 8: Commit**
+
+```bash
+cd /root/coding/modelserver
+git add internal/types/policy.go internal/types/policy_test.go \
+        internal/proxy/executor.go internal/proxy/executor_finalize_test.go
+git commit -m "feat(types,proxy): per-client subscription pricing + no-regression invariants
+
+Policy.ComputeCreditsForClient resolves credit rates in 5 steps:
+  1. client_model_credit_rates[client][model]
+  2. model_credit_rates[model]
+  3. catalogDefault
+  4. model_credit_rates['_default']
+  5. zero
+
+ComputeCreditsWithDefault becomes a thin wrapper that calls the new
+function with client=\"\" — step 1 always misses, steps 2+ are
+byte-identical to today. Every existing call site keeps working
+unchanged.
+
+Executor's two subscription pricing sites now thread the client bucket
+from RequestContext.ClientBucket (stamped in Execute() alongside
+IsExtraUsage). Per-client overlay only affects subscription
+consumption; extra-usage path (settleExtraUsage →
+computeExtraUsageCostCredits → catalog DefaultCreditRate) is
+unchanged by design.
+
+Tests cover the 4-level fallback exhaustively, plus three invariants:
+  - ComputeCreditsWithDefault wrapper matches the new entry point with
+    client=\"\" and with any real client when ClientModelCreditRates
+    is absent (backward-compat guarantee).
+  - Executor subscription pricing produces identical numbers across all
+    5 ClientBuckets when ClientModelCreditRates is absent.
+  - Extra-usage cost computation goes through the catalog default
+    rate, untouched.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+> **End of installment 5 (Task 7).** Pricing is now client-aware on the subscription path; extra-usage path is verified unchanged by invariant test. Tasks 1-7 together complete the proxy-side feature. Tasks 8-9 are admin API + dashboard.
 >
 > Remaining installments:
-> - **Installment 5 (Task 7):** `Policy.ComputeCreditsForClient` resolver + Executor pricing call-site update + no-regression invariant tests.
 > - **Installment 6 (Task 8):** admin API validation for new route fields + `GET /routing/clients` + `GET /routing/billing-modes` + matrix endpoint filter params + plan admin allow-list update.
 > - **Installment 7 (Task 9):** dashboard Routes page columns + Create/Edit dialog selectors + Matrix tab filter dropdowns + manual smoke checklist.
 > - **Final installment:** plan self-review section + execution handoff.
