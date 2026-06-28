@@ -507,12 +507,519 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-> **End of installment 1 (Tasks 1-2).** The plan continues with:
-> - Task 3: Migration 057 + test (plans.client_model_credit_rates)
-> - Task 4: types.Route, types.Plan, store load/save wiring
-> - Task 5: trace middleware ctxClientBucket plumbing
-> - Task 6: Router.Match signature + weighted specificity + MatrixGlobal extension + tests
-> - Task 7: Policy.ComputeCreditsForClient + Executor pricing call sites + invariant tests
-> - Task 8: Admin API validation + new GET endpoints + matrix filters
-> - Task 9: Dashboard Routes page + Matrix tab UI
+### Task 3: Migration 057 — plans.client_model_credit_rates
+
+**Files:**
+- Create: `internal/store/migrations/057_plan_client_credit_rates.sql`
+- Create: `internal/store/migrations_057_test.go`
+
+**Interfaces:**
+- Consumes: existing `plans` table schema. The plan row already carries a sibling `model_credit_rates JSONB` column (verified at `internal/store/migrations/001_init.sql:95` and `:184`); 057 adds the parallel client-keyed column.
+- Produces: new column `plans.client_model_credit_rates JSONB` (nullable). Subsequent tasks (`types.Plan` field + `internal/store/plans.go` upsert/select extension + `Plan.ToPolicy` carryover + `Policy.ComputeCreditsForClient` resolver) consume this column.
+
+- [ ] **Step 1: Write the SQL**
+
+Create `internal/store/migrations/057_plan_client_credit_rates.sql`:
+
+```sql
+-- 057_plan_client_credit_rates.sql
+--
+-- Per-client per-model credit rate overlay for subscription consumption.
+-- Shape (JSON object indexed by client bucket, then model name):
+--
+--   {
+--     "claude-code-cli": {
+--       "claude-sonnet-4": { "input_rate": 3, "output_rate": 15, ... },
+--       "claude-opus-4":   { "input_rate": 15, "output_rate": 75, ... }
+--     },
+--     "codex-cli": {
+--       "gpt-5":           { "input_rate": 0.5, "output_rate": 4 }
+--     }
+--   }
+--
+-- Resolution order at runtime (Policy.ComputeCreditsForClient):
+--   1. client_model_credit_rates[client][model]   (this column)
+--   2. model_credit_rates[model]                  (existing column)
+--   3. catalog model.default_credit_rate           (catalog truth)
+--   4. model_credit_rates["_default"]              (plan-wide safety net)
+--   5. zero (no billing)
+--
+-- Extra-usage requests do NOT consult this column — they bill at the
+-- catalog default rate via computeExtraUsageCostCredits.
+--
+-- Default NULL on existing rows. NULL is treated as "no overrides" by
+-- the resolver. Idempotent via IF NOT EXISTS. No down step.
+
+ALTER TABLE plans
+    ADD COLUMN IF NOT EXISTS client_model_credit_rates JSONB;
+```
+
+- [ ] **Step 2: Write the migration test**
+
+Create `internal/store/migrations_057_test.go`:
+
+```go
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+)
+
+// TestMigration057_AddsPlanClientRatesColumnNullByDefault asserts the
+// migration adds client_model_credit_rates as a nullable JSONB, leaves
+// existing rows with NULL, and round-trips a populated JSON object.
+func TestMigration057_AddsPlanClientRatesColumnNullByDefault(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	// Seed a plan using ONLY the pre-057 columns. The new column must
+	// accept the row via its NULL default.
+	var planID string
+	if err := st.pool.QueryRow(ctx, `
+		INSERT INTO plans (name, slug, display_name, description, tier_level,
+		    price_cny_fen, period_months, is_active)
+		VALUES ('mig057-test', 'mig057-test', 'Migration 057 Test', '', 0,
+		        0, 1, FALSE)
+		RETURNING id`).Scan(&planID); err != nil {
+		t.Fatalf("seed old-style plan: %v", err)
+	}
+
+	// Read the new column back; expect NULL.
+	var raw []byte
+	if err := st.pool.QueryRow(ctx,
+		`SELECT client_model_credit_rates FROM plans WHERE id = $1`, planID).
+		Scan(&raw); err != nil {
+		t.Fatalf("select new column: %v", err)
+	}
+	if raw != nil {
+		t.Errorf("default client_model_credit_rates = %q, want NULL", raw)
+	}
+
+	// Populate with a realistic shape and assert it round-trips.
+	want := map[string]map[string]map[string]float64{
+		"claude-code-cli": {
+			"claude-sonnet-4": {"input_rate": 3, "output_rate": 15},
+		},
+		"codex-cli": {
+			"gpt-5": {"input_rate": 0.5, "output_rate": 4},
+		},
+	}
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal want: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx,
+		`UPDATE plans SET client_model_credit_rates = $1 WHERE id = $2`,
+		wantJSON, planID); err != nil {
+		t.Fatalf("populate column: %v", err)
+	}
+	if err := st.pool.QueryRow(ctx,
+		`SELECT client_model_credit_rates FROM plans WHERE id = $1`, planID).
+		Scan(&raw); err != nil {
+		t.Fatalf("select populated column: %v", err)
+	}
+	var got map[string]map[string]map[string]float64
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal got: %v", err)
+	}
+	for client, models := range want {
+		gm, ok := got[client]
+		if !ok {
+			t.Errorf("got missing client %q", client)
+			continue
+		}
+		for model, rates := range models {
+			gr, ok := gm[model]
+			if !ok {
+				t.Errorf("got[%q] missing model %q", client, model)
+				continue
+			}
+			for field, v := range rates {
+				if gr[field] != v {
+					t.Errorf("got[%q][%q][%q] = %v, want %v",
+						client, model, field, gr[field], v)
+				}
+			}
+		}
+	}
+}
+
+// TestMigration057_Idempotent asserts re-running the migration is a no-op.
+func TestMigration057_Idempotent(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	if _, err := st.pool.Exec(ctx,
+		`ALTER TABLE plans ADD COLUMN IF NOT EXISTS client_model_credit_rates JSONB`); err != nil {
+		t.Fatalf("re-run migration: %v", err)
+	}
+}
+```
+
+- [ ] **Step 3: Run the migration test**
+
+Run: `cd /root/coding/modelserver && TEST_DATABASE_URL=$TEST_DATABASE_URL go test ./internal/store/ -run TestMigration057 -v`
+Expected: SKIP without `TEST_DATABASE_URL`; PASS with it.
+
+- [ ] **Step 4: Run the full store package**
+
+Run: `cd /root/coding/modelserver && go test ./internal/store/...`
+Expected: PASS (skips fine).
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /root/coding/modelserver
+git add internal/store/migrations/057_plan_client_credit_rates.sql internal/store/migrations_057_test.go
+git commit -m "feat(store): migration 057 — plans.client_model_credit_rates JSONB
+
+Adds a nullable JSONB column for per-client per-model credit-rate
+overlays on subscription consumption. Resolution order (in
+Policy.ComputeCreditsForClient, landing in a later task):
+  client_model_credit_rates[client][model]
+    -> model_credit_rates[model]
+    -> catalog model.default_credit_rate
+    -> model_credit_rates['_default']
+    -> zero
+
+Extra-usage requests bypass this column entirely — they bill at the
+catalog default rate via computeExtraUsageCostCredits.
+
+Idempotent via IF NOT EXISTS; no down step.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 4: types.Route + types.Plan + store load/save wiring
+
+**Files:**
+- Modify: `internal/types/route.go` (add `Clients`, `BillingModes` fields)
+- Modify: `internal/types/plan.go` (add `ClientModelCreditRates` field + thread through `ToPolicy`)
+- Modify: `internal/types/policy.go` (add `ClientModelCreditRates` field on `RateLimitPolicy`)
+- Modify: `internal/store/routes.go` (extend `routeSelectCols`, `CreateRoute`, `scanRoute`, `GetRouteByID`)
+- Modify: `internal/store/plans.go` (extend `CreatePlan`, `GetPlanByID`, `GetPlanBySlug`, `ListPlans`, `ListPlansPaginated`, `ListPlansForProject`, `scanPlans`, `unmarshalPlanJSON`)
+
+**Interfaces:**
+- Consumes: migration 056 + 057 (Tasks 2-3).
+- Produces:
+  ```go
+  // route.go
+  type Route struct {
+      // ... existing ...
+      Clients      []string `json:"clients"`
+      BillingModes []string `json:"billing_modes"`
+  }
+
+  // plan.go
+  type Plan struct {
+      // ... existing ...
+      ClientModelCreditRates map[string]map[string]CreditRate `json:"client_model_credit_rates,omitempty"`
+  }
+
+  // policy.go
+  type RateLimitPolicy struct {
+      // ... existing ...
+      ClientModelCreditRates map[string]map[string]CreditRate `json:"client_model_credit_rates,omitempty"`
+  }
+  ```
+  No behavior change yet: `Router.Match` still ignores the new route fields; `Policy.ComputeCreditsWithDefault` still ignores the new rate map. Tasks 6 + 7 wire them in.
+
+This task is the data plane: every CRUD path round-trips the new fields, every existing test continues to pass. The new fields stay invisible to consumers until Tasks 6-7 light them up.
+
+- [ ] **Step 1: Extend `types.Route`**
+
+In `internal/types/route.go`, change the struct to:
+
+```go
+package types
+
+import "time"
+
+// Route maps a set of canonical model names to an upstream group
+// (nginx: location block). The route matches a request when its
+// canonical model name (post-alias-resolution) appears in ModelNames,
+// the request kind appears in RequestKinds, the client bucket appears
+// in Clients (or Clients is empty = match any), and the billing mode
+// appears in BillingModes (or BillingModes is empty = match any).
+// Ordering among competing routes is given by weighted specificity
+// then MatchPriority — see internal/proxy/router_engine.go.
+type Route struct {
+	ID              string            `json:"id"`
+	ProjectID       string            `json:"project_id,omitempty"` // "" = global route
+	ModelNames      []string          `json:"model_names"`          // Canonical model names only (no aliases, no globs)
+	RequestKinds    []string          `json:"request_kinds"`        // Wire-level endpoint kinds; values from internal/types/request_kind.go
+	Clients         []string          `json:"clients"`              // ClientBucket values; empty = match any. See internal/types/client_bucket.go.
+	BillingModes    []string          `json:"billing_modes"`        // BillingMode values; empty = match any. See internal/types/billing_mode.go.
+	UpstreamGroupID string            `json:"upstream_group_id"`
+	MatchPriority   int               `json:"match_priority"`
+	Conditions      map[string]string `json:"conditions,omitempty"`
+	Status          string            `json:"status"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+}
+```
+
+- [ ] **Step 2: Extend `types.Plan` + `Plan.ToPolicy`**
+
+In `internal/types/plan.go`:
+
+Add the field to the struct (preserve all other fields):
+
+```go
+type Plan struct {
+	// ... all existing fields, unchanged ...
+	ModelCreditRates       map[string]CreditRate            `json:"model_credit_rates,omitempty"`
+	ClientModelCreditRates map[string]map[string]CreditRate `json:"client_model_credit_rates,omitempty"`
+	// ... other existing fields ...
+}
+```
+
+Extend `ToPolicy` to thread the new field:
+
+```go
+func (p *Plan) ToPolicy(projectID string, subscriptionStartsAt *time.Time) *RateLimitPolicy {
+	rules := make([]CreditRule, len(p.CreditRules))
+	copy(rules, p.CreditRules)
+	if subscriptionStartsAt != nil {
+		for i := range rules {
+			if rules[i].WindowType == WindowTypeFixed {
+				t := *subscriptionStartsAt
+				rules[i].AnchorTime = &t
+			}
+		}
+	}
+	return &RateLimitPolicy{
+		ID:                     "plan:" + p.ID,
+		ProjectID:              projectID,
+		Name:                   p.Name,
+		CreditRules:            rules,
+		ModelCreditRates:       p.ModelCreditRates,
+		ClientModelCreditRates: p.ClientModelCreditRates, // NEW
+		ClassicRules:           p.ClassicRules,
+	}
+}
+```
+
+- [ ] **Step 3: Extend `RateLimitPolicy`**
+
+In `internal/types/policy.go`, add the field to the struct (preserve every other field):
+
+```go
+type RateLimitPolicy struct {
+	// ... all existing fields, unchanged ...
+	ModelCreditRates       map[string]CreditRate            `json:"model_credit_rates,omitempty"`
+	ClientModelCreditRates map[string]map[string]CreditRate `json:"client_model_credit_rates,omitempty"`
+	// ... other existing fields ...
+}
+```
+
+- [ ] **Step 4: Build + run types tests**
+
+Run: `cd /root/coding/modelserver && go build ./internal/types/... && go test ./internal/types/...`
+Expected: green. Existing `TestComputeCredits` etc. continue to pass because the new field is unused by today's resolver.
+
+- [ ] **Step 5: Extend `internal/store/routes.go`**
+
+Edit the `routeSelectCols` constant and the three call sites that scan / insert routes. The new column order appends `clients, billing_modes` AFTER the existing columns so SELECT-list / Scan-list / INSERT-list all stay in lockstep.
+
+Replace the const at the top of the file:
+
+```go
+const routeSelectCols = `id, COALESCE(project_id::text, ''), model_names, request_kinds,
+	upstream_group_id, match_priority, conditions, status, created_at, updated_at,
+	clients, billing_modes`
+```
+
+Update `CreateRoute`:
+
+```go
+func (s *Store) CreateRoute(r *types.Route) error {
+	conditionsJSON, _ := json.Marshal(r.Conditions)
+	if r.Conditions == nil {
+		conditionsJSON = []byte("{}")
+	}
+	modelNames := r.ModelNames
+	if modelNames == nil {
+		modelNames = []string{}
+	}
+	requestKinds := r.RequestKinds
+	if requestKinds == nil {
+		requestKinds = []string{}
+	}
+	clients := r.Clients
+	if clients == nil {
+		clients = []string{}
+	}
+	billingModes := r.BillingModes
+	if billingModes == nil {
+		billingModes = []string{}
+	}
+	return s.pool.QueryRow(context.Background(), `
+		INSERT INTO routes (project_id, model_names, request_kinds, upstream_group_id,
+		    match_priority, conditions, status, clients, billing_modes)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, created_at, updated_at`,
+		nullString(r.ProjectID), modelNames, requestKinds, r.UpstreamGroupID,
+		r.MatchPriority, conditionsJSON, r.Status, clients, billingModes,
+	).Scan(&r.ID, &r.CreatedAt, &r.UpdatedAt)
+}
+```
+
+Update `GetRouteByID` Scan argument list (append the two new pointers — order must match `routeSelectCols`):
+
+```go
+func (s *Store) GetRouteByID(id string) (*types.Route, error) {
+	r := &types.Route{}
+	var conditionsRaw []byte
+	err := s.pool.QueryRow(context.Background(),
+		fmt.Sprintf(`SELECT %s FROM routes WHERE id = $1`, routeSelectCols), id,
+	).Scan(&r.ID, &r.ProjectID, &r.ModelNames, &r.RequestKinds, &r.UpstreamGroupID,
+		&r.MatchPriority, &conditionsRaw, &r.Status, &r.CreatedAt, &r.UpdatedAt,
+		&r.Clients, &r.BillingModes)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get route: %w", err)
+	}
+	r.Conditions = unmarshalConditions(conditionsRaw)
+	return r, nil
+}
+```
+
+Update `scanRoute`:
+
+```go
+func scanRoute(rows pgx.Rows) (*types.Route, error) {
+	r := &types.Route{}
+	var conditionsRaw []byte
+	if err := rows.Scan(&r.ID, &r.ProjectID, &r.ModelNames, &r.RequestKinds,
+		&r.UpstreamGroupID, &r.MatchPriority, &conditionsRaw, &r.Status,
+		&r.CreatedAt, &r.UpdatedAt, &r.Clients, &r.BillingModes); err != nil {
+		return nil, err
+	}
+	r.Conditions = unmarshalConditions(conditionsRaw)
+	return r, nil
+}
+```
+
+`ListRoutes`, `ListRoutesPaginated`, and `ListRoutesForProject` all use `routeSelectCols` + `scanRoute` so they need no further edits.
+
+The admin update path (`handleUpdateRoutingRoute` in `internal/admin/handle_routing_routes.go`) maintains a `for _, field := range []string{"project_id", "model_names", "request_kinds", "upstream_group_id", "match_priority", "conditions", "status"} { ... }` allow-list — Task 8 extends that with `"clients", "billing_modes"`. This task does NOT touch the admin handler; the new fields are read-only on the round-trip via the store layer change alone, which is enough to keep `go build ./...` green.
+
+- [ ] **Step 6: Extend `internal/store/plans.go`**
+
+The plan SELECT list is **inlined verbatim in five places** (`GetPlanByID`, `GetPlanBySlug`, `ListPlans`, `ListPlansPaginated`, `ListPlansForProject`). Extending without breaking them requires adding the new column to every SELECT + every Scan + the INSERT.
+
+Add the column at a stable position in every SELECT list, e.g. immediately after `model_credit_rates` (apply to every site):
+
+```go
+// BEFORE:
+SELECT id, name, slug, display_name, description, tier_level, group_tag,
+    price_cny_fen, price_usd_cents, period_months, credit_rules, model_credit_rates,
+    classic_rules, is_active, created_at, updated_at
+FROM plans ...
+
+// AFTER:
+SELECT id, name, slug, display_name, description, tier_level, group_tag,
+    price_cny_fen, price_usd_cents, period_months, credit_rules, model_credit_rates,
+    client_model_credit_rates,
+    classic_rules, is_active, created_at, updated_at
+FROM plans ...
+```
+
+`scanPlans` and the individual `Scan` calls grow one more `[]byte` pointer for the new column. Add a local `var clientRates []byte` alongside the existing `var creditRules, rates, classic []byte`, and pass `&clientRates` into the Scan in the matching position.
+
+Extend `unmarshalPlanJSON` to accept the new bytes and decode into `p.ClientModelCreditRates`:
+
+```go
+func unmarshalPlanJSON(p *types.Plan, creditRules, rates, clientRates, classic []byte) error {
+	if creditRules != nil {
+		if err := json.Unmarshal(creditRules, &p.CreditRules); err != nil {
+			return fmt.Errorf("unmarshal credit_rules: %w", err)
+		}
+	}
+	if rates != nil {
+		if err := json.Unmarshal(rates, &p.ModelCreditRates); err != nil {
+			return fmt.Errorf("unmarshal model_credit_rates: %w", err)
+		}
+	}
+	if clientRates != nil {
+		if err := json.Unmarshal(clientRates, &p.ClientModelCreditRates); err != nil {
+			return fmt.Errorf("unmarshal client_model_credit_rates: %w", err)
+		}
+	}
+	if classic != nil {
+		if err := json.Unmarshal(classic, &p.ClassicRules); err != nil {
+			return fmt.Errorf("unmarshal classic_rules: %w", err)
+		}
+	}
+	return nil
+}
+```
+
+Update every caller of `unmarshalPlanJSON` to pass the new arg in the same position.
+
+Extend `CreatePlan`:
+
+```go
+func (s *Store) CreatePlan(p *types.Plan) error {
+	creditRulesJSON, _ := marshalJSON(p.CreditRules)
+	ratesJSON, _ := marshalJSON(p.ModelCreditRates)
+	clientRatesJSON, _ := marshalJSON(p.ClientModelCreditRates)
+	classicJSON, _ := marshalJSON(p.ClassicRules)
+
+	return s.pool.QueryRow(context.Background(), `
+		INSERT INTO plans (name, slug, display_name, description, tier_level, group_tag,
+			price_cny_fen, price_usd_cents, period_months, credit_rules, model_credit_rates,
+			client_model_credit_rates, classic_rules, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		RETURNING id, created_at, updated_at`,
+		p.Name, p.Slug, p.DisplayName, p.Description, p.TierLevel, p.GroupTag,
+		p.PriceCNYFen, p.PriceUSDCents, p.PeriodMonths, creditRulesJSON, ratesJSON,
+		clientRatesJSON, classicJSON, p.IsActive,
+	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
+}
+```
+
+The admin update path (`internal/admin/handle_plans.go`'s field allow-list) is touched in Task 8; this task does NOT modify it. `UpdatePlan` is generic (`buildUpdateQuery`) so it accepts whatever map the admin handler passes — no change needed here.
+
+- [ ] **Step 7: Build + run store tests**
+
+Run: `cd /root/coding/modelserver && go build ./... && go test ./internal/store/...`
+Expected: all green (including the migration tests from Tasks 2 + 3 if `TEST_DATABASE_URL` is set; skip otherwise). Existing plan / route tests must continue to PASS — the new fields are zero-value on every prior fixture, which round-trips fine.
+
+- [ ] **Step 8: Commit**
+
+```bash
+cd /root/coding/modelserver
+git add internal/types/route.go internal/types/plan.go internal/types/policy.go \
+        internal/store/routes.go internal/store/plans.go
+git commit -m "feat(types,store): plumb Clients/BillingModes/ClientModelCreditRates
+
+Route gains two []string fields; Plan and RateLimitPolicy gain a
+two-level map[client][model]CreditRate field. Store load/save round-trip
+the new columns added in migrations 056+057.
+
+No behavior change yet: Router.Match still ignores the new route fields
+and Policy.ComputeCreditsWithDefault still ignores the new rate map.
+Tasks 6 + 7 wire them in.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+> **End of installment 2 (Tasks 3-4).** Tasks 1-4 together build the data plane: types know the new fields, store round-trips them, migrations make the columns exist. Nothing reads them yet — the matcher and pricing resolver are still on their old code paths.
+>
+> Remaining installments:
+> - **Installment 3 (Task 5):** trace middleware `ctxClientBucket` plumbing + getter + tests.
+> - **Installment 4 (Task 6):** `Router.Match` signature break + `matchesGlobalRoute` extension + weighted specificity sort + `MatrixGlobal` extension + executor caller update + full router_engine_test.go overhaul.
+> - **Installment 5 (Task 7):** `Policy.ComputeCreditsForClient` resolver + Executor pricing call-site update + no-regression invariant tests.
+> - **Installment 6 (Task 8):** admin API validation for new route fields + `GET /routing/clients` + `GET /routing/billing-modes` + matrix endpoint filter params + plan admin allow-list update.
+> - **Installment 7 (Task 9):** dashboard Routes page columns + Create/Edit dialog selectors + Matrix tab filter dropdowns + manual smoke checklist.
+> - **Final installment:** plan self-review section + execution handoff.
 
