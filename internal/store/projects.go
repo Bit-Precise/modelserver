@@ -324,10 +324,78 @@ func (s *Store) UpdateProjectMember(
 	return err
 }
 
-// RemoveProjectMember removes a member from a project.
-func (s *Store) RemoveProjectMember(projectID, userID string) error {
-	_, err := s.pool.Exec(context.Background(), `
-		DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`,
+// RemoveProjectMember atomically revokes the member's active API keys
+// and deletes the member's OAuth grants for the project, then removes
+// the membership row. Returns the revoked-key count and the list of
+// deleted grants (so the caller can revoke matching Hydra consents).
+//
+// Ordering: revoke keys → delete grants → delete membership. All three
+// run in one tx so concurrent in-flight requests cannot observe a
+// (member-deleted, key-active) or (member-deleted, grant-present) state.
+//
+// If the user has no membership row (pre-migration zombie state), the
+// keys and grants are still cleaned up.
+func (s *Store) RemoveProjectMember(projectID, userID string) (int, []types.OAuthGrant, error) {
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, nil, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op after Commit
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE api_keys
+		   SET status = 'revoked', updated_at = NOW()
+		 WHERE project_id = $1 AND created_by = $2 AND status = 'active'`,
 		projectID, userID)
-	return err
+	if err != nil {
+		return 0, nil, fmt.Errorf("revoke keys: %w", err)
+	}
+	revokedCount := int(tag.RowsAffected())
+
+	rows, err := tx.Query(ctx, `
+		DELETE FROM oauth_grants
+		 WHERE project_id = $1 AND user_id = $2
+		 RETURNING id, project_id, user_id, client_id, client_name, scopes, created_at`,
+		projectID, userID)
+	if err != nil {
+		return 0, nil, fmt.Errorf("delete grants: %w", err)
+	}
+	var deletedGrants []types.OAuthGrant
+	for rows.Next() {
+		var g types.OAuthGrant
+		if err := rows.Scan(&g.ID, &g.ProjectID, &g.UserID,
+			&g.ClientID, &g.ClientName, &g.Scopes, &g.CreatedAt); err != nil {
+			rows.Close()
+			return 0, nil, fmt.Errorf("scan deleted grant: %w", err)
+		}
+		deletedGrants = append(deletedGrants, g)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, fmt.Errorf("delete grants rows: %w", err)
+	}
+	rows.Close()
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, userID); err != nil {
+		return 0, nil, fmt.Errorf("delete member: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, nil, fmt.Errorf("commit: %w", err)
+	}
+	return revokedCount, deletedGrants, nil
+}
+
+// CountActiveKeysForMember returns the number of api_keys with
+// status='active' that the user created in the project. Used by the
+// dashboard's pre-removal confirmation dialog.
+func (s *Store) CountActiveKeysForMember(projectID, userID string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM api_keys
+		 WHERE project_id = $1 AND created_by = $2 AND status = 'active'`,
+		projectID, userID).Scan(&n)
+	return n, err
 }
