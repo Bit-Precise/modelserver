@@ -3171,9 +3171,90 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-> **End of installment 7 (Task 9).** Backend + frontend are both complete. The plan body covers all 9 tasks. One final installment adds the plan-level self-review and execution handoff at the end of the document.
->
-> Final installment:
-> - Plan self-review section (spec coverage, placeholder scan, type consistency)
-> - Execution Handoff offering Subagent-Driven Development vs Inline Execution
+## Self-Review
+
+**1. Spec coverage**
+
+| Spec section / requirement | Task(s) |
+|---|---|
+| 5 client buckets (`claude-code-cli`, `claude-desktop`, `codex-cli`, `codex-desktop` reserved, `other`) | Task 1 |
+| 2 billing modes (`subscription`, `extra_usage`) | Task 1 |
+| `MapClientKindToBucket` projects ClientKind→bucket | Task 1 |
+| `codex-desktop` bucket reserved; deriver returns `other` | Task 1 (and verified by `TestClientBucketCodexDesktop_ReservedReturnsOther`) |
+| `routes.clients` + `routes.billing_modes` TEXT[] columns with empty-array defaults | Task 2 (migration 056) |
+| `plans.client_model_credit_rates` JSONB nullable column | Task 3 (migration 057) |
+| Both migrations idempotent | Task 2 + Task 3 (explicit idempotence tests) |
+| `types.Route` carries `Clients []string` + `BillingModes []string` | Task 4 |
+| `types.Plan` carries `ClientModelCreditRates map[client][model]CreditRate` | Task 4 |
+| `Plan.ToPolicy` threads `ClientModelCreditRates` through to `RateLimitPolicy` | Task 4 |
+| Store load/save round-trips all new columns | Task 4 |
+| `ctxClientBucket` populated by trace middleware via `MapClientKindToBucket` | Task 5 |
+| `ClientBucketFromContext` getter with `ClientBucketOther` default | Task 5 |
+| `Router.Match` signature `(projectID, model, kind, client, billingMode)` | Task 6 |
+| `matchesGlobalRoute` shared by `Match` and `MatrixGlobal` (no drift) | Task 6 |
+| Empty `Clients` / `BillingModes` = match any | Task 6 (`matchesGlobalRoute` `len(...) > 0` guard) + Task 6 (`TestRouter_Match_LegacyEmptyMatchesAny`) |
+| Weighted specificity (project 100, clients 10, billing_modes 1) | Task 6 |
+| Tiebreak `MatchPriority desc` then `ID asc` | Task 6 (`TestRouter_Match_DeterministicTiebreak`) |
+| Full 5-tier precedence: `(project+clients+modes) > (project+clients) > project > (clients+modes global) > plain global` | Task 6 (`TestRouter_Match_FullPrecedence`) |
+| `MatrixCell` carries `Client`, `BillingMode`, `Clients`, `BillingModes` | Task 6 |
+| `MatrixGlobal` accepts `filterClient` + `filterBillingMode` | Task 6 |
+| `Router.Match` error message includes `client` + `billing_mode` for diagnosability | Task 6 |
+| Executor derives `billing_mode = ternary(reqCtx.IsExtraUsage)` one line before `router.Match` | Task 6 |
+| **NO new balance check at routing time** | Task 6 (executor caller change is two-line derive only) + spec/plan Global Constraints |
+| `SubscriptionEligibility{Eligible, Reason}` shape **unchanged** | (verified by absence — no task touches this struct) |
+| `Policy.ComputeCreditsForClient` 5-step resolver (client_model → model → catalog → _default → 0) | Task 7 |
+| `ComputeCreditsWithDefault` becomes a thin wrapper (= `ComputeCreditsForClient(model, "", …)`) | Task 7 |
+| Executor subscription pricing call sites (executor.go:1090 + :1328) switched to `ComputeCreditsForClient(model, client, …)` | Task 7 |
+| `reqCtx.ClientBucket` cached at request entry so settle callback can read after request context ends | Task 7 (Step 5) |
+| Subscription byte-identity invariant when `ClientModelCreditRates` is absent | Task 7 (`TestComputeCreditsWithDefault_BackwardCompat` + `TestExecutorFinalize_Subscription_NoClientOverridesIsByteIdentical`) |
+| Extra-usage pricing path completely unchanged | Task 7 (`TestExecutorFinalize_ExtraUsage_PricingPathUnchanged`) |
+| Admin route create/update accepts + validates `clients` + `billing_modes` (400 on invalid) | Task 8 |
+| `GET /api/v1/routing/clients` returns `AllClientBuckets` | Task 8 |
+| `GET /api/v1/routing/billing-modes` returns `AllBillingModes` | Task 8 |
+| Matrix endpoint accepts `?client=` + `?billing_mode=` (400 on invalid value) | Task 8 |
+| Matrix cell response gains 4 new JSON fields | Task 8 |
+| Plan upsert allow-list accepts `client_model_credit_rates` with top-level key validation | Task 8 |
+| Routes List table grows `Clients` + `Billing Modes` columns | Task 9 |
+| Create/Edit dialog grows two toggle-button selector rows | Task 9 |
+| Matrix tab grows two filter dropdowns persisted to URL params | Task 9 |
+| Cells subscript with `· sub` / `· eu` when source route is mode-specific | Task 9 |
+| `useClientBuckets` + `useBillingModes` hooks (mirrors `useRequestKinds`) | Task 9 |
+| `useRoutingMatrix` accepts optional filters; cache key includes them | Task 9 |
+| Backend deploy precedes dashboard deploy; old dashboards continue to work | Deploy section above; no task; the API additions are backward-compatible by virtue of `,omitempty` JSON tags |
+| Rollback safety (migrations only ADD columns; subscription pricing without overrides = today's numbers) | Spec deploy section + Task 7 invariant tests |
+
+No spec requirement is unimplemented.
+
+**2. Placeholder scan**
+
+- No "TBD" / "implement later" / "fill in details" / "add appropriate error handling" / "similar to Task N" / "write tests for the above" patterns anywhere.
+- Task 5 Step 1's test fixtures (the `setup` lambdas for each ClientKind) are described as "verify against the file before editing — adapt to match the production matchers exactly". This is honest scaffolding, not a placeholder: the production `deriveClientKind` shapes are stable and the test's value is covering every ClientKind output, not pinning a specific request shape. Acceptable.
+- Task 6 Step 6 explicitly enumerates the 9 existing `r.Match(...)` call sites by line number with the verbatim before/after pattern. No "and similar elsewhere" hand-wave.
+- Task 7 Step 5 calls out the executor-callsite recommendation (`RequestContext.ClientBucket` field path) AND its alternative (reading from `r.Context()` directly), with rationale for the pick. Engineer can pick either; both are concrete.
+- Task 8 Step 6's plan-allow-list code mirrors the existing `model_credit_rates` block which is in `handle_plans.go`; engineer sees the exact pattern.
+- Task 9 Step 5's manual smoke list has 9 items, each concrete (no "verify it works correctly").
+
+**3. Type consistency**
+
+- `ClientBucketClaudeCodeCLI` / `ClientBucketClaudeDesktop` / `ClientBucketCodexCLI` / `ClientBucketCodexDesktop` / `ClientBucketOther` constants — declared in Task 1, consumed in Task 5 (mapping), Task 6 (default arg in test call sites), Task 8 (admin validator), Task 9 (TS values via `useClientBuckets`).
+- `BillingModeSubscription` / `BillingModeExtraUsage` constants — declared in Task 1, consumed in Task 6 (default arg + Match derive), Task 8 (admin validator), Task 9 (TS values via `useBillingModes`).
+- `Route.Clients []string` + `Route.BillingModes []string` — declared in Task 4 (Go struct), Task 4 (store load/save), Task 6 (matcher predicate), Task 8 (admin create/update validators), Task 9 (TS interface + dashboard form state).
+- `Plan.ClientModelCreditRates map[string]map[string]CreditRate` — declared in Task 4 (Go struct), Task 4 (store load/save + Plan.ToPolicy), Task 7 (resolver step 1), Task 8 (admin allow-list).
+- `Router.Match(projectID, model, kind, client, billingMode string)` — declared in Task 6, consumed in Task 6 (executor caller, 9 test sites).
+- `MatrixGlobal(models []string, filterClient, filterBillingMode string)` — declared in Task 6, consumed in Task 8 (admin handler).
+- `MatrixCell.{Client, BillingMode, Clients, BillingModes}` — declared in Task 6, consumed in Task 8 (`matrixCellOut` JSON struct), Task 9 (`RoutingMatrixCell` TS interface).
+- `Policy.ComputeCreditsForClient(model, client string, catalogDefault *CreditRate, …) float64` — declared in Task 7, consumed in Task 7 (executor sites + tests).
+- `RequestContext.ClientBucket string` (new field) — declared in Task 7, consumed in Task 7 (pricing call sites read it; `Execute()` writes it).
+- `ctxClientBucket contextKey = "client_bucket"` — declared in Task 5, consumed in Task 5 (`ClientBucketFromContext`) and Task 6/7 (transitively via the getter / the new RequestContext field).
+- `useClientBuckets()` / `useBillingModes()` / `useRoutingMatrix({client, billingMode})` — declared in Task 9, consumed in Task 9 (`RoutesPage` + `RoutesMatrixView`).
+- Migration column names: `clients`, `billing_modes` (Task 2 SQL → Task 4 store SELECT lists → Task 8 admin), `client_model_credit_rates` (Task 3 SQL → Task 4 store SELECT lists → Task 8 admin). Exact strings match across SQL, Go struct tags, and JSON keys.
+- JSON field names: `clients`, `billing_modes` on the route shape (Task 4 Go tags, Task 8 admin response, Task 9 TS); `client`, `billing_mode`, `clients`, `billing_modes` on the matrix cell shape (Task 6 Go struct, Task 8 admin JSON, Task 9 TS) — note the singular `client`/`billing_mode` on cells vs the plural `clients`/`billing_modes` arrays carried from the source route. Distinction is intentional and consistent across tasks.
+
+No naming drift detected.
+
+---
+
+## Execution Handoff
+
+Plan complete and saved to `docs/superpowers/plans/2026-06-28-client-aware-routing-pricing.md`.
 
