@@ -110,38 +110,66 @@ func TestKeepaliveWriter_ResetsTimerOnWrite(t *testing.T) {
 }
 
 // TestKeepaliveWriter_NoInterleaveUnderConcurrency stresses the mutex
-// contract: 100 full SSE events written by one goroutine while a 1ms
-// heartbeat races, and the output must still parse as exactly 100 events
-// with no :\n\n inside any event: ... \n\n span.
+// contract: while the 1ms heartbeat is firing in the background, multiple
+// concurrent writer goroutines drive full SSE events through Write, and
+// the output must still parse as exactly events*goroutines events with no
+// :\n\n inside any event: ... \n\n span and no two events run together
+// without their \n\n terminator.
+//
+// The previous shape (a single tight write loop) completed in ~20µs and
+// never gave the timer goroutine a chance to fire — so it appeared to
+// pass while exercising nothing. This version sleeps between writes per
+// goroutine so the timer actually races, and runs multiple writer
+// goroutines so the mutex contract is exercised against both heartbeat
+// and peer writers concurrently.
 func TestKeepaliveWriter_NoInterleaveUnderConcurrency(t *testing.T) {
 	rw := newFakeRW()
 	k := newKeepaliveWriter(rw, 1*time.Millisecond)
 
-	const events = 100
+	const writers = 4
+	const eventsPerWriter = 50
 	const payload = "event: x\ndata: {\"i\":0}\n\n"
-	for i := 0; i < events; i++ {
-		if _, err := k.Write([]byte(payload)); err != nil {
-			t.Fatalf("Write: %v", err)
-		}
+
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < eventsPerWriter; i++ {
+				if _, err := k.Write([]byte(payload)); err != nil {
+					t.Errorf("Write: %v", err)
+					return
+				}
+				// Yield so the timer goroutine and peer writers
+				// actually get scheduled between writes; without
+				// this the loop completes in microseconds and the
+				// 1ms timer never fires.
+				time.Sleep(200 * time.Microsecond)
+			}
+		}()
 	}
+	wg.Wait()
+
 	if err := k.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	out := rw.Snapshot()
 	// Every event must remain intact. Heartbeats are ":\n\n" and must
-	// only appear between events (or not at all if writes were faster
-	// than heartbeats), never inside an "event: ... \n\n" block.
-	// Strategy: split on the SSE event terminator "\n\n", filter out
-	// pure ":" frames (heartbeats), and verify exactly `events` data
-	// frames remain, each prefixed by "event: x\ndata:".
+	// only appear between events, never inside an "event: ... \n\n"
+	// block. Strategy: split on the SSE event terminator "\n\n", filter
+	// out pure ":" frames (heartbeats), and verify exactly
+	// writers*eventsPerWriter data frames remain, each prefixed with
+	// "event: x\ndata:".
 	frames := bytes.Split(out, []byte("\n\n"))
 	dataFrames := 0
+	heartbeats := 0
 	for _, f := range frames {
 		if len(f) == 0 {
 			continue
 		}
 		if bytes.Equal(f, []byte(":")) {
+			heartbeats++
 			continue
 		}
 		if !bytes.HasPrefix(f, []byte("event: x\ndata:")) {
@@ -149,8 +177,16 @@ func TestKeepaliveWriter_NoInterleaveUnderConcurrency(t *testing.T) {
 		}
 		dataFrames++
 	}
-	if dataFrames != events {
-		t.Errorf("parsed %d data frames, want %d", dataFrames, events)
+	if want := writers * eventsPerWriter; dataFrames != want {
+		t.Errorf("parsed %d data frames, want %d", dataFrames, want)
+	}
+	// Heartbeats must actually have fired during the test — otherwise
+	// the concurrency contract isn't being exercised at all. With 4
+	// writers of 50 events each at 200µs/event we run ~10ms, so the
+	// 1ms timer should fire several times; we require at least one to
+	// keep the assertion resilient to scheduler quirks.
+	if heartbeats == 0 {
+		t.Errorf("no heartbeats fired during the test — concurrency contract not exercised")
 	}
 }
 

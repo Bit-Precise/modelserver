@@ -1020,10 +1020,22 @@ func (e *Executor) commitStreamingResponse(
 	}
 
 	// interruptErrPtr is set by the stream-flush block below when
-	// copyWithFlush fails. The WrapStream callback closes over this pointer
-	// and reads it at callback time (after the copy block runs) so that
-	// completeStreamingRequest receives the correct error.
-	// Both image and non-image streaming branches read the pointer at callback time.
+	// copyWithFlush fails (broken pipe, upstream RST mid-stream). The
+	// WrapStream callback closes over this pointer and reads it when
+	// the interceptor's finish() runs.
+	//
+	// Subtle: finish() can fire from two paths — streamReader.Close()
+	// after copyWithFlush returns (the broken-pipe path we care about,
+	// where *interruptErrPtr is set before Close runs), OR from inside
+	// the interceptor's Read() when upstream returns io.EOF (the clean
+	// completion path, where *interruptErrPtr is still nil but copyErr
+	// is also nil so there is nothing to publish). Both branches —
+	// image and non-image — close over the pointer the same way.
+	//
+	// Edge case not handled: if a single upstream Read returns
+	// (n>0, io.EOF) and the subsequent dst.Write fails, finish() fires
+	// from Read with InterruptErr=nil before the flush block sets the
+	// pointer. Tracked as follow-up SK1.
 	var interruptErr error
 	interruptErrPtr := &interruptErr
 

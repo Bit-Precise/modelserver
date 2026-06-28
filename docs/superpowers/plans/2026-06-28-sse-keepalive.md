@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status (2026-06-28, post-implementation):** Branch `feat/sse-keepalive` shipped. Two deviations from the text below — both recorded in the spec's "Implementation updates" section: (1) **image streaming path** was modified after final review flagged the same phantom-success bug there (Task 4 "do NOT add `interruptErrPtr` to the image stream path" is superseded; the closure now passes `*interruptErrPtr` to `completeImageStreamingRequest` too). (2) **Task 1 Step 1.1 test #4** (`TestKeepaliveWriter_NoInterleaveUnderConcurrency`) was rewritten after a re-audit found the original tight-loop shape fired 0 heartbeats in 5/5 trials — the test passed while exercising nothing. The shipped version uses 4 concurrent writer goroutines with brief sleeps and additionally asserts heartbeats actually fire.
+
 **Goal:** Inject `:\n\n` SSE comment heartbeats on the downstream socket every 15s of upstream silence to mask client-side stall detection and middlebox idle ceilings, and fix the bug where mid-stream-interrupted requests are recorded as `status='success'`.
 
 **Architecture:** New `keepaliveWriter` wraps `http.ResponseWriter` between `copyWithFlush` and the real RW. A timer re-armed on every `Write` fires a heartbeat under the same mutex, so heartbeats can never interleave with SSE event bytes. `StreamMetrics` grows one field (`InterruptErr error`) plumbed from `copyWithFlush`'s error through the existing interceptor `Close()` → `finish()` → `onComplete` callback path; `completeStreamingRequest` flips `Status` / `ErrorMessage` when set.

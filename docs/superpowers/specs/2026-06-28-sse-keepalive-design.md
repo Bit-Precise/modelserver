@@ -335,5 +335,36 @@ checkbox.
 - `requests` table schema — reuse existing `error` status value
 - All non-streaming code paths
 
+## Implementation updates
+
+Recorded after the fact so future readers see the divergence from the
+original design intent above.
+
+- **Image streaming path** was originally marked out of scope on the
+  status-fix half (the heartbeat applies to all streams unchanged).
+  Final code review flagged that this leaves the image branch with the
+  same phantom-success bug we fixed for text, so the fix was extended
+  to `completeImageStreamingRequest` in the same shape — `interruptErr`
+  threaded through the image stream callback and consumed by the image
+  settle path. The "Add `interruptErrPtr` to the image stream path"
+  text in the design's mutex/data-flow section therefore now applies
+  to both branches; the prior "non-streaming and image paths are not
+  in scope" caveat is superseded for the image-streaming case
+  specifically.
+- **Concurrency unit test (#4)** was reworked after a re-audit
+  measured 0 heartbeats firing in 5/5 trials with the original
+  single-goroutine tight write loop — the test passed but exercised
+  nothing. Rewritten to run 4 concurrent writers with brief sleeps
+  between writes, asserting both the SSE-frame integrity invariant
+  and that the heartbeat actually fired during the test window.
+- **Follow-up SK1** (separate spec): on a single upstream `Read` that
+  returns `(n>0, io.EOF)`, the interceptor's `finish()` runs from
+  inside `Read` before the executor's flush block can publish a
+  trailing `dst.Write` error to `*interruptErrPtr`. Low-frequency edge
+  case (client already received the final usage chunk); fix requires
+  cross-interceptor refactor across `stream.go`,
+  `chatcompletions_stream.go`, `gemini_stream.go`, and
+  `image_stream.go` to standardise on `Close()`-only callback dispatch.
+
 [cc-69415]: https://github.com/anthropics/claude-code/issues/69415
 [cc-67766]: https://github.com/anthropics/claude-code/issues/67766
