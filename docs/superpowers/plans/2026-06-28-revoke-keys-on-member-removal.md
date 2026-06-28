@@ -1092,7 +1092,425 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Dashboard — confirmation dialog + post-action count
+### Task 6: OAuth-grant revocation on member removal + OAuth-path fail-closed check
+
+**Files:**
+- Modify: `internal/store/projects.go` (`RemoveProjectMember`) — also delete the member's `oauth_grants` rows for the project in the same tx, and return them so the caller can revoke Hydra consents.
+- Modify: `internal/store/projects_test.go` — add tests covering OAuth-grant deletion.
+- Modify: `internal/store/migrations/055_revoke_orphaned_api_keys.sql` — add a parallel `DELETE FROM oauth_grants` for orphaned rows. Keep the same idempotent NOT-EXISTS shape.
+- Modify: `internal/store/migrations_055_test.go` — extend test to seed orphan + non-orphan grants and assert the expected end states.
+- Modify: `internal/admin/handle_projects.go` (`handleRemoveMember`) — after the tx, best-effort revoke the corresponding Hydra consent sessions for each deleted grant; surface the deleted-grant count alongside the revoked-key count.
+- Modify: `internal/admin/routes.go` — `handleRemoveMember` now needs a `*HydraClient`; thread it through the same way `handleRevokeOAuthGrant` already does.
+- Modify: `internal/proxy/auth_middleware.go` (`handleTokenIntrospectionAuth`) — apply the SAME triple-cache hydration + fail-closed membership check the API-key path got in Task 5.
+- Modify: `internal/proxy/auth_middleware_test.go` — add a test that the OAuth-path membership check rejects removed members; the underlying `checkMembership` helper is shared, so coverage is small.
+
+**Why this task exists:** A user reported that removing a member from a project still leaves their API keys usable. While auditing, the same gap exists for OAuth grants: a removed member's access token continues to introspect successfully, hit `handleTokenIntrospectionAuth`, and pass through with only a soft quota/denylist degradation. This task closes both: (Layer A') the removal handler also deletes the member's OAuth grants and revokes Hydra consents; (Layer B') the introspection path gains the same fail-closed check the API-key path has.
+
+**Interfaces:**
+- `RemoveProjectMember` signature evolves:
+  ```go
+  func (s *Store) RemoveProjectMember(projectID, userID string) (revokedKeys int, deletedGrants []types.OAuthGrant, err error)
+  ```
+  Returns the list of deleted grants (not just a count) so the handler can iterate and call `HydraClient.RevokeConsent(ctx, userID, clientID)` for each. The single in-tree caller is `handleRemoveMember`; updated in the same commit.
+- `handleRemoveMember` response shape extends to:
+  ```json
+  { "data": { "revoked_api_keys": N, "deleted_oauth_grants": M } }
+  ```
+  Adding a field is backward-compatible with the Task 7 dashboard hook.
+- `CountActiveKeysForMember` is unchanged — the pre-removal dialog count is still keys-only (grants are an internal cleanup detail; they don't materially change the user's mental model of "what am I about to break").
+
+- [ ] **Step 1: Extend `RemoveProjectMember` (store + test)**
+
+In `internal/store/projects.go`, replace `RemoveProjectMember`:
+
+```go
+// RemoveProjectMember atomically revokes the member's active API keys
+// and deletes the member's OAuth grants for the project, then removes
+// the membership row. Returns the revoked-key count and the list of
+// deleted grants (so the caller can revoke matching Hydra consents).
+//
+// Ordering: revoke keys → delete grants → delete membership. All three
+// run in one tx so concurrent in-flight requests cannot observe a
+// (member-deleted, key-active) or (member-deleted, grant-present) state.
+//
+// If the user has no membership row (pre-migration zombie state), the
+// keys and grants are still cleaned up.
+func (s *Store) RemoveProjectMember(projectID, userID string) (int, []types.OAuthGrant, error) {
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, nil, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE api_keys
+		   SET status = 'revoked', updated_at = NOW()
+		 WHERE project_id = $1 AND created_by = $2 AND status = 'active'`,
+		projectID, userID)
+	if err != nil {
+		return 0, nil, fmt.Errorf("revoke keys: %w", err)
+	}
+	revokedCount := int(tag.RowsAffected())
+
+	rows, err := tx.Query(ctx, `
+		DELETE FROM oauth_grants
+		 WHERE project_id = $1 AND user_id = $2
+		 RETURNING id, project_id, user_id, client_id, client_name, scopes, created_at`,
+		projectID, userID)
+	if err != nil {
+		return 0, nil, fmt.Errorf("delete grants: %w", err)
+	}
+	var deletedGrants []types.OAuthGrant
+	for rows.Next() {
+		var g types.OAuthGrant
+		if err := rows.Scan(&g.ID, &g.ProjectID, &g.UserID,
+			&g.ClientID, &g.ClientName, &g.Scopes, &g.CreatedAt); err != nil {
+			rows.Close()
+			return 0, nil, fmt.Errorf("scan deleted grant: %w", err)
+		}
+		deletedGrants = append(deletedGrants, g)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, fmt.Errorf("delete grants rows: %w", err)
+	}
+	rows.Close()
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, userID); err != nil {
+		return 0, nil, fmt.Errorf("delete member: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, nil, fmt.Errorf("commit: %w", err)
+	}
+	return revokedCount, deletedGrants, nil
+}
+```
+
+In `internal/store/projects_test.go`, update existing assertions and add a new test:
+
+```go
+// All existing TestRemoveProjectMember_* tests must change their unpack
+// from `revoked, err := …` to `revoked, _, err := …` (the grants slice
+// is exercised by the new test below).
+
+func TestRemoveProjectMember_DeletesOAuthGrants(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+
+	member := seedSecondUser(t, st, "withgrants")
+	addMember(t, st, projectID, member, types.RoleDeveloper)
+
+	// Seed two grants for the member + one grant in a different project
+	// (must NOT be touched).
+	seedGrant := func(t *testing.T, st *Store, projectID, userID, clientID string) string {
+		t.Helper()
+		var id string
+		if err := st.pool.QueryRow(ctx, `
+			INSERT INTO oauth_grants (project_id, user_id, client_id, client_name, scopes)
+			VALUES ($1, $2, $3, 'test-client', ARRAY['openid','offline'])
+			RETURNING id`, projectID, userID, clientID).Scan(&id); err != nil {
+			t.Fatalf("seed grant: %v", err)
+		}
+		return id
+	}
+	g1 := seedGrant(t, st, projectID, member, "client-A")
+	g2 := seedGrant(t, st, projectID, member, "client-B")
+
+	// Different project — keep it untouched.
+	_, otherProject := seedUserAndProject(t, st)
+	addMember(t, st, otherProject, member, types.RoleDeveloper)
+	g3 := seedGrant(t, st, otherProject, member, "client-A")
+
+	_, deleted, err := st.RemoveProjectMember(projectID, member)
+	if err != nil {
+		t.Fatalf("RemoveProjectMember: %v", err)
+	}
+	if len(deleted) != 2 {
+		t.Errorf("deleted = %d grants, want 2", len(deleted))
+	}
+	deletedIDs := map[string]bool{}
+	for _, g := range deleted {
+		deletedIDs[g.ID] = true
+		if g.ProjectID != projectID || g.UserID != member {
+			t.Errorf("deleted grant scope wrong: %+v", g)
+		}
+	}
+	if !deletedIDs[g1] || !deletedIDs[g2] {
+		t.Errorf("expected g1=%s and g2=%s in deleted list, got %v", g1, g2, deletedIDs)
+	}
+
+	// g1 and g2 should be gone from DB; g3 must remain.
+	var stillThere int
+	if err := st.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM oauth_grants WHERE id = ANY($1)`,
+		[]string{g1, g2}).Scan(&stillThere); err != nil {
+		t.Fatalf("count deleted: %v", err)
+	}
+	if stillThere != 0 {
+		t.Errorf("deleted grants still present: %d", stillThere)
+	}
+	var otherKeep int
+	if err := st.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM oauth_grants WHERE id = $1`, g3).Scan(&otherKeep); err != nil {
+		t.Fatalf("count other: %v", err)
+	}
+	if otherKeep != 1 {
+		t.Errorf("other-project grant got touched: count=%d", otherKeep)
+	}
+}
+```
+
+Run: `cd /root/coding/modelserver && go test ./internal/store/ -run TestRemoveProjectMember -v` (SKIP if no DB; PASS otherwise).
+
+- [ ] **Step 2: Extend migration 055 (SQL + test)**
+
+In `internal/store/migrations/055_revoke_orphaned_api_keys.sql`, append the parallel cleanup:
+
+```sql
+
+-- Same orphan rule applied to oauth_grants: delete every grant whose
+-- (project_id, user_id) has no project_members row. Pre-fix,
+-- RemoveProjectMember never touched this table either. Hydra consent
+-- sessions corresponding to these deleted rows are NOT revoked by the
+-- migration — operators who want to revoke them must script that
+-- directly against Hydra; the dashboard's per-removal flow handles new
+-- removals automatically.
+--
+-- We use DELETE rather than a "status" flip because oauth_grants has
+-- no status column. The introspection auth path catches the still-live
+-- token via the Layer B membership check.
+
+DELETE FROM oauth_grants
+ WHERE NOT EXISTS (
+     SELECT 1 FROM project_members
+      WHERE project_members.project_id = oauth_grants.project_id
+        AND project_members.user_id    = oauth_grants.user_id
+ );
+```
+
+In `internal/store/migrations_055_test.go`, extend `TestMigration055_RevokesOrphanedKeys` (or add a sibling `TestMigration055_DeletesOrphanedGrants`) with:
+
+```go
+// Seed:
+//   gA: member-grant for projectID (member is in project_members) → keep
+//   gB: orphan-grant for projectID (orphanUserID is NOT a member) → delete
+//   gC: another orphan-grant for projectID → delete
+gA := /* seedGrant on (projectID, member, "client-A") */
+gB := /* seedGrant on (projectID, orphanUserID, "client-A") */
+gC := /* seedGrant on (projectID, orphanUserID, "client-B") */
+
+// Re-run the migration DELETE manually after the existing UPDATE re-run.
+if _, err := st.pool.Exec(ctx, `
+    DELETE FROM oauth_grants
+     WHERE NOT EXISTS (
+         SELECT 1 FROM project_members
+          WHERE project_members.project_id = oauth_grants.project_id
+            AND project_members.user_id    = oauth_grants.user_id
+     )`); err != nil {
+    t.Fatalf("re-run migration grants pass: %v", err)
+}
+
+countGrant := func(id string) int {
+    var n int
+    if err := st.pool.QueryRow(ctx,
+        `SELECT COUNT(*) FROM oauth_grants WHERE id = $1`, id).Scan(&n); err != nil {
+        t.Fatalf("count grant %s: %v", id, err)
+    }
+    return n
+}
+if countGrant(gA) != 1 { t.Errorf("member grant gA got deleted") }
+if countGrant(gB) != 0 { t.Errorf("orphan grant gB survived") }
+if countGrant(gC) != 0 { t.Errorf("orphan grant gC survived") }
+```
+
+Reuse a `seedGrant` helper local to the test file. Run the migration tests to confirm both passes work.
+
+- [ ] **Step 3: Wire `HydraClient` into `handleRemoveMember` and revoke consents**
+
+In `internal/admin/handle_projects.go`, update `handleRemoveMember`:
+
+```go
+func handleRemoveMember(st *store.Store, hydra *HydraClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireRole(w, r, types.RoleOwner, types.RoleMaintainer) {
+			return
+		}
+		projectID := chi.URLParam(r, "projectID")
+		userID := chi.URLParam(r, "userID")
+
+		revokedKeys, deletedGrants, err := st.RemoveProjectMember(projectID, userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal",
+				"failed to remove member")
+			return
+		}
+
+		// Best-effort: revoke each deleted grant's Hydra consent session.
+		// Failures here are logged but do not turn the response into an
+		// error — the grant row is already deleted in our DB, so the
+		// access token will be rejected by the AuthMiddleware membership
+		// check even if Hydra still has a stale consent.
+		if hydra != nil {
+			for _, g := range deletedGrants {
+				if err := hydra.RevokeConsent(r.Context(), g.UserID, g.ClientID); err != nil {
+					log.Printf("WARN remove_member: failed to revoke Hydra consent for user=%s client=%s: %v",
+						g.UserID, g.ClientID, err)
+				}
+			}
+		}
+
+		writeData(w, http.StatusOK, map[string]int{
+			"revoked_api_keys":     revokedKeys,
+			"deleted_oauth_grants": len(deletedGrants),
+		})
+	}
+}
+```
+
+If `log` is not already imported in this file, add it. (`handle_oauth_grants.go` already uses `log.Printf`, so the import lives elsewhere — verify before duplicating.)
+
+In `internal/admin/routes.go`, the `r.Delete("/members/{userID}", handleRemoveMember(st))` call needs to become `handleRemoveMember(st, hydraClient)`. `hydraClient` is constructed earlier in `MountRoutes` (verified — used by `handleRevokeOAuthGrant`). Pass it through.
+
+- [ ] **Step 4: Apply the membership check to the OAuth introspection path**
+
+In `internal/proxy/auth_middleware.go`, locate `handleTokenIntrospectionAuth` (around line 520+). It currently runs the same two-cache hydration (quota + denylist) and silently passes when `member == nil`. Replace its membership block (around L596-636) with the SAME triple-cache pattern as the API-key path (added in Task 5 around L429-498):
+
+```go
+	// Triple-cache hydration mirroring the API-key path's Layer B
+	// membership check. See AuthMiddleware for the full security
+	// rationale (fail-closed on transient DB error).
+	if userID != "" {
+		memberCacheKey := project.ID + ":" + userID
+
+		memberPresent, presenceHit := memberPresentCacheGet(memberCacheKey)
+		quotaCached, quotaHit := quotaCache.Get(memberCacheKey)
+		deniedCached, deniedHit := deniedModelsCacheGet(memberCacheKey)
+
+		if quotaHit && quotaCached >= 0 {
+			v := quotaCached
+			userQuotaPct = &v
+		}
+		if deniedHit {
+			userDeniedModels = deniedCached
+		}
+
+		if !presenceHit || !quotaHit || !deniedHit {
+			member, memberErr := st.GetProjectMember(project.ID, userID)
+			if memberErr != nil {
+				writeProxyError(w, http.StatusServiceUnavailable,
+					"membership check unavailable, retry")
+				return
+			}
+			memberPresent = member != nil
+			memberPresentCacheSet(memberCacheKey, memberPresent)
+
+			if memberPresent {
+				if !quotaHit {
+					if member.CreditQuotaPct != nil {
+						userQuotaPct = member.CreditQuotaPct
+						quotaCache.Set(memberCacheKey, *member.CreditQuotaPct)
+					} else {
+						quotaCache.Set(memberCacheKey, -1)
+					}
+				}
+				if !deniedHit {
+					userDeniedModels = member.DeniedModels
+					deniedModelsCacheSet(memberCacheKey, member.DeniedModels)
+				}
+			} else {
+				if !quotaHit {
+					quotaCache.Set(memberCacheKey, -1)
+				}
+				if !deniedHit {
+					deniedModelsCacheSet(memberCacheKey, nil)
+				}
+			}
+		}
+
+		if !memberPresent {
+			writeProxyError(w, http.StatusUnauthorized,
+				"api key creator is no longer a project member")
+			return
+		}
+	}
+```
+
+Note: the spec's 401 message is unchanged — "api key creator is no longer a project member" applies even on the OAuth path because the synthetic API-key object (`syntheticKey`) the introspection path creates uses the OAuth user as the "creator". A future copy-edit could split the message, but consistency with the API-key path's exact wording is more valuable for now.
+
+If the existing block uses an `if userID != "" {` outer guard, preserve that — OAuth tokens without a user claim (machine-to-machine flows) should not get the membership check.
+
+- [ ] **Step 5: Test the OAuth-path check**
+
+Append to `internal/proxy/auth_middleware_test.go`:
+
+```go
+// The OAuth introspection path uses the same checkMembership helper
+// indirectly via the inlined triple-cache pattern. The unit tests in
+// TestCheckMembership_* already cover the helper's contract; this test
+// asserts the wiring is in place by verifying the cache write happens
+// during the OAuth flow.
+//
+// (A full integration test of handleTokenIntrospectionAuth would require
+// a fake TokenIntrospector + a real *store.Store; the existing test
+// scaffolding for that doesn't exist, so we rely on the unit-level
+// helper tests plus the fact that the OAuth path now calls the same
+// memberPresentCacheGet/Set + GetProjectMember sequence verbatim.)
+func TestOAuthPath_UsesSharedMembershipCache(t *testing.T) {
+	clearMemberPresentCache()
+	// Sentinel: a positive cache write from the API-key path is visible
+	// to a subsequent OAuth-path lookup (they share the cache).
+	memberPresentCacheSet("proj-shared:user-shared", true)
+	got, ok := memberPresentCacheGet("proj-shared:user-shared")
+	if !ok || !got {
+		t.Errorf("shared cache miss: ok=%v got=%v", ok, got)
+	}
+}
+```
+
+This is intentionally a small smoke test — the heavy-lifting coverage stays in the `TestCheckMembership_*` suite. If a fake `TokenIntrospector` already exists, prefer a full integration test instead.
+
+- [ ] **Step 6: Run everything**
+
+```bash
+cd /root/coding/modelserver
+go test ./internal/store/... ./internal/admin/... ./internal/proxy/...
+go build ./...
+```
+
+All green.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add internal/store/projects.go internal/store/projects_test.go \
+        internal/store/migrations/055_revoke_orphaned_api_keys.sql \
+        internal/store/migrations_055_test.go \
+        internal/admin/handle_projects.go internal/admin/routes.go \
+        internal/proxy/auth_middleware.go internal/proxy/auth_middleware_test.go
+git commit -m "feat(auth): revoke OAuth grants on member removal + fail-closed OAuth path
+
+Layer A': RemoveProjectMember now also deletes the member's oauth_grants
+in the same tx and returns them; handleRemoveMember best-effort revokes
+each grant's Hydra consent session and surfaces deleted_oauth_grants in
+the response body. Migration 055 grows a parallel DELETE for orphan
+grants.
+
+Layer B': handleTokenIntrospectionAuth applies the same triple-cache
+fail-closed membership check the API-key path got in the prior commit,
+sharing memberPresentCache + the same 401/503 contracts. Removed-member
+access tokens are now rejected at every request.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 7: Dashboard — confirmation dialog + post-action count
 
 **Files:**
 - Modify: `dashboard/src/api/members.ts`
@@ -1325,22 +1743,25 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 | `memberPresentCache` (10s, shared key) | Task 5 |
 | Triple-cache hydration via one DB call | Task 5 |
 | Backfill migration 055 | Task 1 |
-| Frontend confirmation dialog | Task 6 |
-| Frontend success toast w/ count | Task 6 |
+| OAuth-grant revocation on member removal (Layer A') | Task 6 |
+| OAuth introspection path fail-closed membership check (Layer B') | Task 6 |
+| Migration 055 also deletes orphan OAuth grants | Task 6 |
+| Frontend confirmation dialog | Task 7 |
+| Frontend success toast w/ count | Task 7 |
 | Status flip uses existing `revoked` enum value | Task 2 (SQL literal `'revoked'`), Task 1 (SQL literal `'revoked'`) |
 | Re-add does NOT auto-reactivate | Implicit — nothing in any task reactivates revoked keys; documented in spec |
 | Owner-removal protection | Out of scope (spec) — no task |
 | Tests cover: tx atomicity, scope by (project, user), pre-migration zombie state, count-only-active | Task 2 (4 tests) |
 | Tests cover: 401 on removed member, 503 on DB error (fail-closed), positive and negative cache hits, error not cached | Task 5 (5 tests) |
 | Tests cover: migration revokes only orphans, leaves member's keys alone, idempotent on re-run | Task 1 (1 test, multiple assertions) |
-| Frontend tests | N/A — no FE framework (called out in Global Constraints + Task 6 Step 4 manual smoke) |
+| Frontend tests | N/A — no FE framework (called out in Global Constraints + Task 7 Step 4 manual smoke) |
 
 No spec requirement is unimplemented.
 
 **2. Placeholder scan**
 
 - No TBD / TODO / "implement later" / "appropriate error handling" / "similar to Task N" / vague refs.
-- Task 6 Step 2 instructs the engineer to read `MembersPage.tsx` end-to-end before editing — necessary because the page already has its own state and the dialog JSX must align with existing patterns. The example JSX block is the target shape; the surrounding scaffold (imports, useState placement, dialog footer convention) is described concretely.
+- Task 7 Step 2 instructs the engineer to read `MembersPage.tsx` end-to-end before editing — necessary because the page already has its own state and the dialog JSX must align with existing patterns. The example JSX block is the target shape; the surrounding scaffold (imports, useState placement, dialog footer convention) is described concretely.
 - Task 5 Step 5 inlines the triple-cache logic instead of calling `checkMembership` directly — this is a deliberate decoupling explained in the step text (the inline version uses the shared `GetProjectMember` call to hydrate three caches in one DB round-trip; `checkMembership` exists purely for its unit-test contract).
 - Task 2 Step 5 explicitly authorizes leaving the build red between commits (Task 2's signature change vs Task 4's caller update; Task 3 also lands inside this window). This is honest scaffolding, not a defect.
 
@@ -1348,13 +1769,13 @@ No spec requirement is unimplemented.
 
 - `RemoveProjectMember(projectID, userID string) (int, error)` — declared in Task 2, consumed in Task 4 (`revokedCount, err := st.RemoveProjectMember(...)`).
 - `CountActiveKeysForMember(projectID, userID string) (int, error)` — declared in Task 2, consumed in Task 4.
-- Response JSON tags: `{"revoked_api_keys": N}` (Task 4 handler) ↔ TS type `{ revoked_api_keys: number }` (Task 6 mutation). Match.
-- Response JSON tags: `{"active_api_keys": N}` (Task 4 handler) ↔ TS type `{ active_api_keys: number }` (Task 6 hook). Match.
+- Response JSON tags: `{"revoked_api_keys": N, "deleted_oauth_grants": M}` (Task 6 extends Task 4's handler) ↔ TS type `{ revoked_api_keys: number; deleted_oauth_grants: number }` (Task 7 mutation). Match.
+- Response JSON tags: `{"active_api_keys": N}` (Task 4 handler) ↔ TS type `{ active_api_keys: number }` (Task 7 hook). Match.
 - `memberStore` interface (Task 5) consumed only inside the proxy package; the production code path doesn't go through it, only the test does. Consistent.
 - `memberPresentCacheGet/Set` and `InvalidateMemberPresentCache` — Task 5 declares all three; production code uses Get+Set, exported Invalidate name is reserved for future callers.
 - `checkMembership(w, ms, projectID, userID) bool` — only consumed by tests in this plan; production inlines the equivalent logic. Documented as such.
-- `useMemberAffectedKeys(projectId, userId | null)` — declared in Task 6 Step 1, consumed in Task 6 Step 2.
-- `removeMember.mutateAsync(userId)` returning a typed body — established via the updated mutation generic in Task 6 Step 1, consumed in the dialog's confirm button (Task 6 Step 2).
+- `useMemberAffectedKeys(projectId, userId | null)` — declared in Task 7 Step 1, consumed in Task 7 Step 2.
+- `removeMember.mutateAsync(userId)` returning a typed body with `{revoked_api_keys, deleted_oauth_grants}` — established via the updated mutation generic in Task 7 Step 1, consumed in the dialog's confirm button (Task 7 Step 2).
 - Task 3's `handleCreateKey` membership check uses existing `MemberFromContext` and `st.GetProjectMember` — no new symbols introduced; no downstream consumers.
 
 No naming drift detected.

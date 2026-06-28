@@ -39,7 +39,16 @@ Two layers of defense, deployed together:
   a project member, even if Layer A was bypassed (direct SQL, future
   ownership-transfer flow, race conditions across nodes).
 - **One-shot backfill.** A migration revokes existing zombie keys in
-  production at deploy time.
+  production at deploy time and (added per user feedback) also deletes
+  existing orphaned OAuth grants.
+- **OAuth-grant revocation.** Removing a member also deletes that
+  member's `oauth_grants` rows for the project in the same
+  transaction, and best-effort revokes the corresponding Hydra
+  consent sessions. The OAuth introspection auth path in
+  `AuthMiddleware` (`handleTokenIntrospectionAuth`) gains the same
+  fail-closed membership check the API-key path has, so an OAuth
+  access token from a removed member is rejected even if a stale
+  grant survives revocation.
 - **Dashboard feedback.** The Members page shows a pre-removal
   confirmation dialog stating how many keys will be revoked, and the
   success toast reports the actual count.
