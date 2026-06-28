@@ -1013,10 +1013,196 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-> **End of installment 2 (Tasks 3-4).** Tasks 1-4 together build the data plane: types know the new fields, store round-trips them, migrations make the columns exist. Nothing reads them yet — the matcher and pricing resolver are still on their old code paths.
+### Task 5: Trace middleware — `ctxClientBucket` plumbing
+
+**Files:**
+- Modify: `internal/proxy/trace_middleware.go` (declare new context key, write it in `TraceMiddleware`, expose getter)
+- Modify: `internal/proxy/trace_middleware_test.go` (assert bucket populated for every `ClientKind*`)
+
+**Interfaces:**
+- Consumes: `types.MapClientKindToBucket` (Task 1); existing `deriveClientKind` and `ctxClientKind` in the same file.
+- Produces:
+  ```go
+  // trace_middleware.go
+  const ctxClientBucket contextKey = "client_bucket"
+  func ClientBucketFromContext(ctx context.Context) string  // returns types.ClientBucketOther for any miss
+  ```
+  Task 6's `router.Match` and Task 7's pricing resolver both call `ClientBucketFromContext(ctx)` to read the bucket from the request context.
+
+Tiny single-purpose task. Reading the bucket from context is the only way Tasks 6-7 obtain it; this task is the bridge.
+
+- [ ] **Step 1: Write the failing test**
+
+Open `internal/proxy/trace_middleware_test.go` and locate any existing `TestDeriveClientKind*` or `TestTraceMiddleware*` test for shape reference. Append:
+
+```go
+func TestTraceMiddleware_WritesClientBucket(t *testing.T) {
+	// Build a chain that just inspects the context after TraceMiddleware ran.
+	var gotKind, gotBucket string
+	probe := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKind = ClientKindFromContext(r.Context())
+		gotBucket = ClientBucketFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	cases := []struct {
+		name       string
+		setup      func(*http.Request)
+		wantKind   string
+		wantBucket string
+	}{
+		{
+			name:       "claude_code_cli",
+			setup:      func(r *http.Request) { r.Header.Set("User-Agent", "claude-cli/1.0 (external, cli)"); r.Body = io.NopCloser(strings.NewReader(`{"metadata":{"user_id":"user_` + strings.Repeat("a", 64) + `_account__session_00000000-0000-0000-0000-000000000000"}}`)) },
+			wantKind:   types.ClientKindClaudeCode,
+			wantBucket: types.ClientBucketClaudeCodeCLI,
+		},
+		{
+			name:       "claude_desktop",
+			setup:      func(r *http.Request) { r.Header.Set("User-Agent", "Mozilla/5.0 Claude/1.0 (Electron/30.0)") },
+			wantKind:   types.ClientKindClaudeDesktop,
+			wantBucket: types.ClientBucketClaudeDesktop,
+		},
+		{
+			name:       "codex_cli",
+			setup:      func(r *http.Request) { r.Header.Set("session_id", "00000000-0000-0000-0000-000000000000") },
+			wantKind:   types.ClientKindCodex,
+			wantBucket: types.ClientBucketCodexCLI,
+		},
+		{
+			name:       "opencode_other",
+			setup:      func(r *http.Request) { r.Header.Set("User-Agent", "opencode/0.1.0") },
+			wantKind:   types.ClientKindOpenCode,
+			wantBucket: types.ClientBucketOther,
+		},
+		{
+			name:       "unknown_other",
+			setup:      func(r *http.Request) { r.Header.Set("User-Agent", "curl/8.0") },
+			wantKind:   types.ClientKindUnknown,
+			wantBucket: types.ClientBucketOther,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			gotKind, gotBucket = "", ""
+			mw := TraceMiddleware(config.TraceConfig{TraceHeader: "X-Trace-Id"}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			req := httptest.NewRequest("POST", "/v1/messages", nil)
+			c.setup(req)
+			mw(probe).ServeHTTP(httptest.NewRecorder(), req)
+			if gotKind != c.wantKind {
+				t.Errorf("client_kind = %q, want %q", gotKind, c.wantKind)
+			}
+			if gotBucket != c.wantBucket {
+				t.Errorf("client_bucket = %q, want %q", gotBucket, c.wantBucket)
+			}
+		})
+	}
+}
+
+// TestClientBucketFromContext_Default asserts the getter returns
+// ClientBucketOther when no bucket was written to the context (defensive
+// default for callers that run outside the trace middleware).
+func TestClientBucketFromContext_Default(t *testing.T) {
+	if got := ClientBucketFromContext(context.Background()); got != types.ClientBucketOther {
+		t.Errorf("ClientBucketFromContext(empty) = %q, want %q", got, types.ClientBucketOther)
+	}
+}
+```
+
+The exact request shapes that pass each branch of `deriveClientKind` may differ slightly from what's shown above — verify by reading the corresponding existing tests in `trace_middleware_test.go` (search for `claude-cli`, `claude/`, `session_id`, `opencode/`, etc.) and adapt the `setup` lambdas to match the production matchers exactly. The test's value lies in covering every `ClientKind*` output; the request shaping is secondary.
+
+If the test file lacks the imports `io`, `strings`, `httptest`, `slog`, `context`, or `config`, add them.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd /root/coding/modelserver && go test ./internal/proxy/ -run 'TestTraceMiddleware_WritesClientBucket|TestClientBucketFromContext_Default' -v`
+Expected: build error — `ctxClientBucket` and `ClientBucketFromContext` are undefined.
+
+- [ ] **Step 3: Add the context key + getter + writer**
+
+In `internal/proxy/trace_middleware.go`:
+
+Find the existing `ctxClientKind` constant declaration (around line 22) and add `ctxClientBucket` right after it:
+
+```go
+const (
+	ctxTraceID              contextKey = "trace_id"
+	ctxTraceSource          contextKey = "trace_source"
+	ctxClientKind           contextKey = "client_kind"
+	ctxClientBucket         contextKey = "client_bucket" // NEW
+	ctxClaudeAgentSDKSource contextKey = "claude_agent_sdk_source"
+)
+```
+
+(Exact list shape may differ — keep all existing keys verbatim and append the new one.)
+
+Find `ClientKindFromContext` (around line 108) and add `ClientBucketFromContext` immediately below it:
+
+```go
+// ClientBucketFromContext returns the 5-value ClientBucket classification
+// derived by the trace middleware from ClientKindFromContext. Callers
+// that run outside the trace middleware (or in tests that don't set it)
+// see ClientBucketOther as a defensive default — never propagate a
+// misleading bucket if the upstream wiring drops.
+func ClientBucketFromContext(ctx context.Context) string {
+	if b, ok := ctx.Value(ctxClientBucket).(string); ok {
+		return b
+	}
+	return types.ClientBucketOther
+}
+```
+
+Find the existing line inside `TraceMiddleware`'s handler (around line 161) that writes `ctxClientKind`:
+
+```go
+kind, sdkSource := deriveClientKind(r, traceCfg)
+ctx = context.WithValue(ctx, ctxClientKind, kind)
+```
+
+Add the bucket write immediately after it:
+
+```go
+kind, sdkSource := deriveClientKind(r, traceCfg)
+ctx = context.WithValue(ctx, ctxClientKind, kind)
+ctx = context.WithValue(ctx, ctxClientBucket, types.MapClientKindToBucket(kind))
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd /root/coding/modelserver && go test ./internal/proxy/ -run 'TestTraceMiddleware_WritesClientBucket|TestClientBucketFromContext_Default' -v`
+Expected: all PASS.
+
+- [ ] **Step 5: Run the full proxy package**
+
+Run: `cd /root/coding/modelserver && go test ./internal/proxy/...`
+Expected: PASS — existing tests are unaffected (no production code path reads `ctxClientBucket` yet; Tasks 6-7 wire those readers in).
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /root/coding/modelserver
+git add internal/proxy/trace_middleware.go internal/proxy/trace_middleware_test.go
+git commit -m "feat(proxy): TraceMiddleware writes ctxClientBucket alongside ctxClientKind
+
+Adds the 5-value bucket projection of the existing client_kind onto the
+request context, plus ClientBucketFromContext getter that returns
+ClientBucketOther for any miss. The bucket is computed via the pure
+types.MapClientKindToBucket mapping introduced in the type primitives
+task.
+
+No production code path reads the new context value yet — Task 6
+(router.Match) and Task 7 (Policy.ComputeCreditsForClient) wire those
+consumers in.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+> **End of installment 3 (Task 5).** Trace middleware now exposes the client bucket on the request context. Tasks 6 + 7 will consume it.
 >
 > Remaining installments:
-> - **Installment 3 (Task 5):** trace middleware `ctxClientBucket` plumbing + getter + tests.
 > - **Installment 4 (Task 6):** `Router.Match` signature break + `matchesGlobalRoute` extension + weighted specificity sort + `MatrixGlobal` extension + executor caller update + full router_engine_test.go overhaul.
 > - **Installment 5 (Task 7):** `Policy.ComputeCreditsForClient` resolver + Executor pricing call-site update + no-regression invariant tests.
 > - **Installment 6 (Task 8):** admin API validation for new route fields + `GET /routing/clients` + `GET /routing/billing-modes` + matrix endpoint filter params + plan admin allow-list update.
