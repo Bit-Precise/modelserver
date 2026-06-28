@@ -1136,7 +1136,7 @@ func (e *Executor) completeStreamingRequest(
 		RequestKind:           reqCtx.RequestKind,
 		Model:                 model,
 		Streaming:             true,
-		Status:                types.RequestStatusSuccess,
+		Status:                "", // set below from metrics
 		InputTokens:           metrics.InputTokens,
 		OutputTokens:          metrics.OutputTokens,
 		CacheCreationTokens:   metrics.CacheCreationTokens,
@@ -1149,6 +1149,9 @@ func (e *Executor) completeStreamingRequest(
 		ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
 		ExtraUsageReason:      reqCtx.ExtraUsageReason,
 	}
+	status, errMsg := requestStatusFromMetrics(metrics)
+	req.Status = status
+	req.ErrorMessage = errMsg
 	if reqCtx.RequestID != "" {
 		go func() {
 			if err := e.store.CompleteRequest(reqCtx.RequestID, &req); err != nil {
@@ -1161,7 +1164,7 @@ func (e *Executor) completeStreamingRequest(
 
 	logger.Info("request completed",
 		"msg_id", metrics.MsgID,
-		"status", types.RequestStatusSuccess,
+		"status", status,
 		"streaming", true,
 		"input_tokens", metrics.InputTokens,
 		"output_tokens", metrics.OutputTokens,
@@ -1570,6 +1573,18 @@ func copyWithFlush(src io.Reader, dst io.Writer, flusher http.Flusher) (int64, e
 			return total, readErr
 		}
 	}
+}
+
+// requestStatusFromMetrics maps a StreamMetrics result to the (status,
+// error_message) pair to persist on the requests row. Interrupted streams
+// (copyWithFlush returned an error mid-flight) become Status=error with
+// the underlying error recorded so dashboards and billing see the truth
+// instead of a phantom success.
+func requestStatusFromMetrics(m StreamMetrics) (string, string) {
+	if m.InterruptErr != nil {
+		return types.RequestStatusError, "stream_interrupted: " + m.InterruptErr.Error()
+	}
+	return types.RequestStatusSuccess, ""
 }
 
 // upstreamTimeout returns the per-attempt context deadline applied to the
