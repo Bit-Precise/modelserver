@@ -609,11 +609,39 @@ func handleRemoveMember(st *store.Store) http.HandlerFunc {
 		}
 		projectID := chi.URLParam(r, "projectID")
 		userID := chi.URLParam(r, "userID")
-		if err := st.RemoveProjectMember(projectID, userID); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "failed to remove member")
+
+		revokedCount, err := st.RemoveProjectMember(projectID, userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal",
+				"failed to remove member")
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		writeData(w, http.StatusOK, map[string]int{
+			"revoked_api_keys": revokedCount,
+		})
+	}
+}
+
+// handleCountAffectedKeysOnRemove returns how many active API keys the
+// given user has in the project. Used by the dashboard's pre-removal
+// confirmation dialog so the operator sees the blast radius before
+// clicking Confirm.
+func handleCountAffectedKeysOnRemove(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireRole(w, r, types.RoleOwner, types.RoleMaintainer) {
+			return
+		}
+		projectID := chi.URLParam(r, "projectID")
+		userID := chi.URLParam(r, "userID")
+		n, err := st.CountActiveKeysForMember(projectID, userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal",
+				"failed to count affected keys")
+			return
+		}
+		writeData(w, http.StatusOK, map[string]int{
+			"active_api_keys": n,
+		})
 	}
 }
 
