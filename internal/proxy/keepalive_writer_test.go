@@ -39,8 +39,8 @@ func (f *fakeRW) Write(p []byte) (int, error) {
 	return f.buf.Write(p)
 }
 
-// eventually polls fn every 5ms until it returns true or the deadline
-// elapses. Returns the elapsed time and whether the condition held.
+// eventually polls fn every 5ms until it returns true or the timeout
+// elapses, failing the test via t.Fatalf if the deadline passes first.
 func eventually(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

@@ -61,7 +61,7 @@ func (k *keepaliveWriter) Write(p []byte) (int, error) {
 	if k.flusher != nil {
 		k.flusher.Flush()
 	}
-	if k.timer != nil && !k.closed {
+	if k.timer != nil && !k.closed && err == nil {
 		k.timer.Reset(k.interval)
 	}
 	return n, err
