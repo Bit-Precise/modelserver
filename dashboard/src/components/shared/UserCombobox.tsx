@@ -70,10 +70,8 @@ export function UserCombobox({
           {selected ? (
             <X
               className="h-3 w-3 opacity-60 hover:opacity-100"
-              onClick={(e) => {
-                e.stopPropagation();
-                onChange(null);
-              }}
+              onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+              onClick={(e) => { e.stopPropagation(); onChange(null); }}
             />
           ) : null}
           <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />

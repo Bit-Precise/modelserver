@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   useAllProjects,
@@ -20,6 +20,11 @@ import type { Project } from "@/api/types";
 import { useNavigate } from "react-router";
 import type { CreditWindowStatus } from "@/api/subscriptions";
 import { X } from "lucide-react";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUUID(s: string): boolean {
+  return UUID_RE.test(s);
+}
 
 function initials(name?: string): string {
   return (
@@ -62,6 +67,22 @@ export function AdminProjectsPage() {
 
   const projectId = searchParams.get("project_id") ?? "";
   const ownerId = searchParams.get("owner");
+
+  const [projectIdInput, setProjectIdInput] = useState<string>(() => projectId);
+
+  // Keep local input in sync when URL filter changes externally (e.g. Clear button)
+  useEffect(() => {
+    setProjectIdInput(projectId);
+  }, [projectId]);
+
+  const commitProjectId = () => {
+    if (projectIdInput === "") {
+      updateFilter("project_id", null);
+    } else if (isUUID(projectIdInput)) {
+      updateFilter("project_id", projectIdInput);
+    }
+    // else: leave URL filter alone, keep local input populated for editing
+  };
 
   const updateFilter = (key: "project_id" | "owner", value: string | null) => {
     const next = new URLSearchParams(searchParams);
@@ -202,8 +223,10 @@ export function AdminProjectsPage() {
           <label className="text-xs text-muted-foreground">Project ID</label>
           <Input
             placeholder="Paste project UUID"
-            value={projectId}
-            onChange={(e) => updateFilter("project_id", e.target.value || null)}
+            value={projectIdInput}
+            onChange={(e) => setProjectIdInput(e.target.value)}
+            onBlur={commitProjectId}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitProjectId(); } }}
           />
         </div>
         <div className="space-y-1 flex-1 min-w-[240px] max-w-sm">
