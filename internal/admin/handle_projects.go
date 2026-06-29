@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/modelserver/modelserver/internal/ratelimit"
 	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
@@ -45,7 +46,23 @@ func handleListAllProjects(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := parsePagination(r)
 
-		projects, total, err := st.ListAllProjects(p)
+		var filters store.ProjectListFilters
+		if v := r.URL.Query().Get("project_id"); v != "" {
+			if _, err := uuid.Parse(v); err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", "invalid project_id: not a UUID")
+				return
+			}
+			filters.ProjectID = v
+		}
+		if v := r.URL.Query().Get("owner"); v != "" {
+			if _, err := uuid.Parse(v); err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", "invalid owner: not a UUID")
+				return
+			}
+			filters.CreatedBy = v
+		}
+
+		projects, total, err := st.ListAllProjects(p, filters)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to list projects")
 			return
