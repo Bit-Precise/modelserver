@@ -1,19 +1,30 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import {
   useAllProjects,
   useAdminProjectsSubscriptionsOverview,
   type ProjectOwnerSnapshot,
 } from "@/api/projects";
+import { APIError } from "@/api/client";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DataTable, type Column } from "@/components/shared/DataTable";
 import { Pagination } from "@/components/shared/Pagination";
 import { StatusBadge } from "@/components/shared/StatusBadge";
+import { UserCombobox } from "@/components/shared/UserCombobox";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import type { Project } from "@/api/types";
 import { useNavigate } from "react-router";
 import type { CreditWindowStatus } from "@/api/subscriptions";
+import { X } from "lucide-react";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUUID(s: string): boolean {
+  return UUID_RE.test(s);
+}
 
 function initials(name?: string): string {
   return (
@@ -51,8 +62,54 @@ const PER_PAGE = 20;
 
 export function AdminProjectsPage() {
   const [page, setPage] = useState(1);
-  const { data: projectsData, isLoading: loadingProjects } = useAllProjects(page, PER_PAGE);
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+
+  const projectId = searchParams.get("project_id") ?? "";
+  const ownerId = searchParams.get("owner");
+
+  const [projectIdInput, setProjectIdInput] = useState<string>(() => projectId);
+
+  // Keep local input in sync when URL filter changes externally (e.g. Clear button)
+  useEffect(() => {
+    setProjectIdInput(projectId);
+  }, [projectId]);
+
+  const commitProjectId = () => {
+    if (projectIdInput === "") {
+      updateFilter("project_id", null);
+    } else if (isUUID(projectIdInput)) {
+      updateFilter("project_id", projectIdInput);
+    }
+    // else: leave URL filter alone, keep local input populated for editing
+  };
+
+  const updateFilter = (key: "project_id" | "owner", value: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (value && value !== "") {
+      next.set(key, value);
+    } else {
+      next.delete(key);
+    }
+    setSearchParams(next, { replace: true });
+    setPage(1);
+  };
+
+  const clearFilters = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("project_id");
+    next.delete("owner");
+    setSearchParams(next, { replace: true });
+    setPage(1);
+  };
+
+  const hasActiveFilters = projectId !== "" || (ownerId !== null && ownerId !== "");
+
+  const { data: projectsData, isLoading: loadingProjects, error } = useAllProjects(
+    page,
+    PER_PAGE,
+    { projectId, ownerId: ownerId ?? undefined },
+  );
 
   const projects = projectsData?.data ?? [];
   const meta = projectsData?.meta;
@@ -161,6 +218,41 @@ export function AdminProjectsPage() {
         title="Projects"
         description="Manage all projects (superadmin only)"
       />
+      <div className="flex items-end gap-2 flex-wrap">
+        <div className="space-y-1 flex-1 min-w-[240px] max-w-md">
+          <label className="text-xs text-muted-foreground">Project ID</label>
+          <Input
+            placeholder="Paste project UUID"
+            value={projectIdInput}
+            onChange={(e) => setProjectIdInput(e.target.value)}
+            onBlur={commitProjectId}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitProjectId(); } }}
+          />
+        </div>
+        <div className="space-y-1 flex-1 min-w-[240px] max-w-sm">
+          <label className="text-xs text-muted-foreground">Owner</label>
+          <UserCombobox
+            value={ownerId}
+            onChange={(id) => updateFilter("owner", id)}
+          />
+        </div>
+        {hasActiveFilters ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearFilters}
+            className="text-muted-foreground"
+          >
+            <X className="mr-1 h-3 w-3" />
+            Clear
+          </Button>
+        ) : null}
+      </div>
+      {error ? (
+        <div className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error instanceof APIError ? error.message : (error as Error).message}
+        </div>
+      ) : null}
       <Card>
         <CardContent className="p-0">
           {isLoading ? (

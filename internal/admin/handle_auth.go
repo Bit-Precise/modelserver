@@ -232,12 +232,15 @@ func handleListUsers(st *store.Store) http.HandlerFunc {
 	}
 }
 
-// userCompact is the minimal shape returned by /users/compact for dropdown
-// population. Email is intentionally excluded; the only callers populate
-// filter selects where the displayed label is nickname-or-id.
+// userCompact is the minimal shape returned by /users/compact for
+// dropdown population. Includes email + picture so filter dropdowns
+// can render avatar + nickname + email per row (used by the admin
+// projects-list owner filter).
 type userCompact struct {
 	ID       string `json:"id"`
 	Nickname string `json:"nickname,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Picture  string `json:"picture,omitempty"`
 }
 
 // handleListUsersCompact returns all users in one shot, lightweight, no
@@ -252,7 +255,12 @@ func handleListUsersCompact(st *store.Store) http.HandlerFunc {
 		}
 		out := make([]userCompact, 0, len(users))
 		for _, u := range users {
-			out = append(out, userCompact{ID: u.ID, Nickname: u.Nickname})
+			out = append(out, userCompact{
+				ID:       u.ID,
+				Nickname: u.Nickname,
+				Email:    u.Email,
+				Picture:  u.Picture,
+			})
 		}
 		writeData(w, http.StatusOK, out)
 	}
