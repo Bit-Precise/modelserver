@@ -459,6 +459,11 @@ func handleAddMember(st *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "bad_request", "email and role are required")
 			return
 		}
+		if body.Role == types.RoleOwner || !types.IsAssignableRole(body.Role) {
+			writeError(w, http.StatusBadRequest, "invalid_role",
+				"role must be 'maintainer' or 'developer' (use transfer-ownership to change owner)")
+			return
+		}
 
 		// Resolve email to user ID. Generic error to avoid leaking registration status.
 		user, err := st.GetUserByEmail(body.Email)
