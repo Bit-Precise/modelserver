@@ -568,19 +568,18 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 		caller := UserFromContext(r.Context())
 		callerMember := MemberFromContext(r.Context())
 
-		// Load target member to check their role.
-		targetMember, err := st.GetProjectMember(projectID, userID)
-		if err != nil || targetMember == nil {
-			writeError(w, http.StatusNotFound, "not_found", "member not found")
-			return
-		}
-
 		// Per the simplified rule (see spec
 		// 2026-06-15-self-quota-permissions-design.md): the only remaining
 		// restriction on quota changes is that maintainers may not set quota
 		// on owners. Self-quota and same-level quota are both allowed.
 		// denied_models is intentionally NOT subject to this check.
 		if body.CreditQuotaPct != nil || body.ClearQuota {
+			// Load target member only when needed for the quota permission check.
+			targetMember, err := st.GetProjectMember(projectID, userID)
+			if err != nil || targetMember == nil {
+				writeError(w, http.StatusNotFound, "not_found", "member not found")
+				return
+			}
 			if ok, status, code, msg := canSetMemberQuota(callerMember, targetMember.Role, userID == caller.ID); !ok {
 				writeError(w, status, code, msg)
 				return
@@ -596,7 +595,7 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 			quotaArg = &body.CreditQuotaPct
 		}
 
-		err = st.UpdateProjectMember(projectID, userID, body.Role, quotaArg, body.DeniedModels)
+		err := st.UpdateProjectMember(projectID, userID, body.Role, quotaArg, body.DeniedModels)
 		switch {
 		case err == nil:
 			// fall through
@@ -733,9 +732,14 @@ func handleTransferOwnership(st *store.Store) http.HandlerFunc {
 			fromUID = caller.ID
 		} else {
 			cur, err := st.GetCurrentProjectOwner(projectID)
-			if err != nil || cur == "" {
+			if err != nil {
 				writeError(w, http.StatusInternalServerError, "internal",
 					"failed to resolve current owner")
+				return
+			}
+			if cur == "" {
+				writeError(w, http.StatusConflict, "no_current_owner",
+					"project has no current owner; resolve via DB before using transfer-ownership")
 				return
 			}
 			fromUID = cur

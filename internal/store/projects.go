@@ -563,9 +563,11 @@ func (s *Store) TransferProjectOwnership(projectID, fromUID, toUID, demoteTo str
 		return ErrNotAMember
 	}
 	if targetRole == types.RoleOwner {
-		// Defensive — we already checked fromUID != toUID, so this can
-		// only happen if multiple owners exist (caught above) or there
-		// is a fundamental bug.
+		// Unreachable in practice — kept as a guard against future
+		// invariant-check changes. Reaching here would require both
+		// ownerCount==1 (passes above) AND targetRole=='owner', which
+		// implies currentOwner==toUID and thus fromUID==toUID — already
+		// short-circuited at function entry.
 		return ErrAlreadyOwner
 	}
 
