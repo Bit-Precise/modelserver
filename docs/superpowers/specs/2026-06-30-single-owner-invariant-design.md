@@ -1,6 +1,10 @@
-# Single-Owner Invariant for Projects — Design
+# Single-Owner Invariant + creator-based Quota — Design
 
 ## Problem
+
+Two related defects in project ownership semantics.
+
+### 1. No single-owner invariant
 
 `project_members.role` has no constraint preventing a project from having
 zero or multiple owners. Today five write paths can violate this, and none
@@ -30,10 +34,39 @@ Concrete observed consequences:
   project has an owner" (notification routing, billing attribution) has
   no defined behavior in that state.
 
+### 2. `max_projects` quota counts the wrong column
+
+`handleCreateProject` (`internal/admin/handle_projects.go:289-296`)
+gates per-user creation by `st.CountUserOwnedProjects(user.ID)`, which
+counts `project_members WHERE user_id=$1 AND role='owner'`. With
+ownership transfers in the picture, this is the wrong axis:
+
+- Transferring a project away frees a slot on the old owner and burns
+  one on the new owner. A user can repeatedly transfer-out to dodge
+  their quota, then create more.
+- Conversely, accepting a transfer reduces the recipient's remaining
+  quota silently.
+- The 0/multi-owner historical states described above also distort the
+  count (0 on some users, double on others).
+
+The quota was meant to limit "how much a user can spin up," which is a
+property of project **creation**, not of current ownership. The fix is
+to count `projects.created_by = $1`. `created_by` is immutable for the
+lifetime of a project, so the count is monotone with respect to the
+user's actions.
+
+Archived projects are included in the count — per product decision,
+archive is not a quota release; only hard delete (currently an admin-
+only operation) frees a slot.
+
 ## Goal
 
-Enforce the invariant: **every non-archived project has exactly one
-`role='owner'` row in `project_members`.**
+**A.** Enforce the invariant: **every non-archived project has exactly
+one `role='owner'` row in `project_members`.**
+
+**B.** Switch the `max_projects` quota check from owner-count to
+creator-count: count `projects.created_by = $userID` (including
+archived).
 
 Two layers of defense:
 
@@ -48,9 +81,15 @@ Two layers of defense:
 A new dedicated endpoint, `POST /projects/{id}/transfer-ownership`,
 becomes the **only** way to change who the owner is.
 
-Archived projects (`status='archived'`) are explicitly excluded — they
-are read-only by convention and existing tooling does not maintain
-membership rows on them.
+Archived-project handling differs by concern:
+
+- **Single-owner invariant (goal A):** archived projects are excluded.
+  They are read-only by convention; existing tooling does not maintain
+  membership rows on them. None of the tightened endpoints are
+  expected to fire against an archived project in practice.
+- **Creator-based quota (goal B):** archived projects are *included*
+  in the count. Archive is not a quota release; only hard delete
+  frees a slot.
 
 ## Non-goals
 
@@ -209,6 +248,32 @@ if scattered.)
 - **Modified:** `handleRemoveMember` — map `ErrOwnerMustTransfer` to
   409.
 
+### `internal/store/users.go` and `internal/store/projects.go`
+
+- **Rename and reimplement:** `CountUserOwnedProjects(userID) (int, error)`
+  → `CountUserCreatedProjects(userID) (int, error)`. New query:
+
+  ```sql
+  SELECT COUNT(*) FROM projects WHERE created_by = $1
+  ```
+
+  No status filter — archived projects are included.
+
+  The old function has exactly one caller (`handleCreateProject`); rename
+  + update the call site in the same change. Function lives more
+  naturally next to `projects.go` queries than `users.go`; move it
+  while renaming.
+
+- **Index:** `idx_projects_created_by` on `projects(created_by)` already
+  exists (`migrations/001_init.sql:42`). No new migration needed.
+
+### `internal/admin/handle_projects.go` — quota check
+
+In `handleCreateProject`, replace `st.CountUserOwnedProjects(user.ID)`
+with `st.CountUserCreatedProjects(user.ID)`. Error message stays
+`"project limit reached"`; behavior for superadmins (skip the check)
+unchanged.
+
 ### `internal/admin/routes.go`
 
 Add one line under the existing `/projects/{projectID}` route group:
@@ -239,6 +304,8 @@ the surrounding middleware.)
 | `POST /transfer-ownership` to current owner | 400 `already_owner` |
 | `POST /transfer-ownership` by maintainer | 403 |
 | `POST /transfer-ownership` by superadmin (not a member) | 200 |
+| `POST /projects` after user has `max_projects` created (including archived ones) | 403 `project limit reached` |
+| `POST /projects` after user transferred away all their projects but had created `max_projects` total | 403 (creator-count, not owner-count) |
 
 `internal/store/projects_test.go` — store-level integration tests with a
 real Postgres (matches existing test setup):
@@ -253,12 +320,17 @@ real Postgres (matches existing test setup):
 ## Files touched
 
 ```
-internal/types/roles.go                   # NEW
-internal/store/projects.go                # +Transfer, modify Update/Remove, delete unused UpdateProjectMemberRole
-internal/store/projects_test.go           # +concurrency tests
-internal/admin/handle_projects.go         # +handleTransferOwnership, tighten add/update/remove
-internal/admin/handle_projects_test.go    # +table tests
-internal/admin/routes.go                  # +1 route
+internal/types/roles.go                            # NEW
+internal/store/projects.go                         # +Transfer, +CountUserCreatedProjects,
+                                                   #   modify Update/Remove,
+                                                   #   delete unused UpdateProjectMemberRole
+internal/store/users.go                            # remove CountUserOwnedProjects
+internal/store/projects_test.go                    # +concurrency tests, +creator-count test
+internal/admin/handle_projects.go                  # +handleTransferOwnership,
+                                                   #   tighten add/update/remove,
+                                                   #   quota switch to created_by
+internal/admin/handle_projects_test.go             # +table tests, +quota test
+internal/admin/routes.go                           # +1 route
 ```
 
 Not touched: migrations, `users` table, `CreateProject`, frontend
