@@ -213,3 +213,66 @@ func TestHandleTransferOwnership_E2EHappyPath(t *testing.T) {
 		t.Errorf("old owner demoted to %s, want developer", gotOldRole)
 	}
 }
+
+// TestHandleAddMember_E2EOwnerDemoteReturns409 covers audit finding F1
+// at the handler level: posting {email: <owner's email>, role: ...} must
+// not silently demote the current owner. End-to-end through the real
+// store so the UPSERT guard is actually exercised.
+func TestHandleAddMember_E2EOwnerDemoteReturns409(t *testing.T) {
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("set TEST_DATABASE_URL to run")
+	}
+	st, err := store.New(dbURL, slog.Default())
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	ctx := context.Background()
+	mustOne := func(q string, args ...any) string {
+		t.Helper()
+		var s string
+		if err := st.Pool().QueryRow(ctx, q, args...).Scan(&s); err != nil {
+			t.Fatalf("query %s: %v", q, err)
+		}
+		return s
+	}
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := st.Pool().Exec(ctx, q, args...); err != nil {
+			t.Fatalf("exec %s: %v", q, err)
+		}
+	}
+	ownerEmail := "owner-addmember-" + (func() string { var s string; st.Pool().QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&s); return s })() + "@t.local"
+	ownerID := mustOne(`INSERT INTO users (email) VALUES ($1) RETURNING id`, ownerEmail)
+	projectID := mustOne(`INSERT INTO projects (name, created_by) VALUES ('addmember-e2e', $1) RETURNING id`, ownerID)
+	mustExec(`INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'owner')`, projectID, ownerID)
+
+	r := chi.NewRouter()
+	r.Post("/projects/{projectID}/members", handleAddMember(st))
+
+	// Caller is the owner — posts an "add" with owner's own email and
+	// role=maintainer. Pre-PR70: silently demoted. Post-fix: 409.
+	body, _ := json.Marshal(map[string]string{"email": ownerEmail, "role": "maintainer"})
+	req := httptest.NewRequest("POST", "/projects/"+projectID+"/members", bytes.NewReader(body))
+	req = req.WithContext(callerCtx(req.Context(),
+		&types.User{ID: ownerID},
+		&types.ProjectMember{UserID: ownerID, Role: types.RoleOwner},
+	))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+	if !bytes.Contains(rr.Body.Bytes(), []byte(`"owner_must_transfer"`)) {
+		t.Errorf("body lacks owner_must_transfer code: %s", rr.Body.String())
+	}
+
+	// Verify owner row unchanged.
+	role := mustOne(`SELECT role FROM project_members WHERE project_id=$1 AND user_id=$2`, projectID, ownerID)
+	if role != types.RoleOwner {
+		t.Errorf("owner role after rejected upsert = %q, want owner", role)
+	}
+}

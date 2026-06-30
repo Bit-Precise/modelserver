@@ -652,3 +652,128 @@ func TestTransferProjectOwnership_ConcurrentRacesSerialize(t *testing.T) {
 		t.Errorf("winner = %s, want a=%s or b=%s", winner, a, b)
 	}
 }
+
+// TestAddProjectMember_RejectsOwnerDemotionViaUpsert covers the audit
+// finding: AddProjectMember used to silently demote the current owner
+// via INSERT ... ON CONFLICT DO UPDATE. The WHERE-guard on the UPSERT
+// must now suppress the role change and the function must return
+// ErrOwnerMustTransfer.
+func TestAddProjectMember_RejectsOwnerDemotionViaUpsert(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+
+	// Caller posts {email: <owner's email>, role: "maintainer"} —
+	// internally the handler resolves email→userID and calls
+	// AddProjectMember(projectID, owner, "maintainer"). The owner row
+	// must NOT be silently demoted.
+	err := st.AddProjectMember(projectID, owner, types.RoleMaintainer)
+	if !errors.Is(err, ErrOwnerMustTransfer) {
+		t.Fatalf("err = %v, want ErrOwnerMustTransfer", err)
+	}
+
+	var role string
+	if err := st.pool.QueryRow(ctx,
+		`SELECT role FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, owner).Scan(&role); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if role != types.RoleOwner {
+		t.Errorf("owner role after rejected upsert = %q, want %q", role, types.RoleOwner)
+	}
+}
+
+// TestAddProjectMember_RejectsInvalidRole confirms the new
+// pre-validation in AddProjectMember refuses non-assignable roles
+// (including "owner") at the store layer, not just the handler.
+func TestAddProjectMember_RejectsInvalidRole(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+	u := seedSecondUser(t, st, "newmember")
+
+	if err := st.AddProjectMember(projectID, u, types.RoleOwner); !errors.Is(err, ErrInvalidRole) {
+		t.Errorf("role=owner: err = %v, want ErrInvalidRole", err)
+	}
+	if err := st.AddProjectMember(projectID, u, "janitor"); !errors.Is(err, ErrInvalidRole) {
+		t.Errorf("role=janitor: err = %v, want ErrInvalidRole", err)
+	}
+
+	// Sanity: no member row was created.
+	var n int
+	if err := st.pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, u).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("invalid-role add created %d rows, want 0", n)
+	}
+}
+
+// TestUpdateProjectMember_RaceVsTransferSerializes covers audit
+// finding F2: a concurrent TransferProjectOwnership that promotes
+// userA must NOT be silently overwritten by a developer-set update.
+// The FOR UPDATE lock inside UpdateProjectMember must serialize
+// against the transfer's lock on the same row.
+//
+// Setup: owner O; dev A; dev B.
+// Race: goroutine 1 transfers ownership O→A; goroutine 2 sets A's
+// role to "maintainer". Both must complete in some order with a
+// consistent post-state: either A ends up as owner (transfer first)
+// OR A's role was updated before the transfer locked it.
+//
+// What we MUST NOT see: both succeed AND A's role ends up as
+// "maintainer" (because the transfer would have promoted A but the
+// stale UPDATE clobbered it).
+func TestUpdateProjectMember_RaceVsTransferSerializes(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+	a := seedSecondUser(t, st, "race-target")
+	addMember(t, st, projectID, a, types.RoleDeveloper)
+
+	maintainerRole := types.RoleMaintainer
+	var wg sync.WaitGroup
+	var transferErr, updateErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		transferErr = st.TransferProjectOwnership(projectID, owner, a, types.RoleDeveloper)
+	}()
+	go func() {
+		defer wg.Done()
+		updateErr = st.UpdateProjectMember(projectID, a, &maintainerRole, nil, nil)
+	}()
+	wg.Wait()
+
+	// Both calls can succeed (depending on lock order), or the update
+	// can fail with ErrOwnerMustTransfer if it locked AFTER the
+	// transfer promoted A. What's forbidden is "both succeed AND A's
+	// final role is 'maintainer'" — that's the lost-promotion bug.
+	var finalRole string
+	if err := st.pool.QueryRow(context.Background(),
+		`SELECT role FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, a).Scan(&finalRole); err != nil {
+		t.Fatalf("query final role: %v", err)
+	}
+
+	switch {
+	case transferErr == nil && updateErr == nil:
+		// Update ran first (A=maintainer), then transfer promoted A to owner.
+		// Final state must be owner.
+		if finalRole != types.RoleOwner {
+			t.Errorf("both succeeded but A's final role = %q, want owner (transfer lost?)", finalRole)
+		}
+	case transferErr == nil && errors.Is(updateErr, ErrOwnerMustTransfer):
+		// Transfer ran first (A=owner), update locked AFTER and saw owner → rejected.
+		// Final state must be owner.
+		if finalRole != types.RoleOwner {
+			t.Errorf("transfer-then-update-rejected: A's final role = %q, want owner", finalRole)
+		}
+	default:
+		t.Fatalf("unexpected outcome: transferErr=%v updateErr=%v finalRole=%q",
+			transferErr, updateErr, finalRole)
+	}
+}

@@ -490,7 +490,19 @@ func handleAddMember(st *store.Store) http.HandlerFunc {
 			}
 		}
 
-		if err := st.AddProjectMember(projectID, userID, body.Role); err != nil {
+		err = st.AddProjectMember(projectID, userID, body.Role)
+		switch {
+		case err == nil:
+			// fall through
+		case errors.Is(err, store.ErrOwnerMustTransfer):
+			writeError(w, http.StatusConflict, "owner_must_transfer",
+				"target user is the current owner; use POST /projects/{id}/transfer-ownership first")
+			return
+		case errors.Is(err, store.ErrInvalidRole):
+			writeError(w, http.StatusBadRequest, "invalid_role",
+				"role must be 'maintainer' or 'developer'")
+			return
+		default:
 			writeError(w, http.StatusInternalServerError, "internal", "failed to add member")
 			return
 		}
