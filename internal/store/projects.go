@@ -601,6 +601,24 @@ func (s *Store) TransferProjectOwnership(projectID, fromUID, toUID, demoteTo str
 	return nil
 }
 
+// GetCurrentProjectOwner returns the user_id of the project's current
+// owner, or "" if there is none. Used by handleTransferOwnership when a
+// superadmin who is not a member initiates a transfer.
+func (s *Store) GetCurrentProjectOwner(projectID string) (string, error) {
+	var uid string
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT user_id FROM project_members WHERE project_id=$1 AND role='owner' LIMIT 1`,
+		projectID,
+	).Scan(&uid)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get current owner: %w", err)
+	}
+	return uid, nil
+}
+
 // CountActiveKeysForMember returns the number of api_keys with
 // status='active' that the user created in the project. Used by the
 // dashboard's pre-removal confirmation dialog.

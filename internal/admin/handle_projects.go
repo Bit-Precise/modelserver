@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"log"
 	"math"
 	"net/http"
@@ -652,6 +653,88 @@ func handleRemoveMember(st *store.Store, hydra *HydraClient) http.HandlerFunc {
 			"revoked_api_keys":     revokedKeys,
 			"deleted_oauth_grants": len(deletedGrants),
 		})
+	}
+}
+
+// handleTransferOwnership atomically swaps the project owner. Only the
+// current owner or a superadmin may call it. The store enforces the
+// owner-count invariant in the same transaction.
+func handleTransferOwnership(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		caller := UserFromContext(r.Context())
+		callerMember := MemberFromContext(r.Context())
+		projectID := chi.URLParam(r, "projectID")
+
+		// Authorization: superadmin OR project owner.
+		isAuthorized := caller != nil &&
+			(caller.IsSuperadmin || (callerMember != nil && callerMember.Role == types.RoleOwner))
+		if !isAuthorized {
+			writeError(w, http.StatusForbidden, "forbidden", "only the project owner can transfer ownership")
+			return
+		}
+
+		var body struct {
+			ToUserID string `json:"to_user_id"`
+			DemoteTo string `json:"demote_to"`
+		}
+		if err := decodeBody(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
+			return
+		}
+		if body.ToUserID == "" {
+			writeError(w, http.StatusBadRequest, "bad_request", "to_user_id is required")
+			return
+		}
+		if body.DemoteTo == "" {
+			body.DemoteTo = types.RoleDeveloper
+		}
+
+		// Resolve fromUID: for a superadmin acting from outside the
+		// project, look up the current owner so the store's
+		// from == current-owner assertion holds.
+		fromUID := ""
+		if callerMember != nil && callerMember.Role == types.RoleOwner {
+			fromUID = caller.ID
+		} else {
+			cur, err := st.GetCurrentProjectOwner(projectID)
+			if err != nil || cur == "" {
+				writeError(w, http.StatusInternalServerError, "internal",
+					"failed to resolve current owner")
+				return
+			}
+			fromUID = cur
+		}
+
+		err := st.TransferProjectOwnership(projectID, fromUID, body.ToUserID, body.DemoteTo)
+		switch {
+		case err == nil:
+			// fall through
+		case errors.Is(err, store.ErrNotAMember):
+			writeError(w, http.StatusBadRequest, "not_a_member", "target user is not a project member")
+			return
+		case errors.Is(err, store.ErrAlreadyOwner):
+			writeError(w, http.StatusBadRequest, "already_owner", "target user is already the project owner")
+			return
+		case errors.Is(err, store.ErrInvalidRole):
+			writeError(w, http.StatusBadRequest, "invalid_role", "demote_to must be 'maintainer' or 'developer'")
+			return
+		case errors.Is(err, store.ErrInvariantViolated):
+			log.Printf("WARN transfer_ownership: invariant violation on project %s: %v", projectID, err)
+			writeError(w, http.StatusConflict, "conflict", "project owner state is inconsistent; please retry")
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, "internal", "failed to transfer ownership")
+			return
+		}
+
+		// Return the updated member list so the dashboard can refresh
+		// in one round-trip (same shape as GET /members).
+		members, err := st.ListProjectMembers(projectID)
+		if err != nil {
+			writeData(w, http.StatusOK, map[string]string{"status": "transferred"})
+			return
+		}
+		writeData(w, http.StatusOK, members)
 	}
 }
 
