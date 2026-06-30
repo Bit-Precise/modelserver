@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/modelserver/modelserver/internal/types"
@@ -379,5 +381,399 @@ func TestCountActiveKeysForMember(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("n = %d, want 2 (only active)", n)
+	}
+}
+
+func TestCountUserCreatedProjects_CountsByCreatedByOnly(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	a, _ := seedUserAndProject(t, st) // a creates one project via the helper
+	b := seedSecondUser(t, st, "creator-b")
+
+	// a creates two more projects (active + archived); b creates one.
+	seedProjectOwnedBy(t, st, "a-active", a)
+	aArchived := seedProjectOwnedBy(t, st, "a-archived", a)
+	if _, err := st.pool.Exec(ctx, `UPDATE projects SET status='archived' WHERE id=$1`, aArchived); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	seedProjectOwnedBy(t, st, "b-active", b)
+
+	// Now hand off ownership of one of a's projects to b inside project_members
+	// directly. This must NOT change either count — quota is by created_by.
+	otherA := seedProjectOwnedBy(t, st, "a-transferred", a)
+	if _, err := st.pool.Exec(ctx, `
+		INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'owner')`,
+		otherA, b); err != nil {
+		t.Fatalf("add owner: %v", err)
+	}
+
+	got, err := st.CountUserCreatedProjects(a)
+	if err != nil {
+		t.Fatalf("CountUserCreatedProjects(a): %v", err)
+	}
+	// a created: helper one + a-active + a-archived + a-transferred = 4
+	if got != 4 {
+		t.Errorf("CountUserCreatedProjects(a) = %d, want 4 (includes archived and transferred-out)", got)
+	}
+
+	got, err = st.CountUserCreatedProjects(b)
+	if err != nil {
+		t.Fatalf("CountUserCreatedProjects(b): %v", err)
+	}
+	// b created: b-active = 1 (NOT counting the project where b is owner-by-transfer)
+	if got != 1 {
+		t.Errorf("CountUserCreatedProjects(b) = %d, want 1 (ownership transfer doesn't move quota)", got)
+	}
+}
+
+func TestRemoveProjectMember_RejectsOwner(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	owner, projectID := seedUserAndProject(t, st)
+	// seedUserAndProject inserts the project but does NOT add the
+	// project_members row — do it explicitly to match production state.
+	addMember(t, st, projectID, owner, types.RoleOwner)
+
+	_, _, err := st.RemoveProjectMember(projectID, owner)
+	if !errors.Is(err, ErrOwnerMustTransfer) {
+		t.Fatalf("err = %v, want ErrOwnerMustTransfer", err)
+	}
+
+	// Owner row must still be present (transaction rolled back).
+	var n int
+	if err := st.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM project_members WHERE project_id=$1 AND user_id=$2 AND role='owner'`,
+		projectID, owner).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("owner rows after rejected remove = %d, want 1", n)
+	}
+}
+
+func TestUpdateProjectMember_RejectsRoleOwner(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+	dev := seedSecondUser(t, st, "to-promote")
+	addMember(t, st, projectID, dev, types.RoleDeveloper)
+
+	newRole := types.RoleOwner
+	err := st.UpdateProjectMember(projectID, dev, &newRole, nil, nil)
+	if !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("err = %v, want ErrInvalidRole", err)
+	}
+
+	// dev's role unchanged.
+	var got string
+	if err := st.pool.QueryRow(context.Background(),
+		`SELECT role FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, dev).Scan(&got); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if got != types.RoleDeveloper {
+		t.Errorf("dev role = %q, want %q", got, types.RoleDeveloper)
+	}
+}
+
+func TestUpdateProjectMember_RejectsDemotingOwner(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+
+	newRole := types.RoleDeveloper
+	err := st.UpdateProjectMember(projectID, owner, &newRole, nil, nil)
+	if !errors.Is(err, ErrOwnerMustTransfer) {
+		t.Fatalf("err = %v, want ErrOwnerMustTransfer", err)
+	}
+
+	// owner role unchanged.
+	var got string
+	if err := st.pool.QueryRow(context.Background(),
+		`SELECT role FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, owner).Scan(&got); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if got != types.RoleOwner {
+		t.Errorf("owner role after rejected demote = %q, want %q", got, types.RoleOwner)
+	}
+}
+
+func TestUpdateProjectMember_AllowsOwnerDeniedModels(t *testing.T) {
+	// denied_models edit on the owner row must still work — it doesn't
+	// change role. Asserts the guard is not over-eager.
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+
+	denied := []string{"gpt-4"}
+	if err := st.UpdateProjectMember(projectID, owner, nil, nil, &denied); err != nil {
+		t.Fatalf("UpdateProjectMember(denied_models only): %v", err)
+	}
+}
+
+func TestTransferProjectOwnership_HappyPath(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+	target := seedSecondUser(t, st, "next-owner")
+	addMember(t, st, projectID, target, types.RoleDeveloper)
+
+	if err := st.TransferProjectOwnership(projectID, owner, target, types.RoleDeveloper); err != nil {
+		t.Fatalf("TransferProjectOwnership: %v", err)
+	}
+
+	// Verify post-state.
+	rows, err := st.pool.Query(ctx,
+		`SELECT user_id, role, credit_quota_percent FROM project_members WHERE project_id=$1 ORDER BY role`,
+		projectID)
+	if err != nil {
+		t.Fatalf("query members: %v", err)
+	}
+	defer rows.Close()
+	type memberRow struct {
+		uid   string
+		role  string
+		quota *float64
+	}
+	var got []memberRow
+	for rows.Next() {
+		var r memberRow
+		if err := rows.Scan(&r.uid, &r.role, &r.quota); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, r)
+	}
+	if len(got) != 2 {
+		t.Fatalf("members = %d, want 2", len(got))
+	}
+	// "developer" < "owner" alphabetically; got[0] is the demoted old owner.
+	if got[0].uid != owner || got[0].role != types.RoleDeveloper || got[0].quota != nil {
+		t.Errorf("demoted row = %+v, want uid=%s role=developer quota=nil", got[0], owner)
+	}
+	if got[1].uid != target || got[1].role != types.RoleOwner || got[1].quota != nil {
+		t.Errorf("promoted row = %+v, want uid=%s role=owner quota=nil", got[1], target)
+	}
+}
+
+func TestTransferProjectOwnership_TargetNotMember(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+	stranger := seedSecondUser(t, st, "stranger")
+
+	err := st.TransferProjectOwnership(projectID, owner, stranger, types.RoleDeveloper)
+	if !errors.Is(err, ErrNotAMember) {
+		t.Fatalf("err = %v, want ErrNotAMember", err)
+	}
+}
+
+func TestTransferProjectOwnership_TargetAlreadyOwner(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+
+	err := st.TransferProjectOwnership(projectID, owner, owner, types.RoleDeveloper)
+	if !errors.Is(err, ErrAlreadyOwner) {
+		t.Fatalf("err = %v, want ErrAlreadyOwner", err)
+	}
+}
+
+func TestTransferProjectOwnership_InvalidDemoteRole(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+	target := seedSecondUser(t, st, "next")
+	addMember(t, st, projectID, target, types.RoleDeveloper)
+
+	err := st.TransferProjectOwnership(projectID, owner, target, types.RoleOwner)
+	if !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("demoteTo=owner: err = %v, want ErrInvalidRole", err)
+	}
+	err = st.TransferProjectOwnership(projectID, owner, target, "janitor")
+	if !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("demoteTo=janitor: err = %v, want ErrInvalidRole", err)
+	}
+}
+
+func TestTransferProjectOwnership_ConcurrentRacesSerialize(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+	a := seedSecondUser(t, st, "race-a")
+	b := seedSecondUser(t, st, "race-b")
+	addMember(t, st, projectID, a, types.RoleDeveloper)
+	addMember(t, st, projectID, b, types.RoleDeveloper)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs[0] = st.TransferProjectOwnership(projectID, owner, a, types.RoleDeveloper) }()
+	go func() { defer wg.Done(); errs[1] = st.TransferProjectOwnership(projectID, owner, b, types.RoleDeveloper) }()
+	wg.Wait()
+
+	// Exactly one goroutine succeeds; the other gets ErrInvariantViolated
+	// because by the time it acquires the lock, the current owner is no
+	// longer `owner` (it's been demoted to developer by the winner).
+	var okCount, invariantCount int
+	for _, e := range errs {
+		switch {
+		case e == nil:
+			okCount++
+		case errors.Is(e, ErrInvariantViolated):
+			invariantCount++
+		default:
+			t.Fatalf("unexpected error: %v", e)
+		}
+	}
+	if okCount != 1 || invariantCount != 1 {
+		t.Fatalf("ok=%d invariant=%d, want exactly 1 of each (errs=%v)", okCount, invariantCount, errs)
+	}
+
+	// Post-state: exactly one owner, equal to either a or b.
+	var n int
+	var winner string
+	if err := st.pool.QueryRow(context.Background(),
+		`SELECT user_id FROM project_members WHERE project_id=$1 AND role='owner'`,
+		projectID).Scan(&winner); err != nil {
+		t.Fatalf("query owner: %v", err)
+	}
+	if err := st.pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM project_members WHERE project_id=$1 AND role='owner'`,
+		projectID).Scan(&n); err != nil {
+		t.Fatalf("count owners: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("owner count = %d, want 1", n)
+	}
+	if winner != a && winner != b {
+		t.Errorf("winner = %s, want a=%s or b=%s", winner, a, b)
+	}
+}
+
+// TestAddProjectMember_RejectsOwnerDemotionViaUpsert covers the audit
+// finding: AddProjectMember used to silently demote the current owner
+// via INSERT ... ON CONFLICT DO UPDATE. The WHERE-guard on the UPSERT
+// must now suppress the role change and the function must return
+// ErrOwnerMustTransfer.
+func TestAddProjectMember_RejectsOwnerDemotionViaUpsert(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+
+	// Caller posts {email: <owner's email>, role: "maintainer"} —
+	// internally the handler resolves email→userID and calls
+	// AddProjectMember(projectID, owner, "maintainer"). The owner row
+	// must NOT be silently demoted.
+	err := st.AddProjectMember(projectID, owner, types.RoleMaintainer)
+	if !errors.Is(err, ErrOwnerMustTransfer) {
+		t.Fatalf("err = %v, want ErrOwnerMustTransfer", err)
+	}
+
+	var role string
+	if err := st.pool.QueryRow(ctx,
+		`SELECT role FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, owner).Scan(&role); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if role != types.RoleOwner {
+		t.Errorf("owner role after rejected upsert = %q, want %q", role, types.RoleOwner)
+	}
+}
+
+// TestAddProjectMember_RejectsInvalidRole confirms the new
+// pre-validation in AddProjectMember refuses non-assignable roles
+// (including "owner") at the store layer, not just the handler.
+func TestAddProjectMember_RejectsInvalidRole(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+	u := seedSecondUser(t, st, "newmember")
+
+	if err := st.AddProjectMember(projectID, u, types.RoleOwner); !errors.Is(err, ErrInvalidRole) {
+		t.Errorf("role=owner: err = %v, want ErrInvalidRole", err)
+	}
+	if err := st.AddProjectMember(projectID, u, "janitor"); !errors.Is(err, ErrInvalidRole) {
+		t.Errorf("role=janitor: err = %v, want ErrInvalidRole", err)
+	}
+
+	// Sanity: no member row was created.
+	var n int
+	if err := st.pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, u).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("invalid-role add created %d rows, want 0", n)
+	}
+}
+
+// TestUpdateProjectMember_RaceVsTransferSerializes covers audit
+// finding F2: a concurrent TransferProjectOwnership that promotes
+// userA must NOT be silently overwritten by a developer-set update.
+// The FOR UPDATE lock inside UpdateProjectMember must serialize
+// against the transfer's lock on the same row.
+//
+// Setup: owner O; dev A; dev B.
+// Race: goroutine 1 transfers ownership O→A; goroutine 2 sets A's
+// role to "maintainer". Both must complete in some order with a
+// consistent post-state: either A ends up as owner (transfer first)
+// OR A's role was updated before the transfer locked it.
+//
+// What we MUST NOT see: both succeed AND A's role ends up as
+// "maintainer" (because the transfer would have promoted A but the
+// stale UPDATE clobbered it).
+func TestUpdateProjectMember_RaceVsTransferSerializes(t *testing.T) {
+	st := openTestStore(t)
+	owner, projectID := seedUserAndProject(t, st)
+	addMember(t, st, projectID, owner, types.RoleOwner)
+	a := seedSecondUser(t, st, "race-target")
+	addMember(t, st, projectID, a, types.RoleDeveloper)
+
+	maintainerRole := types.RoleMaintainer
+	var wg sync.WaitGroup
+	var transferErr, updateErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		transferErr = st.TransferProjectOwnership(projectID, owner, a, types.RoleDeveloper)
+	}()
+	go func() {
+		defer wg.Done()
+		updateErr = st.UpdateProjectMember(projectID, a, &maintainerRole, nil, nil)
+	}()
+	wg.Wait()
+
+	// Both calls can succeed (depending on lock order), or the update
+	// can fail with ErrOwnerMustTransfer if it locked AFTER the
+	// transfer promoted A. What's forbidden is "both succeed AND A's
+	// final role is 'maintainer'" — that's the lost-promotion bug.
+	var finalRole string
+	if err := st.pool.QueryRow(context.Background(),
+		`SELECT role FROM project_members WHERE project_id=$1 AND user_id=$2`,
+		projectID, a).Scan(&finalRole); err != nil {
+		t.Fatalf("query final role: %v", err)
+	}
+
+	switch {
+	case transferErr == nil && updateErr == nil:
+		// Update ran first (A=maintainer), then transfer promoted A to owner.
+		// Final state must be owner.
+		if finalRole != types.RoleOwner {
+			t.Errorf("both succeeded but A's final role = %q, want owner (transfer lost?)", finalRole)
+		}
+	case transferErr == nil && errors.Is(updateErr, ErrOwnerMustTransfer):
+		// Transfer ran first (A=owner), update locked AFTER and saw owner → rejected.
+		// Final state must be owner.
+		if finalRole != types.RoleOwner {
+			t.Errorf("transfer-then-update-rejected: A's final role = %q, want owner", finalRole)
+		}
+	default:
+		t.Fatalf("unexpected outcome: transferErr=%v updateErr=%v finalRole=%q",
+			transferErr, updateErr, finalRole)
 	}
 }

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"log"
 	"math"
 	"net/http"
@@ -288,7 +289,7 @@ func handleCreateProject(st *store.Store) http.HandlerFunc {
 
 		// Check project limit.
 		if !user.IsSuperadmin {
-			count, _ := st.CountUserOwnedProjects(user.ID)
+			count, _ := st.CountUserCreatedProjects(user.ID)
 			if count >= user.MaxProjects {
 				writeError(w, http.StatusForbidden, "forbidden", "project limit reached")
 				return
@@ -458,6 +459,11 @@ func handleAddMember(st *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "bad_request", "email and role are required")
 			return
 		}
+		if body.Role == types.RoleOwner || !types.IsAssignableRole(body.Role) {
+			writeError(w, http.StatusBadRequest, "invalid_role",
+				"role must be 'maintainer' or 'developer' (use transfer-ownership to change owner)")
+			return
+		}
 
 		// Resolve email to user ID. Generic error to avoid leaking registration status.
 		user, err := st.GetUserByEmail(body.Email)
@@ -484,7 +490,19 @@ func handleAddMember(st *store.Store) http.HandlerFunc {
 			}
 		}
 
-		if err := st.AddProjectMember(projectID, userID, body.Role); err != nil {
+		err = st.AddProjectMember(projectID, userID, body.Role)
+		switch {
+		case err == nil:
+			// fall through
+		case errors.Is(err, store.ErrOwnerMustTransfer):
+			writeError(w, http.StatusConflict, "owner_must_transfer",
+				"target user is the current owner; use POST /projects/{id}/transfer-ownership first")
+			return
+		case errors.Is(err, store.ErrInvalidRole):
+			writeError(w, http.StatusBadRequest, "invalid_role",
+				"role must be 'maintainer' or 'developer'")
+			return
+		default:
 			writeError(w, http.StatusInternalServerError, "internal", "failed to add member")
 			return
 		}
@@ -528,6 +546,17 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 			return
 		}
 
+		// Role validation: if role is being changed, it must be in
+		// types.AssignableRoles. role='owner' is rejected here — use
+		// POST /projects/{id}/transfer-ownership.
+		if body.Role != nil {
+			if *body.Role == types.RoleOwner || !types.IsAssignableRole(*body.Role) {
+				writeError(w, http.StatusBadRequest, "invalid_role",
+					"role must be 'maintainer' or 'developer' (use transfer-ownership to change owner)")
+				return
+			}
+		}
+
 		// Validate credit_quota_percent range.
 		if body.CreditQuotaPct != nil && (*body.CreditQuotaPct < 0 || *body.CreditQuotaPct > 100) {
 			writeError(w, http.StatusBadRequest, "bad_request", "credit_quota_percent must be between 0 and 100")
@@ -551,19 +580,18 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 		caller := UserFromContext(r.Context())
 		callerMember := MemberFromContext(r.Context())
 
-		// Load target member to check their role.
-		targetMember, err := st.GetProjectMember(projectID, userID)
-		if err != nil || targetMember == nil {
-			writeError(w, http.StatusNotFound, "not_found", "member not found")
-			return
-		}
-
 		// Per the simplified rule (see spec
 		// 2026-06-15-self-quota-permissions-design.md): the only remaining
 		// restriction on quota changes is that maintainers may not set quota
 		// on owners. Self-quota and same-level quota are both allowed.
 		// denied_models is intentionally NOT subject to this check.
 		if body.CreditQuotaPct != nil || body.ClearQuota {
+			// Load target member only when needed for the quota permission check.
+			targetMember, err := st.GetProjectMember(projectID, userID)
+			if err != nil || targetMember == nil {
+				writeError(w, http.StatusNotFound, "not_found", "member not found")
+				return
+			}
 			if ok, status, code, msg := canSetMemberQuota(callerMember, targetMember.Role, userID == caller.ID); !ok {
 				writeError(w, status, code, msg)
 				return
@@ -579,8 +607,21 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 			quotaArg = &body.CreditQuotaPct
 		}
 
-		// If promoting to owner, quota is auto-cleared in the store layer.
-		if err := st.UpdateProjectMember(projectID, userID, body.Role, quotaArg, body.DeniedModels); err != nil {
+		err := st.UpdateProjectMember(projectID, userID, body.Role, quotaArg, body.DeniedModels)
+		switch {
+		case err == nil:
+			// fall through
+		case errors.Is(err, store.ErrOwnerMustTransfer):
+			writeError(w, http.StatusConflict, "owner_must_transfer",
+				"the current owner cannot be demoted directly; use POST /projects/{id}/transfer-ownership")
+			return
+		case errors.Is(err, store.ErrInvalidRole):
+			writeError(w, http.StatusBadRequest, "invalid_role", "invalid role")
+			return
+		case errors.Is(err, store.ErrNotAMember):
+			writeError(w, http.StatusNotFound, "not_found", "member not found")
+			return
+		default:
 			writeError(w, http.StatusInternalServerError, "internal", "failed to update member")
 			return
 		}
@@ -628,7 +669,14 @@ func handleRemoveMember(st *store.Store, hydra *HydraClient) http.HandlerFunc {
 		userID := chi.URLParam(r, "userID")
 
 		revokedKeys, deletedGrants, err := st.RemoveProjectMember(projectID, userID)
-		if err != nil {
+		switch {
+		case err == nil:
+			// fall through
+		case errors.Is(err, store.ErrOwnerMustTransfer):
+			writeError(w, http.StatusConflict, "owner_must_transfer",
+				"the project owner cannot be removed; use POST /projects/{id}/transfer-ownership first")
+			return
+		default:
 			writeError(w, http.StatusInternalServerError, "internal",
 				"failed to remove member")
 			return
@@ -652,6 +700,94 @@ func handleRemoveMember(st *store.Store, hydra *HydraClient) http.HandlerFunc {
 			"revoked_api_keys":     revokedKeys,
 			"deleted_oauth_grants": len(deletedGrants),
 		})
+	}
+}
+
+// handleTransferOwnership atomically swaps the project owner. Only the
+// current owner or a superadmin may call it. The store enforces the
+// owner-count invariant in the same transaction.
+func handleTransferOwnership(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		caller := UserFromContext(r.Context())
+		callerMember := MemberFromContext(r.Context())
+		projectID := chi.URLParam(r, "projectID")
+
+		// Authorization: superadmin OR project owner.
+		isAuthorized := caller != nil &&
+			(caller.IsSuperadmin || (callerMember != nil && callerMember.Role == types.RoleOwner))
+		if !isAuthorized {
+			writeError(w, http.StatusForbidden, "forbidden", "only the project owner can transfer ownership")
+			return
+		}
+
+		var body struct {
+			ToUserID string `json:"to_user_id"`
+			DemoteTo string `json:"demote_to"`
+		}
+		if err := decodeBody(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
+			return
+		}
+		if body.ToUserID == "" {
+			writeError(w, http.StatusBadRequest, "bad_request", "to_user_id is required")
+			return
+		}
+		if body.DemoteTo == "" {
+			body.DemoteTo = types.RoleDeveloper
+		}
+
+		// Resolve fromUID: for a superadmin acting from outside the
+		// project, look up the current owner so the store's
+		// from == current-owner assertion holds.
+		fromUID := ""
+		if callerMember != nil && callerMember.Role == types.RoleOwner {
+			fromUID = caller.ID
+		} else {
+			cur, err := st.GetCurrentProjectOwner(projectID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "internal",
+					"failed to resolve current owner")
+				return
+			}
+			if cur == "" {
+				writeError(w, http.StatusConflict, "no_current_owner",
+					"project has no current owner; resolve via DB before using transfer-ownership")
+				return
+			}
+			fromUID = cur
+		}
+
+		err := st.TransferProjectOwnership(projectID, fromUID, body.ToUserID, body.DemoteTo)
+		switch {
+		case err == nil:
+			// fall through
+		case errors.Is(err, store.ErrNotAMember):
+			writeError(w, http.StatusBadRequest, "not_a_member", "target user is not a project member")
+			return
+		case errors.Is(err, store.ErrAlreadyOwner):
+			writeError(w, http.StatusBadRequest, "already_owner", "target user is already the project owner")
+			return
+		case errors.Is(err, store.ErrInvalidRole):
+			writeError(w, http.StatusBadRequest, "invalid_role", "demote_to must be 'maintainer' or 'developer'")
+			return
+		case errors.Is(err, store.ErrInvariantViolated):
+			log.Printf("WARN transfer_ownership: invariant violation on project %s: %v", projectID, err)
+			writeError(w, http.StatusConflict, "conflict", "project owner state is inconsistent; please retry")
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, "internal", "failed to transfer ownership")
+			return
+		}
+
+		// Return the updated member list so the dashboard can refresh
+		// in one round-trip (same shape as GET /members).
+		members, err := st.ListProjectMembers(projectID)
+		if err != nil {
+			log.Printf("WARN transfer_ownership: list members after transfer (project %s): %v", projectID, err)
+			writeData(w, http.StatusOK, map[string]string{"status": "transferred"})
+			return
+		}
+		writeData(w, http.StatusOK, members)
 	}
 }
 
