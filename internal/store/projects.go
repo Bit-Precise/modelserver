@@ -322,9 +322,6 @@ func (s *Store) ListProjectMembersPaginated(projectID string, p types.Pagination
 //   - deniedModels:   *[]string. nil = unchanged; non-nil pointer (including
 //     empty slice) = replace the column with that slice. Empty slice means
 //     "no model is denied".
-//
-// If role is set to "owner", credit_quota_percent is forced to NULL
-// regardless of the creditQuotaPct argument.
 func (s *Store) UpdateProjectMember(
 	projectID, userID string,
 	role *string,
@@ -371,11 +368,7 @@ func (s *Store) UpdateProjectMember(
 
 	if role != nil {
 		add("role", *role)
-		// Owner promotion always clears the quota, even if the caller
-		// also passed an explicit creditQuotaPct.
-		if *role == types.RoleOwner {
-			sets = append(sets, "credit_quota_percent = NULL")
-		} else if creditQuotaPct != nil {
+		if creditQuotaPct != nil {
 			add("credit_quota_percent", *creditQuotaPct) // *float64 (may be nil → SQL NULL)
 		}
 	} else if creditQuotaPct != nil {
