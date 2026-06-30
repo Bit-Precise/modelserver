@@ -596,7 +596,6 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 			quotaArg = &body.CreditQuotaPct
 		}
 
-		// If promoting to owner, quota is auto-cleared in the store layer.
 		err = st.UpdateProjectMember(projectID, userID, body.Role, quotaArg, body.DeniedModels)
 		switch {
 		case err == nil:
