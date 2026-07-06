@@ -5,6 +5,8 @@ import "time"
 // Predefined plan names.
 const (
 	PlanPro     = "pro"
+	PlanMini    = "mini"
+	PlanNano    = "nano"
 	PlanMax5x   = "max_5x"
 	PlanMax20x  = "max_20x"
 	PlanMax40x  = "max_40x"
@@ -214,7 +216,7 @@ type Subscription struct {
 	ID        string    `json:"id"`
 	ProjectID string    `json:"project_id"`
 	PlanID    string    `json:"plan_id,omitempty"`
-	PlanName  string    `json:"plan_name"` // "pro", "max_5x", "max_20x", "max_40x", "max_60x", "max_80x", "max_100x", "max_120x", "max_200x", "max_240x", or custom
+	PlanName  string    `json:"plan_name"` // "pro", "mini", "nano", "max_5x", "max_20x", "max_40x", "max_60x", "max_80x", "max_100x", "max_120x", "max_200x", "max_240x", or custom
 	Status    string    `json:"status"`
 	StartsAt  time.Time `json:"starts_at"`
 	ExpiresAt time.Time `json:"expires_at"`
