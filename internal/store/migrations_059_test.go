@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// migration058Plans holds the exact scalar fields each new plan must carry
-// after migration 058 runs. credit_rules are asserted separately since they
+// migration059Plans holds the exact scalar fields each new plan must carry
+// after migration 059 runs. credit_rules are asserted separately since they
 // are jsonb.
-var migration058Plans = map[string]struct {
+var migration059Plans = map[string]struct {
 	Name          string
 	DisplayName   string
 	Description   string
@@ -43,13 +43,13 @@ var migration058Plans = map[string]struct {
 	},
 }
 
-// TestMigration058_PlanRowsPresent asserts the two new plan rows exist with
+// TestMigration059_PlanRowsPresent asserts the two new plan rows exist with
 // the expected scalar fields and credit_rules windows.
-func TestMigration058_PlanRowsPresent(t *testing.T) {
+func TestMigration059_PlanRowsPresent(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 
-	for slug, want := range migration058Plans {
+	for slug, want := range migration059Plans {
 		var (
 			name, displayName, description string
 			tierLevel, priceCNYFen, priceUSDCents, periodMonths int64
@@ -118,10 +118,10 @@ func TestMigration058_PlanRowsPresent(t *testing.T) {
 	}
 }
 
-// TestMigration058_ModelRatesClonedFromPro asserts model_credit_rates on
+// TestMigration059_ModelRatesClonedFromPro asserts model_credit_rates on
 // mini and nano exactly match pro's map at migration time. This locks in
 // the "clone from pro" contract stated in the migration's own comment.
-func TestMigration058_ModelRatesClonedFromPro(t *testing.T) {
+func TestMigration059_ModelRatesClonedFromPro(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 

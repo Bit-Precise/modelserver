@@ -1,4 +1,4 @@
--- 058_add_mini_nano_plans.sql
+-- 059_add_mini_nano_plans.sql
 --
 -- Introduces two new paid tiers, Mini and Nano, positioned between Free and
 -- Pro. Both reuse Pro's per-model credit rates verbatim — they differ from

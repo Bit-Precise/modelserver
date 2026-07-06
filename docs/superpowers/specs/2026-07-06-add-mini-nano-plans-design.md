@@ -56,7 +56,7 @@ exact halves and quarters of Pro's, rounded to integers.
 
 ## Implementation
 
-### 1. Migration `058_add_mini_nano_plans.sql`
+### 1. Migration `059_add_mini_nano_plans.sql`
 
 Single up-only migration. Inserts two rows into `plans`, cloning
 `model_credit_rates` from the current `pro` row (avoids duplicating the ~12
@@ -64,7 +64,7 @@ per-model rate entries that migrations 044, 047, 053 have already mutated
 into their present shape):
 
 ```sql
--- 058_add_mini_nano_plans.sql
+-- 059_add_mini_nano_plans.sql
 --
 -- Introduces two new paid tiers, Mini and Nano, positioned between Free and
 -- Pro. Both reuse Pro's per-model credit rates verbatim — they differ from Pro
@@ -177,7 +177,7 @@ tests exercise the `pro` case, and mini/nano flow through the same code path.
 - **`internal/store/migrations_049_test.go`** — asserts the USD price
   backfill from migration 049 for the plan set that existed at that point
   (`{free, pro, max_2x, max_5x, ...}`). Mini and Nano are introduced afterward
-  (migration 058) and set their own `price_usd_cents` directly in the INSERT,
+  (migration 059) and set their own `price_usd_cents` directly in the INSERT,
   so they are outside 049's scope and this test needs no change.
 - **`internal/admin/handle_plans.go`, `dashboard/src/pages/admin/PlansPage.tsx`** —
   admins can still create/edit any plan through the existing UI. No new

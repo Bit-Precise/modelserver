@@ -4,14 +4,14 @@
 
 **Goal:** Add two new paid subscription tiers (`mini` and `nano`) at 1/2 and 1/4 of Pro's usage limits and price, taking effect on the next deploy via a single database migration.
 
-**Architecture:** One up-only SQL migration (`058_add_mini_nano_plans.sql`) inserts two rows into `plans`, cloning `model_credit_rates` from the live `pro` row and setting halved / quartered `credit_rules` and prices. Two small Go patches add plan-slug constants and extend `mapPlanToProjectType` so the OAuth profile endpoint reports Mini/Nano subscribers as `project_type: "pro"` to Claude Code clients. The frontend requires no changes — the subscription page renders whatever plans the API returns.
+**Architecture:** One up-only SQL migration (`059_add_mini_nano_plans.sql`) inserts two rows into `plans`, cloning `model_credit_rates` from the live `pro` row and setting halved / quartered `credit_rules` and prices. Two small Go patches add plan-slug constants and extend `mapPlanToProjectType` so the OAuth profile endpoint reports Mini/Nano subscribers as `project_type: "pro"` to Claude Code clients. The frontend requires no changes — the subscription page renders whatever plans the API returns.
 
 **Tech Stack:** Go 1.x, PostgreSQL (via pgx pool), existing `internal/store` migration framework (numbered SQL files auto-applied on startup).
 
 ## Global Constraints
 
 - **Spec source of truth:** `docs/superpowers/specs/2026-07-06-add-mini-nano-plans-design.md`.
-- **Migration number:** `058` (latest existing is `057_plan_client_credit_rates.sql`).
+- **Migration number:** `059` (bumped from originally-planned `058` when PR #71 landed its own `058_add_sonnet_5_fable_5.sql` on main first).
 - **model_credit_rates policy:** Copy from `pro` at migration time — one-shot snapshot, not a foreign-key relationship. Do NOT hardcode the per-model rate map.
 - **CNY prices:** integer fen. Mini = `5999`, Nano = `2999`.
 - **USD prices:** integer cents. Mini = `1000`, Nano = `500`.
@@ -24,8 +24,8 @@
 
 ## File Structure
 
-- **Create:** `internal/store/migrations/058_add_mini_nano_plans.sql`
-- **Create:** `internal/store/migrations_058_test.go`
+- **Create:** `internal/store/migrations/059_add_mini_nano_plans.sql`
+- **Create:** `internal/store/migrations_059_test.go`
 - **Modify:** `internal/types/policy.go` (add two constants, extend one comment)
 - **Modify:** `internal/proxy/me_handler.go` (extend `mapPlanToProjectType` switch + docstring)
 - **Modify:** `internal/proxy/me_handler_test.go` (add two rows to `TestMapPlanToProjectType`)
@@ -92,7 +92,7 @@ Open `internal/proxy/me_handler.go`. Replace the block at lines 72-89 (the docst
 ```go
 // mapPlanToProjectType maps a modelserver Subscription.PlanName onto the
 // project_type values surfaced in the response. modelserver's plan set
-// (per migrations 040/049/058 etc.) is {free, pro, mini, nano, max_2x..max_240x};
+// (per migrations 040/049/059 etc.) is {free, pro, mini, nano, max_2x..max_240x};
 // `pro`, `mini`, `nano`, and the `max_*` family are the paid tiers, so those
 // are the only values the mapping can produce. Mini and Nano subscribers see
 // project_type="pro" so Claude Code clients (which only recognize pro/max)
@@ -208,17 +208,17 @@ git commit -m "types: add PlanMini and PlanNano constants
 Symmetry with PlanPro / PlanMax*. No runtime code switches on these
 constants today; they exist so callers grepping for PlanMini find a
 canonical definition, and to keep the Subscription.PlanName enum
-comment in sync with the plan set introduced by migration 058.
+comment in sync with the plan set introduced by migration 059.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 3: Migration 058 — insert Mini and Nano rows
+### Task 3: Migration 059 — insert Mini and Nano rows
 
 **Files:**
-- Create: `internal/store/migrations/058_add_mini_nano_plans.sql`
+- Create: `internal/store/migrations/059_add_mini_nano_plans.sql`
 
 **Interfaces:**
 - Consumes: the existing `plans` table (schema from `001_init.sql` + `049_plans_multi_currency.sql`), and the presence of the seed `pro` row inserted by `001_init.sql`.
@@ -226,10 +226,10 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 1: Create the migration file**
 
-Create `internal/store/migrations/058_add_mini_nano_plans.sql` with this exact content:
+Create `internal/store/migrations/059_add_mini_nano_plans.sql` with this exact content:
 
 ```sql
--- 058_add_mini_nano_plans.sql
+-- 059_add_mini_nano_plans.sql
 --
 -- Introduces two new paid tiers, Mini and Nano, positioned between Free and
 -- Pro. Both reuse Pro's per-model credit rates verbatim — they differ from
@@ -276,7 +276,7 @@ ON CONFLICT (slug) DO NOTHING;
 If you have psql access:
 
 ```bash
-psql -h localhost -U postgres -d postgres -c "EXPLAIN $(cat internal/store/migrations/058_add_mini_nano_plans.sql | tr '\n' ' ')" 2>&1 | head -5
+psql -h localhost -U postgres -d postgres -c "EXPLAIN $(cat internal/store/migrations/059_add_mini_nano_plans.sql | tr '\n' ' ')" 2>&1 | head -5
 ```
 
 If no psql is handy, skip this step — the migration test in Task 4 will catch syntax errors by actually running it.
@@ -285,8 +285,8 @@ If no psql is handy, skip this step — the migration test in Task 4 will catch 
 
 ```bash
 cd /root/coding/modelserver
-git add internal/store/migrations/058_add_mini_nano_plans.sql
-git commit -m "migration: add mini and nano plans (058)
+git add internal/store/migrations/059_add_mini_nano_plans.sql
+git commit -m "migration: add mini and nano plans (059)
 
 Two new paid tiers between Free and Pro at 1/2 and 1/4 of Pro's
 usage limits and price. model_credit_rates are cloned from the
@@ -303,18 +303,18 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 4: Migration 058 test — assert the two rows landed correctly
+### Task 4: Migration 059 test — assert the two rows landed correctly
 
 **Files:**
-- Create: `internal/store/migrations_058_test.go`
+- Create: `internal/store/migrations_059_test.go`
 
 **Interfaces:**
-- Consumes: `openTestStore(t)` from `internal/store/extra_usage_db_test.go:13`, which skips if `TEST_DATABASE_URL` is unset and otherwise applies all migrations up to and including 058.
+- Consumes: `openTestStore(t)` from `internal/store/extra_usage_db_test.go:13`, which skips if `TEST_DATABASE_URL` is unset and otherwise applies all migrations up to and including 059.
 - Produces: two test functions that assert the exact fields for `mini` and `nano` match spec values, and that `model_credit_rates` matches Pro's map key-for-key.
 
 - [ ] **Step 1: Write the failing test file**
 
-Create `internal/store/migrations_058_test.go` with this content:
+Create `internal/store/migrations_059_test.go` with this content:
 
 ```go
 package store
@@ -326,10 +326,10 @@ import (
 	"testing"
 )
 
-// migration058Plans holds the exact scalar fields each new plan must carry
-// after migration 058 runs. credit_rules are asserted separately since they
+// migration059Plans holds the exact scalar fields each new plan must carry
+// after migration 059 runs. credit_rules are asserted separately since they
 // are jsonb.
-var migration058Plans = map[string]struct {
+var migration059Plans = map[string]struct {
 	Name          string
 	DisplayName   string
 	Description   string
@@ -362,13 +362,13 @@ var migration058Plans = map[string]struct {
 	},
 }
 
-// TestMigration058_PlanRowsPresent asserts the two new plan rows exist with
+// TestMigration059_PlanRowsPresent asserts the two new plan rows exist with
 // the expected scalar fields and credit_rules windows.
-func TestMigration058_PlanRowsPresent(t *testing.T) {
+func TestMigration059_PlanRowsPresent(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 
-	for slug, want := range migration058Plans {
+	for slug, want := range migration059Plans {
 		var (
 			name, displayName, description string
 			tierLevel, priceCNYFen, priceUSDCents, periodMonths int64
@@ -433,10 +433,10 @@ func TestMigration058_PlanRowsPresent(t *testing.T) {
 	}
 }
 
-// TestMigration058_ModelRatesClonedFromPro asserts model_credit_rates on
+// TestMigration059_ModelRatesClonedFromPro asserts model_credit_rates on
 // mini and nano exactly match pro's map at migration time. This locks in
 // the "clone from pro" contract stated in the migration's own comment.
-func TestMigration058_ModelRatesClonedFromPro(t *testing.T) {
+func TestMigration059_ModelRatesClonedFromPro(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 
@@ -470,9 +470,9 @@ func TestMigration058_ModelRatesClonedFromPro(t *testing.T) {
 
 - [ ] **Step 2: Run the test to verify it passes when a test DB is available**
 
-Run: `cd /root/coding/modelserver && TEST_DATABASE_URL="$TEST_DATABASE_URL" go test ./internal/store/ -run TestMigration058 -v`
+Run: `cd /root/coding/modelserver && TEST_DATABASE_URL="$TEST_DATABASE_URL" go test ./internal/store/ -run TestMigration059 -v`
 
-Expected: If `TEST_DATABASE_URL` is set — both `TestMigration058_PlanRowsPresent` and `TestMigration058_ModelRatesClonedFromPro` PASS. If unset — both SKIP with the standard message (`set TEST_DATABASE_URL to run ...`); that is a green result, not a failure.
+Expected: If `TEST_DATABASE_URL` is set — both `TestMigration059_PlanRowsPresent` and `TestMigration059_ModelRatesClonedFromPro` PASS. If unset — both SKIP with the standard message (`set TEST_DATABASE_URL to run ...`); that is a green result, not a failure.
 
 - [ ] **Step 3: Run the rest of the store tests to confirm nothing else regressed**
 
@@ -484,8 +484,8 @@ Expected: All `TestMigration*` tests either PASS or SKIP uniformly. In particula
 
 ```bash
 cd /root/coding/modelserver
-git add internal/store/migrations_058_test.go
-git commit -m "test(store): assert migration 058 inserts mini and nano correctly
+git add internal/store/migrations_059_test.go
+git commit -m "test(store): assert migration 059 inserts mini and nano correctly
 
 Two tests: one covers the scalar plan fields and credit_rules windows,
 the other locks in the 'clone model_credit_rates from pro at migration
@@ -521,7 +521,7 @@ Expected: PASS. `store` migration tests should either PASS (if `TEST_DATABASE_UR
 
 Run: `cd /root/coding/modelserver && ls internal/store/migrations/ | sort | tail -5`
 
-Expected output ends with `058_add_mini_nano_plans.sql` in the correct position after `057_plan_client_credit_rates.sql`.
+Expected output ends with `059_add_mini_nano_plans.sql` in the correct position after `057_plan_client_credit_rates.sql`.
 
 - [ ] **Step 4: Verify branch state**
 

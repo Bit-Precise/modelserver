@@ -71,7 +71,7 @@ func buildIdentity(st identityStore, r *http.Request) *identity {
 
 // mapPlanToProjectType maps a modelserver Subscription.PlanName onto the
 // project_type values surfaced in the response. modelserver's plan set
-// (per migrations 040/049/058 etc.) is {free, pro, mini, nano, max_2x..max_240x};
+// (per migrations 040/049/059 etc.) is {free, pro, mini, nano, max_2x..max_240x};
 // `pro`, `mini`, `nano`, and the `max_*` family are the paid tiers, so those
 // are the only values the mapping can produce. Mini and Nano subscribers see
 // project_type="pro" so Claude Code clients (which only recognize pro/max)
