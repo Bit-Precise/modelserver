@@ -139,7 +139,7 @@ by `max_20x` and above (5h=550,000 and 7d=4,166,665 per unit).
 -- All four use the same conventions established by prior max_Nx additions:
 --   - tier_level  = N * 100        (max_140x = 14000, etc.)
 --   - price_cny_fen  = N * 7000 - 1  (xxxx99 rounding, post-060 anchor)
---   - price_usd_cents = N * 10000   (N * $10, per migration 049's anchor)
+--   - price_usd_cents = N * 1000   (N * $10, per migration 049's anchor)
 --   - 5h credits  = N * 550000     (per-unit rate from max_20x onward)
 --   - 7d credits  = N * 4166665
 --   - model_credit_rates      = cloned from pro at migration time
@@ -369,7 +369,7 @@ test; both-NULL on `client_model_credit_rates` counts as equal.
    new row (max_140x/160x/180x/220x) matches the spec table in §3.
 2. `SELECT price_cny_fen FROM plans WHERE slug = 'free';` — 0.
 3. `SELECT slug, price_usd_cents FROM plans;` — every pre-060 slug's
-   USD is unchanged; the four new slugs' USD is N × 10000 cents.
+   USD is unchanged; the four new slugs' USD is N × 1000 cents.
 4. `SELECT COUNT(*) FROM plans WHERE slug IN
    ('max_140x','max_160x','max_180x','max_220x');` returns 4.
 5. Dashboard `/subscriptions` page renders each card with the new CNY

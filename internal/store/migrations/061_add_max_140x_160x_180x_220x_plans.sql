@@ -7,7 +7,7 @@
 -- All four use the same conventions established by prior max_Nx additions:
 --   - tier_level        = N * 100        (max_140x = 14000, etc.)
 --   - price_cny_fen     = N * 7000 - 1   (xxxx99 rounding, post-060 anchor)
---   - price_usd_cents   = N * 10000      (N * $10, per migration 049's anchor)
+--   - price_usd_cents   = N * 1000       (N * $10, per migration 049's anchor)
 --   - 5h credits        = N * 550000     (per-unit rate from max_20x onward)
 --   - 7d credits        = N * 4166665
 --   - model_credit_rates        = cloned from pro at migration time

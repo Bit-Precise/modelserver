@@ -17,7 +17,7 @@
 - **USD (`price_usd_cents`) is NOT touched by 060.**
 - **`extra_usage.credit_price_cny_fen` (config.yml) is NOT touched.**
 - **Rate maps (`model_credit_rates`, `client_model_credit_rates`) are NOT touched by 060.**
-- **New tier per-multiplier anchors** (from spec §3): tier_level = N × 100, price_cny_fen = N × 7000 − 1, price_usd_cents = N × 10000, 5h credits = N × 550000, 7d credits = N × 4166665.
+- **New tier per-multiplier anchors** (from spec §3): tier_level = N × 100, price_cny_fen = N × 7000 − 1, price_usd_cents = N × 1000, 5h credits = N × 550000, 7d credits = N × 4166665.
 - **New tiers exact values:**
   - `max_140x`: tier_level=14000, price_cny_fen=979999, price_usd_cents=140000, 5h=77000000, 7d=583333100.
   - `max_160x`: tier_level=16000, price_cny_fen=1119999, price_usd_cents=160000, 5h=88000000, 7d=666666400.
@@ -386,7 +386,7 @@ Create `internal/store/migrations/061_add_max_140x_160x_180x_220x_plans.sql` wit
 -- All four use the same conventions established by prior max_Nx additions:
 --   - tier_level        = N * 100        (max_140x = 14000, etc.)
 --   - price_cny_fen     = N * 7000 - 1   (xxxx99 rounding, post-060 anchor)
---   - price_usd_cents   = N * 10000      (N * $10, per migration 049's anchor)
+--   - price_usd_cents   = N * 1000       (N * $10, per migration 049's anchor)
 --   - 5h credits        = N * 550000     (per-unit rate from max_20x onward)
 --   - 7d credits        = N * 4166665
 --   - model_credit_rates        = cloned from pro at migration time
