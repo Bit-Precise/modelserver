@@ -22,20 +22,26 @@ var migration059Plans = map[string]struct {
 	Credit7d      int64
 }{
 	"mini": {
+		// PriceCNYFen was 5999 at migration 059; migration 060 bumps
+		// non-free CNY prices by 7/6 (5999 * 7/6 ROUND = 6999). Tests
+		// run all migrations to head before executing, so we assert
+		// the post-060 terminal value here.
 		Name: "Mini", DisplayName: "Mini",
 		Description:   "Half of Pro's usage limits",
 		TierLevel:     50,
-		PriceCNYFen:   5999,
+		PriceCNYFen:   6999,
 		PriceUSDCents: 1000,
 		PeriodMonths:  1,
 		Credit5h:      275000,
 		Credit7d:      2500000,
 	},
 	"nano": {
+		// PriceCNYFen was 2999 at migration 059; migration 060 bumps
+		// it 7/6× to 3499. See mini comment above.
 		Name: "Nano", DisplayName: "Nano",
 		Description:   "Quarter of Pro's usage limits",
 		TierLevel:     25,
-		PriceCNYFen:   2999,
+		PriceCNYFen:   3499,
 		PriceUSDCents: 500,
 		PeriodMonths:  1,
 		Credit5h:      137500,
