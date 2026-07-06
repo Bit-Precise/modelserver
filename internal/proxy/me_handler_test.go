@@ -215,6 +215,8 @@ func TestBuildIdentity_NilContext(t *testing.T) {
 func TestMapPlanToProjectType(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"pro", "pro"},
+		{"mini", "pro"},
+		{"nano", "pro"},
 		{"max_2x", "max"},
 		{"max_5x", "max"},
 		{"max_200x", "max"},

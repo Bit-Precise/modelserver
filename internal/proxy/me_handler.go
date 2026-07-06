@@ -71,15 +71,17 @@ func buildIdentity(st identityStore, r *http.Request) *identity {
 
 // mapPlanToProjectType maps a modelserver Subscription.PlanName onto the
 // project_type values surfaced in the response. modelserver's plan set
-// (per migrations 040/049 etc.) is {free, pro, max_2x..max_240x}; only
-// `pro` and the `max_*` family are paid tiers, so those are the only
-// values the mapping can produce. Anything else (no subscription, free,
-// custom slugs) returns the empty string, which omitempty drops from
-// the response — clients then see project_type as absent rather than
-// being misled by a synthetic value.
+// (per migrations 040/049/059 etc.) is {free, pro, mini, nano, max_2x..max_240x};
+// `pro`, `mini`, `nano`, and the `max_*` family are the paid tiers, so those
+// are the only values the mapping can produce. Mini and Nano subscribers see
+// project_type="pro" so Claude Code clients (which only recognize pro/max)
+// treat them as paid users rather than degrading them to free-tier behavior.
+// Anything else (no subscription, free, custom slugs) returns the empty
+// string, which omitempty drops from the response — clients then see
+// project_type as absent rather than being misled by a synthetic value.
 func mapPlanToProjectType(planName string) string {
 	switch {
-	case planName == "pro":
+	case planName == "pro" || planName == "mini" || planName == "nano":
 		return "pro"
 	case strings.HasPrefix(planName, "max_"):
 		return "max"
