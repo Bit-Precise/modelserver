@@ -54,14 +54,15 @@ func TestMigration058_PlanRowsPresent(t *testing.T) {
 			name, displayName, description string
 			tierLevel, priceCNYFen, priceUSDCents, periodMonths int64
 			creditRulesJSON []byte
+			isActive        bool
 		)
 		err := st.pool.QueryRow(ctx, `
 			SELECT name, display_name, description, tier_level,
 			       price_cny_fen, price_usd_cents, period_months,
-			       credit_rules
+			       credit_rules, is_active
 			FROM plans WHERE slug = $1`, slug).
 			Scan(&name, &displayName, &description, &tierLevel,
-				&priceCNYFen, &priceUSDCents, &periodMonths, &creditRulesJSON)
+				&priceCNYFen, &priceUSDCents, &periodMonths, &creditRulesJSON, &isActive)
 		if err != nil {
 			t.Fatalf("query slug %s: %v", slug, err)
 		}
@@ -86,6 +87,9 @@ func TestMigration058_PlanRowsPresent(t *testing.T) {
 		}
 		if periodMonths != want.PeriodMonths {
 			t.Errorf("slug %s: period_months = %d, want %d", slug, periodMonths, want.PeriodMonths)
+		}
+		if !isActive {
+			t.Errorf("slug %s: is_active = false, want true", slug)
 		}
 
 		// credit_rules: a two-element array; assert window + max_credits on each.
@@ -144,6 +148,46 @@ func TestMigration058_ModelRatesClonedFromPro(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, proMap) {
 			t.Errorf("slug %s: model_credit_rates does not match pro exactly", slug)
+		}
+	}
+
+	// client_model_credit_rates: also cloned from pro. May be NULL on all
+	// three rows today (migration 057 added it with default NULL and no
+	// migration populates it), in which case pgx returns a nil byte slice
+	// for each. Both-nil counts as equal — the invariant is "mini/nano
+	// mirror pro at migration time", not "the overlay must be populated".
+	var proClient []byte
+	if err := st.pool.QueryRow(ctx,
+		`SELECT client_model_credit_rates FROM plans WHERE slug = 'pro'`).Scan(&proClient); err != nil {
+		t.Fatalf("read pro client rates: %v", err)
+	}
+	var proClientMap map[string]any
+	if proClient != nil {
+		if err := json.Unmarshal(proClient, &proClientMap); err != nil {
+			t.Fatalf("unmarshal pro client rates: %v", err)
+		}
+	}
+
+	for _, slug := range []string{"mini", "nano"} {
+		var raw []byte
+		if err := st.pool.QueryRow(ctx,
+			`SELECT client_model_credit_rates FROM plans WHERE slug = $1`, slug).Scan(&raw); err != nil {
+			t.Fatalf("read %s client rates: %v", slug, err)
+		}
+		if (raw == nil) != (proClient == nil) {
+			t.Errorf("slug %s: client_model_credit_rates NULL-ness differs from pro (got nil=%v, pro nil=%v)",
+				slug, raw == nil, proClient == nil)
+			continue
+		}
+		if raw == nil {
+			continue // both NULL — equal
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal %s client rates: %v", slug, err)
+		}
+		if !reflect.DeepEqual(got, proClientMap) {
+			t.Errorf("slug %s: client_model_credit_rates does not match pro exactly", slug)
 		}
 	}
 }
