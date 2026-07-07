@@ -7,10 +7,9 @@ import (
 	"testing"
 )
 
-// migration059Plans holds the exact scalar fields each new plan must carry
-// after migration 059 runs. credit_rules are asserted separately since they
-// are jsonb.
-var migration059Plans = map[string]struct {
+// migration061Plans holds the exact scalar fields each new max_Nx plan
+// must carry after migration 061 runs.
+var migration061Plans = map[string]struct {
 	Name          string
 	DisplayName   string
 	Description   string
@@ -21,46 +20,60 @@ var migration059Plans = map[string]struct {
 	Credit5h      int64
 	Credit7d      int64
 }{
-	"mini": {
-		// PriceCNYFen was 5999 at migration 059; migration 060 bumps
-		// non-free CNY prices by 7/6 (5999 * 7/6 ROUND = 6999). Tests
-		// run all migrations to head before executing, so we assert
-		// the post-060 terminal value here.
-		Name: "Mini", DisplayName: "Mini",
-		Description:   "Half of Pro's usage limits",
-		TierLevel:     50,
-		PriceCNYFen:   6999,
-		PriceUSDCents: 1000,
+	"max_140x": {
+		Name: "Max 140x", DisplayName: "Max 140x",
+		Description:   "Same usage limits as Claude Max (140x)",
+		TierLevel:     14000,
+		PriceCNYFen:   979999,
+		PriceUSDCents: 140000,
 		PeriodMonths:  1,
-		Credit5h:      275000,
-		Credit7d:      2500000,
+		Credit5h:      77000000,
+		Credit7d:      583333100,
 	},
-	"nano": {
-		// PriceCNYFen was 2999 at migration 059; migration 060 bumps
-		// it 7/6× to 3499. See mini comment above.
-		Name: "Nano", DisplayName: "Nano",
-		Description:   "Quarter of Pro's usage limits",
-		TierLevel:     25,
-		PriceCNYFen:   3499,
-		PriceUSDCents: 500,
+	"max_160x": {
+		Name: "Max 160x", DisplayName: "Max 160x",
+		Description:   "Same usage limits as Claude Max (160x)",
+		TierLevel:     16000,
+		PriceCNYFen:   1119999,
+		PriceUSDCents: 160000,
 		PeriodMonths:  1,
-		Credit5h:      137500,
-		Credit7d:      1250000,
+		Credit5h:      88000000,
+		Credit7d:      666666400,
+	},
+	"max_180x": {
+		Name: "Max 180x", DisplayName: "Max 180x",
+		Description:   "Same usage limits as Claude Max (180x)",
+		TierLevel:     18000,
+		PriceCNYFen:   1259999,
+		PriceUSDCents: 180000,
+		PeriodMonths:  1,
+		Credit5h:      99000000,
+		Credit7d:      749999700,
+	},
+	"max_220x": {
+		Name: "Max 220x", DisplayName: "Max 220x",
+		Description:   "Same usage limits as Claude Max (220x)",
+		TierLevel:     22000,
+		PriceCNYFen:   1539999,
+		PriceUSDCents: 220000,
+		PeriodMonths:  1,
+		Credit5h:      121000000,
+		Credit7d:      916666300,
 	},
 }
 
-// TestMigration059_PlanRowsPresent asserts the two new plan rows exist with
-// the expected scalar fields and credit_rules windows.
-func TestMigration059_PlanRowsPresent(t *testing.T) {
+// TestMigration061_NewMaxPlansPresent asserts the four new plan rows exist
+// with the expected scalar fields, credit_rules windows, and is_active=true.
+func TestMigration061_NewMaxPlansPresent(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 
-	for slug, want := range migration059Plans {
+	for slug, want := range migration061Plans {
 		var (
-			name, displayName, description string
+			name, displayName, description                      string
 			tierLevel, priceCNYFen, priceUSDCents, periodMonths int64
-			creditRulesJSON []byte
-			isActive        bool
+			creditRulesJSON                                     []byte
+			isActive                                            bool
 		)
 		err := st.pool.QueryRow(ctx, `
 			SELECT name, display_name, description, tier_level,
@@ -124,44 +137,24 @@ func TestMigration059_PlanRowsPresent(t *testing.T) {
 	}
 }
 
-// TestMigration059_ModelRatesClonedFromPro asserts model_credit_rates on
-// mini and nano exactly match pro's map at migration time. This locks in
-// the "clone from pro" contract stated in the migration's own comment.
-func TestMigration059_ModelRatesClonedFromPro(t *testing.T) {
+// TestMigration061_NewMaxPlansCloneRatesFromPro asserts each new tier's
+// model_credit_rates AND client_model_credit_rates deep-equal pro's. Same
+// shape as TestMigration059_ModelRatesClonedFromPro, extended to four slugs.
+func TestMigration061_NewMaxPlansCloneRatesFromPro(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 
+	// pro reference values.
 	var proRates []byte
 	if err := st.pool.QueryRow(ctx,
 		`SELECT model_credit_rates FROM plans WHERE slug = 'pro'`).Scan(&proRates); err != nil {
 		t.Fatalf("read pro rates: %v", err)
 	}
-
 	var proMap map[string]any
 	if err := json.Unmarshal(proRates, &proMap); err != nil {
 		t.Fatalf("unmarshal pro rates: %v", err)
 	}
 
-	for _, slug := range []string{"mini", "nano"} {
-		var raw []byte
-		if err := st.pool.QueryRow(ctx,
-			`SELECT model_credit_rates FROM plans WHERE slug = $1`, slug).Scan(&raw); err != nil {
-			t.Fatalf("read %s rates: %v", slug, err)
-		}
-		var got map[string]any
-		if err := json.Unmarshal(raw, &got); err != nil {
-			t.Fatalf("unmarshal %s rates: %v", slug, err)
-		}
-		if !reflect.DeepEqual(got, proMap) {
-			t.Errorf("slug %s: model_credit_rates does not match pro exactly", slug)
-		}
-	}
-
-	// client_model_credit_rates: also cloned from pro. May be NULL on all
-	// three rows today (migration 057 added it with default NULL and no
-	// migration populates it), in which case pgx returns a nil byte slice
-	// for each. Both-nil counts as equal — the invariant is "mini/nano
-	// mirror pro at migration time", not "the overlay must be populated".
 	var proClient []byte
 	if err := st.pool.QueryRow(ctx,
 		`SELECT client_model_credit_rates FROM plans WHERE slug = 'pro'`).Scan(&proClient); err != nil {
@@ -174,25 +167,40 @@ func TestMigration059_ModelRatesClonedFromPro(t *testing.T) {
 		}
 	}
 
-	for _, slug := range []string{"mini", "nano"} {
+	for _, slug := range []string{"max_140x", "max_160x", "max_180x", "max_220x"} {
+		// model_credit_rates
 		var raw []byte
 		if err := st.pool.QueryRow(ctx,
-			`SELECT client_model_credit_rates FROM plans WHERE slug = $1`, slug).Scan(&raw); err != nil {
-			t.Fatalf("read %s client rates: %v", slug, err)
-		}
-		if (raw == nil) != (proClient == nil) {
-			t.Errorf("slug %s: client_model_credit_rates NULL-ness differs from pro (got nil=%v, pro nil=%v)",
-				slug, raw == nil, proClient == nil)
-			continue
-		}
-		if raw == nil {
-			continue // both NULL — equal
+			`SELECT model_credit_rates FROM plans WHERE slug = $1`, slug).Scan(&raw); err != nil {
+			t.Fatalf("read %s rates: %v", slug, err)
 		}
 		var got map[string]any
 		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal %s rates: %v", slug, err)
+		}
+		if !reflect.DeepEqual(got, proMap) {
+			t.Errorf("slug %s: model_credit_rates does not match pro exactly", slug)
+		}
+
+		// client_model_credit_rates (may be NULL on all; both-NULL counts equal).
+		var rawClient []byte
+		if err := st.pool.QueryRow(ctx,
+			`SELECT client_model_credit_rates FROM plans WHERE slug = $1`, slug).Scan(&rawClient); err != nil {
+			t.Fatalf("read %s client rates: %v", slug, err)
+		}
+		if (rawClient == nil) != (proClient == nil) {
+			t.Errorf("slug %s: client_model_credit_rates NULL-ness differs from pro (got nil=%v, pro nil=%v)",
+				slug, rawClient == nil, proClient == nil)
+			continue
+		}
+		if rawClient == nil {
+			continue // both NULL — equal
+		}
+		var gotClient map[string]any
+		if err := json.Unmarshal(rawClient, &gotClient); err != nil {
 			t.Fatalf("unmarshal %s client rates: %v", slug, err)
 		}
-		if !reflect.DeepEqual(got, proClientMap) {
+		if !reflect.DeepEqual(gotClient, proClientMap) {
 			t.Errorf("slug %s: client_model_credit_rates does not match pro exactly", slug)
 		}
 	}
