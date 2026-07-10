@@ -144,6 +144,26 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 				r.Get("/{requestID}/http-log", handleGetHttpLog(st, httpLogger))
 			})
 
+			// User-facing notifications inbox (any authenticated user).
+			r.Route("/notifications", func(r chi.Router) {
+				r.Get("/", handleListMyNotifications(st))
+				r.Get("/unread_count", handleUnreadNotificationCount(st))
+				r.Post("/{id}/read", handleUserMarkNotificationRead(st))
+				r.Post("/read_all", handleUserMarkAllNotificationsRead(st))
+			})
+
+			// Admin: notifications CRUD (superadmin only).
+			r.Route("/admin/notifications", func(r chi.Router) {
+				r.Use(RequireSuperadmin)
+				r.Get("/", handleListAllNotifications(st))
+				r.Post("/", handleCreateNotification(st))
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", handleGetNotification(st))
+					r.Put("/", handleUpdateNotification(st))
+					r.Delete("/", handleDeleteNotification(st))
+				})
+			})
+
 			// Admin: extra usage overview + direct top-up (superadmin only).
 			r.Route("/admin/extra-usage", func(r chi.Router) {
 				r.Use(RequireSuperadmin)

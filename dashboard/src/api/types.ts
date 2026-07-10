@@ -487,6 +487,33 @@ export interface ModelListRow extends Model {
   reference_counts: ModelReferenceCounts;
 }
 
+// --- Notification ---
+export type AudienceType = "global" | "project" | "user";
+
+export interface Notification {
+  id: string;
+  title: string;
+  body: string;
+  audience_type: AudienceType;
+  audience_id?: string | null;
+  audience_name?: string | null;   // "Broadcast" mapping is done client-side (empty string ⇒ "Broadcast")
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+  read_at?: string | null;         // populated only on the user list
+  read_count?: number;             // populated only on admin listings
+}
+
+export interface NotificationCreatePayload {
+  title: string;
+  body: string;
+  audience_type: AudienceType;
+  audience_id?: string | null;
+}
+
+export type NotificationUpdatePayload = NotificationCreatePayload;
+
 // --- Route (new routing system) ---
 // model_names is the list of canonical catalog names this route matches
 // against the post-alias-resolution model. Replaces the legacy glob-based

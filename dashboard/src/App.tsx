@@ -69,6 +69,10 @@ import { UpstreamGroupsPage } from "@/pages/admin/UpstreamGroupsPage";
 // Admin OAuth Clients
 import { OAuthClientsPage } from "@/pages/admin/OAuthClientsPage";
 
+// Notifications
+import { NotificationsPage } from "@/pages/notifications/NotificationsPage";
+import { AdminNotificationsPage } from "@/pages/admin/NotificationsPage";
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -93,6 +97,7 @@ export function App() {
               {/* Authenticated routes */}
               <Route element={<AppShell />}>
                 <Route index element={<Navigate to="/projects" replace />} />
+                <Route path="notifications" element={<NotificationsPage />} />
                 <Route path="projects" element={<ProjectListPage />} />
                 <Route path="projects/new" element={<CreateProjectPage />} />
                 <Route path="projects/:projectId" element={<OverviewPage />} />
@@ -117,6 +122,7 @@ export function App() {
                 <Route path="admin/upstreams" element={<UpstreamsPage />} />
                 <Route path="admin/upstream-groups" element={<UpstreamGroupsPage />} />
                 <Route path="admin/oauth-clients" element={<OAuthClientsPage />} />
+                <Route path="admin/notifications" element={<AdminNotificationsPage />} />
               </Route>
             </Routes>
           </BrowserRouter>
