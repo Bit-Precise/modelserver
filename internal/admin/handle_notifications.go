@@ -2,6 +2,7 @@ package admin
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -54,6 +55,7 @@ func resolveAudience(st *store.Store, audienceType, audienceID string) (string, 
 	case types.AudienceTypeProject:
 		p, err := st.GetProjectByID(audienceID)
 		if err != nil {
+			log.Printf("ERROR notifications: resolve_audience project=%s: %v", audienceID, err)
 			return "internal", "failed to fetch project"
 		}
 		if p == nil {
@@ -65,6 +67,7 @@ func resolveAudience(st *store.Store, audienceType, audienceID string) (string, 
 	case types.AudienceTypeUser:
 		u, err := st.GetUserByID(audienceID)
 		if err != nil {
+			log.Printf("ERROR notifications: resolve_audience user=%s: %v", audienceID, err)
 			return "internal", "failed to fetch user"
 		}
 		if u == nil {
@@ -91,6 +94,7 @@ func handleListAllNotifications(st *store.Store) http.HandlerFunc {
 		}
 		items, total, err := st.ListAllNotifications(includeDeleted, audienceType, p)
 		if err != nil {
+			log.Printf("ERROR notifications: list_all include_deleted=%v audience_type=%q: %v", includeDeleted, audienceType, err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to list notifications")
 			return
 		}
@@ -107,6 +111,7 @@ func handleGetNotification(st *store.Store) http.HandlerFunc {
 				writeError(w, http.StatusNotFound, "not_found", "notification not found")
 				return
 			}
+			log.Printf("ERROR notifications: get id=%s: %v", id, err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to fetch notification")
 			return
 		}
@@ -144,6 +149,7 @@ func handleCreateNotification(st *store.Store) http.HandlerFunc {
 			CreatedBy:    me.ID,
 		}
 		if err := st.CreateNotification(n); err != nil {
+			log.Printf("ERROR notifications: create by=%s audience_type=%s: %v", me.ID, body.AudienceType, err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to create notification")
 			return
 		}
@@ -178,11 +184,13 @@ func handleUpdateNotification(st *store.Store) http.HandlerFunc {
 				writeError(w, http.StatusNotFound, "not_found", "notification not found or already deleted")
 				return
 			}
+			log.Printf("ERROR notifications: update id=%s: %v", id, err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to update notification")
 			return
 		}
 		n, err := st.GetNotification(id)
 		if err != nil {
+			log.Printf("ERROR notifications: reload_after_update id=%s: %v", id, err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to reload notification")
 			return
 		}
@@ -198,6 +206,7 @@ func handleDeleteNotification(st *store.Store) http.HandlerFunc {
 				writeError(w, http.StatusNotFound, "not_found", "notification not found or already deleted")
 				return
 			}
+			log.Printf("ERROR notifications: soft_delete id=%s: %v", id, err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to delete notification")
 			return
 		}
@@ -213,6 +222,7 @@ func handleListMyNotifications(st *store.Store) http.HandlerFunc {
 		p := parsePagination(r)
 		items, total, err := st.ListVisibleForUser(me.ID, p)
 		if err != nil {
+			log.Printf("ERROR notifications: list_mine user=%s page=%d per_page=%d: %v", me.ID, p.Page, p.Limit(), err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to list notifications")
 			return
 		}
@@ -225,6 +235,7 @@ func handleUnreadNotificationCount(st *store.Store) http.HandlerFunc {
 		me := UserFromContext(r.Context())
 		count, err := st.CountUnreadForUser(me.ID)
 		if err != nil {
+			log.Printf("ERROR notifications: unread_count user=%s: %v", me.ID, err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to count unread notifications")
 			return
 		}
@@ -241,6 +252,7 @@ func handleUserMarkNotificationRead(st *store.Store) http.HandlerFunc {
 		// "silent 200 on unknown id" contract to avoid confusing 404s
 		// during an admin-delete race.
 		if err := st.MarkNotificationRead(me.ID, id); err != nil {
+			log.Printf("ERROR notifications: mark_read user=%s id=%s: %v", me.ID, id, err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to mark notification read")
 			return
 		}
@@ -253,6 +265,7 @@ func handleUserMarkAllNotificationsRead(st *store.Store) http.HandlerFunc {
 		me := UserFromContext(r.Context())
 		marked, err := st.MarkAllNotificationsRead(me.ID)
 		if err != nil {
+			log.Printf("ERROR notifications: mark_all_read user=%s: %v", me.ID, err)
 			writeError(w, http.StatusInternalServerError, "internal", "failed to mark all notifications read")
 			return
 		}
