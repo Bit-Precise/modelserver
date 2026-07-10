@@ -144,6 +144,18 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 				r.Get("/{requestID}/http-log", handleGetHttpLog(st, httpLogger))
 			})
 
+			// Admin: notifications CRUD (superadmin only).
+			r.Route("/admin/notifications", func(r chi.Router) {
+				r.Use(RequireSuperadmin)
+				r.Get("/", handleListAllNotifications(st))
+				r.Post("/", handleCreateNotification(st))
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", handleGetNotification(st))
+					r.Put("/", handleUpdateNotification(st))
+					r.Delete("/", handleDeleteNotification(st))
+				})
+			})
+
 			// Admin: extra usage overview + direct top-up (superadmin only).
 			r.Route("/admin/extra-usage", func(r chi.Router) {
 				r.Use(RequireSuperadmin)
