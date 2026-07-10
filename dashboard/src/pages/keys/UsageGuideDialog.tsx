@@ -118,7 +118,7 @@ export function UsageGuideDialog({
                 add:
               </p>
               <CodeBlock
-                code={`model_provider = "modelserver"\nmodel = "gpt-5.6-sol"\n\n[model_providers.modelserver]\nname = "modelserver"\nbase_url = "https://code.ai.cs.ac.cn/v1"\nenv_key = "OPENAI_API_KEY"\nwire_api = "responses"\n\n# Avoid the reserved "collaboration" tool namespace on gpt-5.6.\n# See https://github.com/openai/codex/issues/31864\n[features.multi_agent_v2]\ntool_namespace = "agents"`}
+                code={`model_provider = "modelserver"\nmodel = "gpt-5.6-sol"\n\n[model_providers.modelserver]\nname = "modelserver"\nbase_url = "https://code.ai.cs.ac.cn/v1"\nenv_key = "OPENAI_API_KEY"\nwire_api = "responses"\n\n[features.multi_agent_v2]\ntool_namespace = "agents"`}
               />
             </Step>
 
