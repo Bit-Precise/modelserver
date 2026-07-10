@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -210,10 +209,7 @@ func (s *Store) MarkNotificationRead(userID, notificationID string) error {
 		FROM notifications n
 		WHERE n.id = $2 AND `+visibilityWhereClause+`
 		ON CONFLICT DO NOTHING`, userID, notificationID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return err
-	}
-	return nil
+	return err
 }
 
 // MarkAllNotificationsRead inserts a read row for every currently-

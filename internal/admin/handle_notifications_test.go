@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/go-chi/chi/v5"
 )
 
 // The tests below intentionally exercise the router with real handler
@@ -18,7 +16,7 @@ import (
 func TestNotificationsAdmin_RequireSuperadmin(t *testing.T) {
 	st := openTestAdminStore(t)                 // helper defined in the admin test package
 	nonAdmin := seedAdminTestUser(t, st, false) // helper: creates user, returns access token
-	r := newAdminTestRouter(t, st)              // helper: builds chi.Router with routes mounted
+	r := newAdminTestRouter(t, st)              // helper: builds router with routes mounted
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/notifications", nil)
 	req.Header.Set("Authorization", "Bearer "+nonAdmin.token)
@@ -119,7 +117,6 @@ func TestNotificationsAdmin_CreateGetListDeleteRoundTrip(t *testing.T) {
 	if listResp.Meta.Total != 1 {
 		t.Fatalf("include_deleted list total = %d, want 1", listResp.Meta.Total)
 	}
-	_ = chi.NewRouter // silence unused import when future edits remove one
 }
 
 func TestNotificationsAdmin_CreateValidation(t *testing.T) {

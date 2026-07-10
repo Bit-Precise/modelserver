@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { FormEvent } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DataTable, type Column } from "@/components/shared/DataTable";
 import { Button } from "@/components/ui/button";
@@ -101,7 +102,7 @@ export function AdminNotificationsPage() {
     setForm(notificationToForm(n));
     setDialogOpen(true);
   }
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const payload = formToPayload(form);
     if (payload.audience_type !== "global" && !payload.audience_id) {
@@ -169,7 +170,7 @@ export function AdminNotificationsPage() {
             <input
               type="checkbox"
               checked={includeDeleted}
-              onChange={(e) => setIncludeDeleted(e.target.checked)}
+              onChange={(e) => { setIncludeDeleted(e.target.checked); setPage(1); }}
             />
             Show deleted
           </label>
