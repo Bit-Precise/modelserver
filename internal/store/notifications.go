@@ -153,7 +153,7 @@ func (s *Store) ListVisibleForUser(userID string, p types.PaginationParams) ([]t
 		       CASE
 		         WHEN n.audience_type = 'global'  THEN ''
 		         WHEN n.audience_type = 'user'    THEN 'You'
-		         WHEN n.audience_type = 'project' THEN COALESCE(p.display_name, '(deleted project)')
+		         WHEN n.audience_type = 'project' THEN COALESCE(p.name, '(deleted project)')
 		         ELSE ''
 		       END AS audience_name
 		FROM notifications n
