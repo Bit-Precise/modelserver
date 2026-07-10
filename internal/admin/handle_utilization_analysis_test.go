@@ -109,3 +109,37 @@ func TestSuggestRatesForFixedLimitNoUsableCredits(t *testing.T) {
 		t.Fatalf("suggestRatesForFixedLimit = %+v, want nil", got)
 	}
 }
+
+// TestUtilizationBaseRates_GPT56 asserts the utilization analyser knows the
+// three gpt-5.6 models at their plan-rate values (catalog * 0.2) with the
+// long_context multipliers preserved.
+func TestUtilizationBaseRates_GPT56(t *testing.T) {
+	cases := []struct {
+		name          string
+		wantInput     float64
+		wantOutput    float64
+		wantCacheRead float64
+		wantCacheCrea float64
+	}{
+		{"gpt-5.6-sol", 0.1334, 0.8, 0.0134, 0.1668},
+		{"gpt-5.6-terra", 0.0666, 0.4, 0.0066, 0.0834},
+		{"gpt-5.6-luna", 0.0266, 0.16, 0.0027, 0.0334},
+	}
+	for _, tc := range cases {
+		r, ok := utilizationAnalysisBaseRates[tc.name]
+		if !ok {
+			t.Fatalf("%s missing from utilizationAnalysisBaseRates", tc.name)
+		}
+		if r.InputRate != tc.wantInput || r.OutputRate != tc.wantOutput ||
+			r.CacheReadRate != tc.wantCacheRead || r.CacheCreationRate != tc.wantCacheCrea {
+			t.Fatalf("%s rates: %+v; want in=%v out=%v cr=%v cc=%v",
+				tc.name, r, tc.wantInput, tc.wantOutput, tc.wantCacheRead, tc.wantCacheCrea)
+		}
+		if r.LongContext == nil ||
+			r.LongContext.ThresholdInputTokens != 272000 ||
+			r.LongContext.InputMultiplier != 2.0 ||
+			r.LongContext.OutputMultiplier != 1.5 {
+			t.Fatalf("%s long_context: %+v; want thr=272000 in=2 out=1.5", tc.name, r.LongContext)
+		}
+	}
+}

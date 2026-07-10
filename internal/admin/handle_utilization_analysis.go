@@ -48,6 +48,21 @@ var utilizationAnalysisBaseRates = map[string]types.CreditRate{
 	"claude-sonnet-4-6":         {InputRate: 0.4, OutputRate: 2.0, CacheCreationRate: 0.4, CacheReadRate: 0},
 	"claude-haiku-4-5":          {InputRate: 0.133, OutputRate: 0.667, CacheCreationRate: 0.133, CacheReadRate: 0},
 	"claude-haiku-4-5-20251001": {InputRate: 0.133, OutputRate: 0.667, CacheCreationRate: 0.133, CacheReadRate: 0},
+	"gpt-5.6-sol": {InputRate: 0.1334, OutputRate: 0.8, CacheCreationRate: 0.1668, CacheReadRate: 0.0134, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 272000,
+		InputMultiplier:      2.0,
+		OutputMultiplier:     1.5,
+	}},
+	"gpt-5.6-terra": {InputRate: 0.0666, OutputRate: 0.4, CacheCreationRate: 0.0834, CacheReadRate: 0.0066, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 272000,
+		InputMultiplier:      2.0,
+		OutputMultiplier:     1.5,
+	}},
+	"gpt-5.6-luna": {InputRate: 0.0266, OutputRate: 0.16, CacheCreationRate: 0.0334, CacheReadRate: 0.0027, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 272000,
+		InputMultiplier:      2.0,
+		OutputMultiplier:     1.5,
+	}},
 	"gpt-5.5":                   {InputRate: 0.0667, OutputRate: 0.4, CacheCreationRate: 0, CacheReadRate: 0.0067},
 	"gpt-5.4":                   {InputRate: 0.0333, OutputRate: 0.2, CacheCreationRate: 0, CacheReadRate: 0.0033},
 	"gpt-5.4-mini": {InputRate: 0.0033, OutputRate: 0.0267, CacheCreationRate: 0, CacheReadRate: 0.0003, LongContext: &types.LongContextCreditRate{
