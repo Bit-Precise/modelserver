@@ -165,3 +165,203 @@ func TestNotificationsAdmin_CreateValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestNotificationsUser_UnreadCount_And_ListMarksReadable(t *testing.T) {
+	st := openTestAdminStore(t)
+	me := seedAdminTestUser(t, st, false)
+	other := seedAdminTestUser(t, st, true)
+	r := newAdminTestRouter(t, st)
+
+	// Admin creates two global notifications visible to `me`.
+	for _, title := range []string{"one", "two"} {
+		body := `{"title":"` + title + `","body":"b","audience_type":"global"}`
+		req := httptest.NewRequest(http.MethodPost, "/admin/notifications", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+other.token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("seed create %s: status=%d body=%s", title, rec.Code, rec.Body.String())
+		}
+	}
+
+	// unread_count == 2 for `me`.
+	req := httptest.NewRequest(http.MethodGet, "/notifications/unread_count", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unread_count status=%d", rec.Code)
+	}
+	var countResp struct {
+		Data struct {
+			Count int `json:"count"`
+		} `json:"data"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &countResp)
+	if countResp.Data.Count != 2 {
+		t.Fatalf("unread_count = %d, want 2", countResp.Data.Count)
+	}
+
+	// List returns 2 items, both with read_at == nil.
+	req = httptest.NewRequest(http.MethodGet, "/notifications?page=1&per_page=10", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	var listResp struct {
+		Data []struct {
+			ID     string  `json:"id"`
+			ReadAt *string `json:"read_at,omitempty"`
+		} `json:"data"`
+		Meta struct{ Total int } `json:"meta"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &listResp)
+	if listResp.Meta.Total != 2 || len(listResp.Data) != 2 {
+		t.Fatalf("list total=%d len=%d, want 2/2", listResp.Meta.Total, len(listResp.Data))
+	}
+	for _, it := range listResp.Data {
+		if it.ReadAt != nil {
+			t.Fatalf("unexpected read_at on unread item %s: %v", it.ID, *it.ReadAt)
+		}
+	}
+
+	// Mark the first one read.
+	firstID := listResp.Data[0].ID
+	req = httptest.NewRequest(http.MethodPost, "/notifications/"+firstID+"/read", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark read status=%d", rec.Code)
+	}
+
+	// Idempotent: second POST still 200.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/notifications/"+firstID+"/read", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second mark read status=%d, want 200 (idempotent)", rec.Code)
+	}
+
+	// unread_count now 1.
+	req = httptest.NewRequest(http.MethodGet, "/notifications/unread_count", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	json.Unmarshal(rec.Body.Bytes(), &countResp)
+	if countResp.Data.Count != 1 {
+		t.Fatalf("unread_count after one read = %d, want 1", countResp.Data.Count)
+	}
+
+	// Mark-all-read → marked == 1 (only the remaining unread).
+	req = httptest.NewRequest(http.MethodPost, "/notifications/read_all", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read_all status=%d", rec.Code)
+	}
+	var markedResp struct {
+		Data struct {
+			Marked int `json:"marked"`
+		} `json:"data"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &markedResp)
+	if markedResp.Data.Marked != 1 {
+		t.Fatalf("read_all marked = %d, want 1", markedResp.Data.Marked)
+	}
+
+	// unread_count now 0.
+	req = httptest.NewRequest(http.MethodGet, "/notifications/unread_count", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	json.Unmarshal(rec.Body.Bytes(), &countResp)
+	if countResp.Data.Count != 0 {
+		t.Fatalf("unread_count after read_all = %d, want 0", countResp.Data.Count)
+	}
+}
+
+func TestNotificationsUser_MarkReadIsSilentOnInvisibleOrDeleted(t *testing.T) {
+	st := openTestAdminStore(t)
+	me := seedAdminTestUser(t, st, false)
+	admin := seedAdminTestUser(t, st, true)
+	other := seedAdminTestUser(t, st, false)
+	r := newAdminTestRouter(t, st)
+
+	// Notification visible to `other` only.
+	otherID := other.user.ID
+	body := `{"title":"t","body":"b","audience_type":"user","audience_id":"` + otherID + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/notifications", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+admin.token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	var createResp struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &createResp)
+	invisibleID := createResp.Data.ID
+
+	// me marks the invisible notification read → 200 silent no-op.
+	req = httptest.NewRequest(http.MethodPost, "/notifications/"+invisibleID+"/read", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invisible read status=%d, want 200 (silent)", rec.Code)
+	}
+	// And unread_count for me stays 0.
+	req = httptest.NewRequest(http.MethodGet, "/notifications/unread_count", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	var countResp struct {
+		Data struct {
+			Count int `json:"count"`
+		} `json:"data"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &countResp)
+	if countResp.Data.Count != 0 {
+		t.Fatalf("unread_count after invisible mark-read = %d, want 0", countResp.Data.Count)
+	}
+
+	// admin soft-deletes a notification; me marking it also returns 200.
+	body = `{"title":"delme","body":"b","audience_type":"global"}`
+	req = httptest.NewRequest(http.MethodPost, "/admin/notifications", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+admin.token)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	json.Unmarshal(rec.Body.Bytes(), &createResp)
+	delID := createResp.Data.ID
+	req = httptest.NewRequest(http.MethodDelete, "/admin/notifications/"+delID, nil)
+	req.Header.Set("Authorization", "Bearer "+admin.token)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	req = httptest.NewRequest(http.MethodPost, "/notifications/"+delID+"/read", nil)
+	req.Header.Set("Authorization", "Bearer "+me.token)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("deleted read status=%d, want 200 (silent)", rec.Code)
+	}
+}
+
+func TestNotificationsUser_RequiresAuth(t *testing.T) {
+	st := openTestAdminStore(t)
+	r := newAdminTestRouter(t, st)
+
+	for _, ep := range []string{"/notifications", "/notifications/unread_count"} {
+		req := httptest.NewRequest(http.MethodGet, ep, nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s unauthenticated status=%d, want 401", ep, rec.Code)
+		}
+	}
+}

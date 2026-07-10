@@ -204,3 +204,58 @@ func handleDeleteNotification(st *store.Store) http.HandlerFunc {
 		writeData(w, http.StatusOK, map[string]any{"deleted": true})
 	}
 }
+
+// ==== User-facing handlers ====
+
+func handleListMyNotifications(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		me := UserFromContext(r.Context())
+		p := parsePagination(r)
+		items, total, err := st.ListVisibleForUser(me.ID, p)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to list notifications")
+			return
+		}
+		writeList(w, items, total, p.Page, p.Limit())
+	}
+}
+
+func handleUnreadNotificationCount(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		me := UserFromContext(r.Context())
+		count, err := st.CountUnreadForUser(me.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to count unread notifications")
+			return
+		}
+		writeData(w, http.StatusOK, map[string]int{"count": count})
+	}
+}
+
+func handleUserMarkNotificationRead(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		me := UserFromContext(r.Context())
+		id := chi.URLParam(r, "id")
+		// Store.MarkNotificationRead is silent (returns nil) when the
+		// notification is invisible or deleted — matches the spec's
+		// "silent 200 on unknown id" contract to avoid confusing 404s
+		// during an admin-delete race.
+		if err := st.MarkNotificationRead(me.ID, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to mark notification read")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func handleUserMarkAllNotificationsRead(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		me := UserFromContext(r.Context())
+		marked, err := st.MarkAllNotificationsRead(me.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to mark all notifications read")
+			return
+		}
+		writeData(w, http.StatusOK, map[string]int{"marked": marked})
+	}
+}

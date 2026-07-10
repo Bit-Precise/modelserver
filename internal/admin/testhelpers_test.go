@@ -99,9 +99,12 @@ func newAdminTestRouter(t *testing.T, st *store.Store) chi.Router {
 			})
 		})
 
-		// User-facing notifications (Task 4 will fill this in).
+		// User-facing notifications inbox (any authenticated user).
 		r.Route("/notifications", func(r chi.Router) {
-			// placeholder — Task 4 handlers will be mounted here
+			r.Get("/",             handleListMyNotifications(st))
+			r.Get("/unread_count", handleUnreadNotificationCount(st))
+			r.Post("/{id}/read",   handleUserMarkNotificationRead(st))
+			r.Post("/read_all",    handleUserMarkAllNotificationsRead(st))
 		})
 	})
 	return r
