@@ -48,11 +48,15 @@ func validateNotificationPayload(p notificationCreatePayload) (string, string) {
 // resolveAudience verifies the audience row exists and is usable.
 // Returns ("","") on success or (code, message) on failure suitable for
 // writeError. Never called for global audience.
+// Code "internal" indicates a transient DB error (500); other codes are 400.
 func resolveAudience(st *store.Store, audienceType, audienceID string) (string, string) {
 	switch audienceType {
 	case types.AudienceTypeProject:
 		p, err := st.GetProjectByID(audienceID)
-		if err != nil || p == nil {
+		if err != nil {
+			return "internal", "failed to fetch project"
+		}
+		if p == nil {
 			return "invalid_audience", "project not found"
 		}
 		if p.Status == types.ProjectStatusArchived {
@@ -60,7 +64,10 @@ func resolveAudience(st *store.Store, audienceType, audienceID string) (string, 
 		}
 	case types.AudienceTypeUser:
 		u, err := st.GetUserByID(audienceID)
-		if err != nil || u == nil {
+		if err != nil {
+			return "internal", "failed to fetch user"
+		}
+		if u == nil {
 			return "invalid_audience", "user not found"
 		}
 		if u.Status == types.UserStatusDisabled {
@@ -121,7 +128,11 @@ func handleCreateNotification(st *store.Store) http.HandlerFunc {
 		}
 		if body.AudienceType != types.AudienceTypeGlobal {
 			if code, msg := resolveAudience(st, body.AudienceType, *body.AudienceID); code != "" {
-				writeError(w, http.StatusBadRequest, code, msg)
+				statusCode := http.StatusBadRequest
+				if code == "internal" {
+					statusCode = http.StatusInternalServerError
+				}
+				writeError(w, statusCode, code, msg)
 				return
 			}
 		}
@@ -154,7 +165,11 @@ func handleUpdateNotification(st *store.Store) http.HandlerFunc {
 		}
 		if body.AudienceType != types.AudienceTypeGlobal {
 			if code, msg := resolveAudience(st, body.AudienceType, *body.AudienceID); code != "" {
-				writeError(w, http.StatusBadRequest, code, msg)
+				statusCode := http.StatusBadRequest
+				if code == "internal" {
+					statusCode = http.StatusInternalServerError
+				}
+				writeError(w, statusCode, code, msg)
 				return
 			}
 		}
@@ -186,6 +201,6 @@ func handleDeleteNotification(st *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to delete notification")
 			return
 		}
-		w.WriteHeader(http.StatusOK)
+		writeData(w, http.StatusOK, map[string]any{"deleted": true})
 	}
 }

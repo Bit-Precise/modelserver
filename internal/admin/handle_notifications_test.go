@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -121,7 +120,6 @@ func TestNotificationsAdmin_CreateGetListDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("include_deleted list total = %d, want 1", listResp.Meta.Total)
 	}
 	_ = chi.NewRouter // silence unused import when future edits remove one
-	_ = bytes.NewReader
 }
 
 func TestNotificationsAdmin_CreateValidation(t *testing.T) {
