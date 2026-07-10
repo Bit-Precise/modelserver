@@ -83,8 +83,14 @@ export function UsageGuideDialog({
             </Step>
 
             <Step n={2} title="Set environment variables">
+              <p className="text-xs text-muted-foreground">
+                Use <code className="rounded bg-muted px-1 py-0.5">ANTHROPIC_AUTH_TOKEN</code>{" "}
+                (Bearer token) rather than{" "}
+                <code className="rounded bg-muted px-1 py-0.5">ANTHROPIC_API_KEY</code>{" "}
+                when pointing Claude Code at a third-party gateway.
+              </p>
               <CodeBlock
-                code={`export ANTHROPIC_BASE_URL=https://code.ai.cs.ac.cn\nexport ANTHROPIC_API_KEY=${displayKey}`}
+                code={`export ANTHROPIC_BASE_URL=https://code.ai.cs.ac.cn\nexport ANTHROPIC_AUTH_TOKEN=${displayKey}`}
               />
             </Step>
 
@@ -112,7 +118,7 @@ export function UsageGuideDialog({
                 add:
               </p>
               <CodeBlock
-                code={`model_provider = "modelserver"\nmodel = "gpt-5.4"\n\n[model_providers.modelserver]\nname = "modelserver"\nbase_url = "https://code.ai.cs.ac.cn/v1"\nenv_key = "OPENAI_API_KEY"\nwire_api = "responses"`}
+                code={`model_provider = "modelserver"\nmodel = "gpt-5.6-sol"\n\n[model_providers.modelserver]\nname = "modelserver"\nbase_url = "https://code.ai.cs.ac.cn/v1"\nenv_key = "OPENAI_API_KEY"\nwire_api = "responses"\n\n# Avoid the reserved "collaboration" tool namespace on gpt-5.6.\n# See https://github.com/openai/codex/issues/31864\n[features.multi_agent_v2]\ntool_namespace = "agents"`}
               />
             </Step>
 
