@@ -24,7 +24,7 @@ func seedProjectForNotifications(t *testing.T, st *Store, ownerID, name string) 
 	t.Helper()
 	var id string
 	if err := st.pool.QueryRow(context.Background(),
-		`INSERT INTO projects (name, display_name, owner_id, status) VALUES ($1, $1, $2, 'active') RETURNING id`,
+		`INSERT INTO projects (name, created_by, status) VALUES ($1, $2, 'active') RETURNING id`,
 		name, ownerID).Scan(&id); err != nil {
 		t.Fatalf("seed project %s: %v", name, err)
 	}
