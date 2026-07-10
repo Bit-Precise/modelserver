@@ -29,7 +29,8 @@ func TestDirectorSetCodexUpstream_DefaultBaseURL(t *testing.T) {
 	if r.Header.Get("x-api-key") != "" {
 		t.Error("x-api-key was not stripped")
 	}
-	// Upstream codex 0.135.0 no longer emits a standalone "Version" header.
+	// Upstream codex 0.144.1 no longer emits a standalone "Version" header
+	// (dropped around 0.135.0, PR openai/codex#22193 era).
 	if got := r.Header.Get("Version"); got != "" {
 		t.Errorf("Version header should not be sent (upstream dropped it), got %q", got)
 	}
@@ -196,11 +197,31 @@ func TestSanitizeOutboundHeaders_PassesCodexHeaders(t *testing.T) {
 		"Originator":         {"codex_cli_rs"},
 		"Session-Id":         {"uuid"},
 		"Thread-Id":          {"tid"},
-		"X-Codex-Window-Id":  {"win-1"},
-		"X-Random-Garbage":   {"drop me"},
+		// Codex 0.144.1 header families (x-codex-*, x-openai-*, x-oai-*).
+		// See the sanitizeOutboundHeaders comment for the full list.
+		"X-Codex-Window-Id":                          {"win-1"},
+		"X-Codex-Installation-Id":                    {"inst-1"},
+		"X-Codex-Turn-State":                         {"opaque"},
+		"X-Codex-Turn-Metadata":                      {"{}"},
+		"X-Codex-Beta-Features":                      {"foo,bar"},
+		"X-Codex-Parent-Thread-Id":                   {"parent"},
+		"X-Openai-Subagent":                          {"review"},
+		"X-Openai-Memgen-Request":                    {"true"},
+		"X-Openai-Internal-Codex-Responses-Lite":     {"true"},
+		"X-Openai-Internal-Codex-Residency":          {"us"},
+		"X-Openai-Fedramp":                           {"true"},
+		"X-Oai-Attestation":                          {"blob"},
+		"X-Random-Garbage":                           {"drop me"},
 	}
 	out := sanitizeOutboundHeaders(in)
-	for _, want := range []string{"Authorization", "Accept", "Chatgpt-Account-Id", "Originator", "Session-Id", "Thread-Id", "X-Codex-Window-Id"} {
+	for _, want := range []string{
+		"Authorization", "Accept", "Chatgpt-Account-Id", "Originator", "Session-Id", "Thread-Id",
+		"X-Codex-Window-Id", "X-Codex-Installation-Id", "X-Codex-Turn-State",
+		"X-Codex-Turn-Metadata", "X-Codex-Beta-Features", "X-Codex-Parent-Thread-Id",
+		"X-Openai-Subagent", "X-Openai-Memgen-Request",
+		"X-Openai-Internal-Codex-Responses-Lite", "X-Openai-Internal-Codex-Residency",
+		"X-Openai-Fedramp", "X-Oai-Attestation",
+	} {
 		if out.Get(want) == "" {
 			t.Errorf("expected header %q to pass through", want)
 		}

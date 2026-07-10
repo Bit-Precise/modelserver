@@ -9,7 +9,8 @@ import (
 	"strings"
 )
 
-// codex outbound constants. Pinned to codex CLI 0.135.0; bumping is a
+// codex outbound constants. Pinned to codex CLI 0.144.1 (latest
+// @openai/codex on npm, cut from origin/release/0.144); bumping is a
 // deliberate maintenance task.
 const (
 	codexDefaultBaseURL = "https://chatgpt.com/backend-api/codex"
@@ -18,8 +19,8 @@ const (
 	// literals. CodexVersion is no longer sent as a standalone "Version"
 	// header (upstream stopped emitting it; PR openai/codex#22193 era) but
 	// remains the source of truth for the version embedded in CodexUserAgent.
-	CodexVersion   = "0.135.0"
-	CodexUserAgent = "codex_cli_rs/0.135.0 (Linux; x64) Codex"
+	CodexVersion   = "0.144.1"
+	CodexUserAgent = "codex_cli_rs/0.144.1 (Linux; x64) Codex"
 	// codexOriginator is sent as both part of the User-Agent and as a
 	// standalone "Originator" header on every outbound request. This matches
 	// codex CLI's default_headers() which inserts it via reqwest's

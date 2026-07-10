@@ -1942,7 +1942,25 @@ func sanitizeOutboundHeaders(h http.Header) http.Header {
 			canon == "Thread-Id":
 			allowed[canon] = vals
 		default:
-			if strings.HasPrefix(canon, "X-Stainless-") || strings.HasPrefix(canon, "X-Codex-") {
+			// Prefix passthrough for the OpenAI / codex header families.
+			// Codex CLI 0.144.1 emits several `x-openai-*`, `x-oai-*` and
+			// `x-codex-*` headers whose exact names change across releases —
+			// x-oai-attestation, x-openai-subagent, x-openai-memgen-request,
+			// x-openai-internal-codex-responses-lite,
+			// x-openai-internal-codex-residency, x-openai-fedramp, plus
+			// x-codex-installation-id, x-codex-window-id, x-codex-turn-state,
+			// x-codex-turn-metadata, x-codex-parent-thread-id,
+			// x-codex-beta-features. Rather than enumerate each one (and
+			// silently drop the next one codex adds), allowlist the whole
+			// family. The ChatGPT backend gates on several of them, so
+			// stripping any header the CLI sends breaks routing.
+			// `X-Stainless-` is the OpenAI SDK's standard telemetry prefix
+			// (openai-python / openai-node) and is passed through for the
+			// same reason.
+			if strings.HasPrefix(canon, "X-Stainless-") ||
+				strings.HasPrefix(canon, "X-Codex-") ||
+				strings.HasPrefix(canon, "X-Openai-") ||
+				strings.HasPrefix(canon, "X-Oai-") {
 				allowed[canon] = vals
 			}
 		}
