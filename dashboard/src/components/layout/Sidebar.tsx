@@ -41,7 +41,6 @@ function SidebarLink({
   badge?: number;
 }) {
   const showBadge = typeof badge === "number" && badge > 0;
-  const badgeText = badge && badge >= 100 ? "99+" : String(badge);
   return (
     <NavLink
       to={to}
@@ -59,7 +58,7 @@ function SidebarLink({
       <span className="flex-1">{children}</span>
       {showBadge && (
         <span className="bg-primary text-primary-foreground text-[10px] leading-none px-1.5 py-0.5 rounded-full">
-          {badgeText}
+          {badge! >= 100 ? "99+" : String(badge)}
         </span>
       )}
     </NavLink>

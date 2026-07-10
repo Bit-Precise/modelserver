@@ -91,7 +91,7 @@ export function NotificationsPage() {
       <div className="flex items-center justify-between">
         <PageHeader title="Notifications" description="Platform announcements and updates." />
         {unread > 0 && (
-          <Button variant="outline" size="sm" onClick={() => markAll.mutate()}>
+          <Button variant="outline" size="sm" disabled={markAll.isPending} onClick={() => markAll.mutate()}>
             Mark all as read
           </Button>
         )}
