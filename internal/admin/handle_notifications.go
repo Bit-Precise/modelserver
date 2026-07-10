@@ -244,7 +244,6 @@ func handleUserMarkNotificationRead(st *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to mark notification read")
 			return
 		}
-		w.WriteHeader(http.StatusOK)
 	}
 }
 

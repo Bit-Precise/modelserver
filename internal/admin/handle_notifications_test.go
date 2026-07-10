@@ -342,6 +342,9 @@ func TestNotificationsUser_MarkReadIsSilentOnInvisibleOrDeleted(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+admin.token)
 	rec = httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin delete during test setup: status=%d body=%s", rec.Code, rec.Body.String())
+	}
 
 	req = httptest.NewRequest(http.MethodPost, "/notifications/"+delID+"/read", nil)
 	req.Header.Set("Authorization", "Bearer "+me.token)

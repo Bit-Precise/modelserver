@@ -146,10 +146,10 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 
 			// User-facing notifications inbox (any authenticated user).
 			r.Route("/notifications", func(r chi.Router) {
-				r.Get("/",             handleListMyNotifications(st))
+				r.Get("/", handleListMyNotifications(st))
 				r.Get("/unread_count", handleUnreadNotificationCount(st))
-				r.Post("/{id}/read",   handleUserMarkNotificationRead(st))
-				r.Post("/read_all",    handleUserMarkAllNotificationsRead(st))
+				r.Post("/{id}/read", handleUserMarkNotificationRead(st))
+				r.Post("/read_all", handleUserMarkAllNotificationsRead(st))
 			})
 
 			// Admin: notifications CRUD (superadmin only).
