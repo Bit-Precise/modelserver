@@ -116,15 +116,60 @@ func (l *Logger) uploadWorker() {
 	}
 }
 
+// reassembleSSE picks the right SSE reassembler for the request's provider
+// family (as encoded in RequestKind) and returns the reassembled JSON. If
+// the chosen reassembler cannot recognise the stream (e.g. an OpenAI kind
+// was seen but the body contains no chat.completion.chunk / response.*
+// events, or the field is empty), the raw SSE bytes are returned unchanged
+// so the stored log is at least readable. Anthropic streams stay on the
+// original ReassembleAnthropicSSE code path.
+func reassembleSSE(rec *Record, logger *slog.Logger) []byte {
+	// Constants mirrored from internal/types/request_kind.go — kept as
+	// string literals here to avoid pulling the types package into the
+	// httplog module. If those constants change, update them here too;
+	// TestKindLiterals could be added later to lock this down.
+	const (
+		kindAnthropicMessages     = "anthropic_messages"
+		kindOpenAIChatCompletions = "openai_chat_completions"
+		kindOpenAIResponses       = "openai_responses"
+		kindOpenAIResponsesCompact = "openai_responses_compact"
+	)
+	switch rec.RequestKind {
+	case kindOpenAIChatCompletions:
+		if b, ok := ReassembleOpenAIChatCompletionsSSE(rec.ResponseBody); ok {
+			return b
+		}
+		logger.Warn("httplog: openai chat.completion SSE reassembly produced no events, storing raw",
+			"request_id", rec.RequestID)
+		return rec.ResponseBody
+	case kindOpenAIResponses, kindOpenAIResponsesCompact:
+		if b, ok := ReassembleOpenAIResponsesSSE(rec.ResponseBody); ok {
+			return b
+		}
+		logger.Warn("httplog: openai responses SSE reassembly produced no events, storing raw",
+			"request_id", rec.RequestID)
+		return rec.ResponseBody
+	case kindAnthropicMessages, "":
+		// "" falls back to Anthropic for backwards compat with any
+		// callers that forget to set RequestKind (should not happen
+		// after the executor tee-site update, but is defensive).
+		b, err := ReassembleAnthropicSSE(rec.ResponseBody)
+		if err != nil {
+			logger.Warn("httplog: anthropic SSE reassembly failed, storing raw",
+				"request_id", rec.RequestID, "error", err)
+			return rec.ResponseBody
+		}
+		return b
+	default:
+		// Unknown request kind (images, google, count_tokens, ...):
+		// streaming reassembly not defined here — return raw.
+		return rec.ResponseBody
+	}
+}
+
 func (l *Logger) upload(rec *Record) {
 	if rec.Streaming {
-		reassembled, err := ReassembleAnthropicSSE(rec.ResponseBody)
-		if err == nil {
-			rec.ResponseBody = reassembled
-		} else {
-			l.logger.Warn("httplog: SSE reassembly failed, storing raw SSE",
-				"request_id", rec.RequestID, "error", err)
-		}
+		rec.ResponseBody = reassembleSSE(rec, l.logger)
 		rec.Streaming = false
 	}
 

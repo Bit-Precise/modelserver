@@ -965,6 +965,7 @@ func (e *Executor) commitErrorResponse(
 		rec := &httplog.Record{
 			RequestID:       reqCtx.RequestID,
 			ProjectID:       reqCtx.ProjectID,
+			RequestKind:     reqCtx.RequestKind,
 			RequestHeaders:  reqCtx.CapturedClientHeaders,
 			RequestBody:     reqCtx.CapturedClientBody,
 			ResponseHeaders: resp.Header.Clone(),
@@ -1072,6 +1073,7 @@ func (e *Executor) commitStreamingResponse(
 			rec := &httplog.Record{
 				RequestID:       reqCtx.RequestID,
 				ProjectID:       reqCtx.ProjectID,
+				RequestKind:     reqCtx.RequestKind,
 				RequestHeaders:  reqCtx.CapturedClientHeaders,
 				RequestBody:     reqCtx.CapturedClientBody,
 				ResponseHeaders: respHeaders,
@@ -1444,6 +1446,7 @@ func (e *Executor) commitNonStreamingResponse(
 		rec := &httplog.Record{
 			RequestID:       reqCtx.RequestID,
 			ProjectID:       reqCtx.ProjectID,
+			RequestKind:     reqCtx.RequestKind,
 			RequestHeaders:  reqCtx.CapturedClientHeaders,
 			RequestBody:     reqCtx.CapturedClientBody,
 			ResponseHeaders: resp.Header.Clone(),
@@ -1559,6 +1562,7 @@ func (e *Executor) commitImageNonStreamingResponseBody(
 		rec := &httplog.Record{
 			RequestID:       reqCtx.RequestID,
 			ProjectID:       reqCtx.ProjectID,
+			RequestKind:     reqCtx.RequestKind,
 			RequestHeaders:  reqCtx.CapturedClientHeaders,
 			RequestBody:     reqCtx.CapturedClientBody,
 			ResponseHeaders: resp.Header.Clone(),
