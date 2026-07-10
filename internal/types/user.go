@@ -9,6 +9,22 @@ const (
 	RoleDeveloper  = "developer"
 )
 
+// AssignableRoles is the set of roles that can be set via the add-member
+// and update-member admin endpoints. RoleOwner is intentionally excluded:
+// it is only ever set by CreateProject (creator) or by the
+// transfer-ownership endpoint, never by direct role assignment.
+var AssignableRoles = map[string]struct{}{
+	RoleMaintainer: {},
+	RoleDeveloper:  {},
+}
+
+// IsAssignableRole reports whether r is one of the roles a caller may
+// directly assign through the add-member and update-member endpoints.
+func IsAssignableRole(r string) bool {
+	_, ok := AssignableRoles[r]
+	return ok
+}
+
 // User status constants.
 const (
 	UserStatusActive   = "active"

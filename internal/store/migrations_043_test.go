@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/modelserver/modelserver/internal/types"
@@ -186,22 +187,19 @@ func TestUpdateProjectMemberDeniedModels(t *testing.T) {
 		t.Fatalf("no-op update: %v", err)
 	}
 
-	// 5. Promote to owner with denied_models present — owner promotion
-	//    still clears credit_quota_percent, and denied_models follows
-	//    the explicit argument (nil → unchanged).
+	// 5. Promote to owner is now rejected — the single-owner invariant
+	//    requires owner role to be set only via CreateProject or
+	//    TransferProjectOwnership. UpdateProjectMember returns ErrInvalidRole.
 	owner := "owner"
-	if err := st.UpdateProjectMember(projectID, memberID, &owner, nil, nil); err != nil {
-		t.Fatalf("promote owner: %v", err)
+	if err := st.UpdateProjectMember(projectID, memberID, &owner, nil, nil); !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("promote owner: err = %v, want ErrInvalidRole", err)
 	}
+	// The member's existing fields are unchanged (the guard returns before any UPDATE).
 	m = read()
-	if m.Role != "owner" {
-		t.Fatalf("Role after promote = %q", m.Role)
+	if m.Role != "developer" {
+		t.Fatalf("Role after rejected promote = %q, want developer", m.Role)
 	}
-	if m.CreditQuotaPct != nil {
-		t.Fatalf("CreditQuotaPct should clear on owner promote; got %v", *m.CreditQuotaPct)
-	}
-	// denied_models was unchanged (we passed nil) — still 2 entries.
 	if len(m.DeniedModels) != 2 {
-		t.Fatalf("DeniedModels post-promote = %v; want 2", m.DeniedModels)
+		t.Fatalf("DeniedModels after rejected promote = %v; want 2 unchanged", m.DeniedModels)
 	}
 }

@@ -3,12 +3,29 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/modelserver/modelserver/internal/types"
+)
+
+var (
+	// ErrNotAMember: target user is not a member of the project.
+	ErrNotAMember = errors.New("user is not a project member")
+	// ErrAlreadyOwner: target user is already the project owner.
+	ErrAlreadyOwner = errors.New("user is already the project owner")
+	// ErrOwnerMustTransfer: tried to demote or remove the current owner
+	// outside of the transfer-ownership flow.
+	ErrOwnerMustTransfer = errors.New("owner cannot be demoted or removed directly; use transfer-ownership")
+	// ErrInvalidRole: a role string is not in types.AssignableRoles
+	// (or equals types.RoleOwner where owner is not permitted).
+	ErrInvalidRole = errors.New("invalid role")
+	// ErrInvariantViolated: a store transaction's post-state would have
+	// owner count ≠ 1. Indicates concurrent writes or corrupt data.
+	ErrInvariantViolated = errors.New("project owner-count invariant violated")
 )
 
 const projectColumns = `id, name, COALESCE(description, ''), created_by, status, settings, billing_tags, created_at, updated_at`
@@ -195,14 +212,34 @@ func (s *Store) UpdateProject(id string, updates map[string]interface{}) error {
 
 // --- Project Members ---
 
-// AddProjectMember adds a member to a project.
+// AddProjectMember adds a member to a project, or updates the role of an
+// existing non-owner member. The UPSERT refuses to demote the current owner
+// — that path must go through TransferProjectOwnership — and returns
+// ErrOwnerMustTransfer if the conflict row was the owner. role is also
+// checked against AssignableRoles so the new row can never be set to
+// 'owner' through this path; owners are only created by CreateProject and
+// TransferProjectOwnership.
 func (s *Store) AddProjectMember(projectID, userID, role string) error {
-	_, err := s.pool.Exec(context.Background(), `
+	if !types.IsAssignableRole(role) {
+		return ErrInvalidRole
+	}
+	tag, err := s.pool.Exec(context.Background(), `
 		INSERT INTO project_members (user_id, project_id, role)
 		VALUES ($1, $2, $3)
-		ON CONFLICT (user_id, project_id) DO UPDATE SET role = EXCLUDED.role`,
+		ON CONFLICT (user_id, project_id) DO UPDATE
+		   SET role = EXCLUDED.role
+		 WHERE project_members.role <> 'owner'`,
 		userID, projectID, role)
-	return err
+	if err != nil {
+		return err
+	}
+	// With ON CONFLICT ... DO UPDATE ... WHERE, RowsAffected() == 0 means
+	// the conflict row matched the WHERE-skip — i.e. the existing row is
+	// the owner. (An insert that hit no conflict returns 1.)
+	if tag.RowsAffected() == 0 {
+		return ErrOwnerMustTransfer
+	}
+	return nil
 }
 
 // GetProjectMember returns a single member.
@@ -295,14 +332,6 @@ func (s *Store) ListProjectMembersPaginated(projectID string, p types.Pagination
 	return members, total, nil
 }
 
-// UpdateProjectMemberRole updates a member's role.
-func (s *Store) UpdateProjectMemberRole(projectID, userID, role string) error {
-	_, err := s.pool.Exec(context.Background(), `
-		UPDATE project_members SET role = $1
-		WHERE project_id = $2 AND user_id = $3`, role, projectID, userID)
-	return err
-}
-
 // UpdateProjectMember updates a member's role, credit quota, and/or
 // denied models. Pass nil pointers to leave fields unchanged.
 //
@@ -313,9 +342,6 @@ func (s *Store) UpdateProjectMemberRole(projectID, userID, role string) error {
 //   - deniedModels:   *[]string. nil = unchanged; non-nil pointer (including
 //     empty slice) = replace the column with that slice. Empty slice means
 //     "no model is denied".
-//
-// If role is set to "owner", credit_quota_percent is forced to NULL
-// regardless of the creditQuotaPct argument.
 func (s *Store) UpdateProjectMember(
 	projectID, userID string,
 	role *string,
@@ -326,6 +352,16 @@ func (s *Store) UpdateProjectMember(
 		return nil
 	}
 
+	// Single-owner invariant: pre-validate before opening a tx for
+	// trivially bad input. Both promotion to RoleOwner and any
+	// non-assignable role are rejected outright.
+	if role != nil {
+		if *role == types.RoleOwner || !types.IsAssignableRole(*role) {
+			return ErrInvalidRole
+		}
+	}
+
+	// Build SET clause now (before opening tx) so the tx scope is minimal.
 	sets := make([]string, 0, 3)
 	args := make([]any, 0, 5)
 	next := 1
@@ -337,11 +373,7 @@ func (s *Store) UpdateProjectMember(
 
 	if role != nil {
 		add("role", *role)
-		// Owner promotion always clears the quota, even if the caller
-		// also passed an explicit creditQuotaPct.
-		if *role == types.RoleOwner {
-			sets = append(sets, "credit_quota_percent = NULL")
-		} else if creditQuotaPct != nil {
+		if creditQuotaPct != nil {
 			add("credit_quota_percent", *creditQuotaPct) // *float64 (may be nil → SQL NULL)
 		}
 	} else if creditQuotaPct != nil {
@@ -359,8 +391,48 @@ func (s *Store) UpdateProjectMember(
 		strings.Join(sets, ", "), next, next+1,
 	)
 
-	_, err := s.pool.Exec(context.Background(), query, args...)
-	return err
+	ctx := context.Background()
+
+	// When role is being changed, the SELECT and UPDATE must be in the
+	// same tx with FOR UPDATE so a concurrent TransferProjectOwnership
+	// (which also FOR-UPDATE-locks every member row in the project) can't
+	// promote this user to owner between our role check and our UPDATE.
+	// Without this, a transfer's owner-promotion can be silently
+	// overwritten by a racing developer-set.
+	//
+	// Quota/denylist-only updates don't need this serialization (they
+	// can't touch the owner invariant), so we keep the fast non-tx path
+	// for them — matches the original behavior and avoids tx overhead
+	// for the common case.
+	if role == nil {
+		_, err := s.pool.Exec(ctx, query, args...)
+		return err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op after Commit
+
+	var current string
+	if err := tx.QueryRow(ctx,
+		`SELECT role FROM project_members WHERE project_id=$1 AND user_id=$2 FOR UPDATE`,
+		projectID, userID,
+	).Scan(&current); err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("get current role: %w", ErrNotAMember)
+		}
+		return fmt.Errorf("get current role: %w", err)
+	}
+	if current == types.RoleOwner {
+		return ErrOwnerMustTransfer
+	}
+
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("update member: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // RemoveProjectMember atomically revokes the member's active API keys
@@ -381,6 +453,28 @@ func (s *Store) RemoveProjectMember(projectID, userID string) (int, []types.OAut
 		return 0, nil, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback(ctx) // no-op after Commit
+
+	// Single-owner invariant: refuse to delete the current owner.
+	// SELECT FOR UPDATE locks the row so a concurrent UPDATE of role
+	// (or a concurrent transfer-ownership) blocks until we commit or
+	// rollback.
+	var role string
+	if err := tx.QueryRow(ctx, `
+		SELECT role FROM project_members
+		WHERE project_id=$1 AND user_id=$2
+		FOR UPDATE`, projectID, userID,
+	).Scan(&role); err != nil {
+		if err == pgx.ErrNoRows {
+			// No member row — fall through; the legacy "revoke orphan
+			// keys" behavior below still applies.
+			role = ""
+		} else {
+			return 0, nil, fmt.Errorf("lock member row: %w", err)
+		}
+	}
+	if role == types.RoleOwner {
+		return 0, nil, ErrOwnerMustTransfer
+	}
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE api_keys
@@ -425,6 +519,151 @@ func (s *Store) RemoveProjectMember(projectID, userID string) (int, []types.OAut
 		return 0, nil, fmt.Errorf("commit: %w", err)
 	}
 	return revokedCount, deletedGrants, nil
+}
+
+// CountUserCreatedProjects counts projects where the user is the
+// original creator (projects.created_by = $1). Includes archived
+// projects — archive is not a quota release. Used by the per-user
+// max_projects check at project-creation time.
+func (s *Store) CountUserCreatedProjects(userID string) (int, error) {
+	var count int
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM projects WHERE created_by = $1`, userID,
+	).Scan(&count)
+	return count, err
+}
+
+// TransferProjectOwnership atomically swaps the project owner from
+// fromUID to toUID, demoting fromUID to demoteTo. The whole operation
+// runs in a single transaction with row locks on the relevant
+// project_members rows; concurrent writers either block or see the
+// post-state.
+//
+// Pre-conditions checked inside the tx:
+//   - demoteTo is a member of types.AssignableRoles.
+//   - Exactly one row in this project has role='owner', and its user_id
+//     equals fromUID (a stale fromUID returns ErrInvariantViolated).
+//   - toUID has a membership row in this project (else ErrNotAMember).
+//   - toUID != fromUID (else ErrAlreadyOwner).
+//
+// Post-conditions guaranteed at COMMIT:
+//   - exactly one role='owner' row, owned by toUID.
+//   - toUID's credit_quota_percent = NULL (owners never carry a quota).
+//   - fromUID's role = demoteTo, credit_quota_percent = NULL.
+func (s *Store) TransferProjectOwnership(projectID, fromUID, toUID, demoteTo string) error {
+	if !types.IsAssignableRole(demoteTo) {
+		return ErrInvalidRole
+	}
+	if fromUID == toUID {
+		return ErrAlreadyOwner
+	}
+
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op after Commit
+
+	// Lock every member row in this project. Sorting by user_id avoids
+	// deadlocks if two transfer ops on the same project race.
+	rows, err := tx.Query(ctx, `
+		SELECT user_id, role FROM project_members
+		WHERE project_id = $1
+		ORDER BY user_id
+		FOR UPDATE`, projectID)
+	if err != nil {
+		return fmt.Errorf("lock members: %w", err)
+	}
+	var (
+		currentOwner string
+		ownerCount   int
+		targetSeen   bool
+		targetRole   string
+	)
+	for rows.Next() {
+		var uid, role string
+		if err := rows.Scan(&uid, &role); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan member: %w", err)
+		}
+		if role == types.RoleOwner {
+			currentOwner = uid
+			ownerCount++
+		}
+		if uid == toUID {
+			targetSeen = true
+			targetRole = role
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate members: %w", err)
+	}
+
+	if ownerCount != 1 || currentOwner != fromUID {
+		return ErrInvariantViolated
+	}
+	if !targetSeen {
+		return ErrNotAMember
+	}
+	if targetRole == types.RoleOwner {
+		// Unreachable in practice — kept as a guard against future
+		// invariant-check changes. Reaching here would require both
+		// ownerCount==1 (passes above) AND targetRole=='owner', which
+		// implies currentOwner==toUID and thus fromUID==toUID — already
+		// short-circuited at function entry.
+		return ErrAlreadyOwner
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE project_members
+		   SET role = $1, credit_quota_percent = NULL
+		 WHERE project_id = $2 AND user_id = $3`,
+		demoteTo, projectID, fromUID); err != nil {
+		return fmt.Errorf("demote old owner: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE project_members
+		   SET role = $1, credit_quota_percent = NULL
+		 WHERE project_id = $2 AND user_id = $3`,
+		types.RoleOwner, projectID, toUID); err != nil {
+		return fmt.Errorf("promote new owner: %w", err)
+	}
+
+	// Post-check.
+	var postOwners int
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM project_members WHERE project_id=$1 AND role='owner'`,
+		projectID).Scan(&postOwners); err != nil {
+		return fmt.Errorf("post-count: %w", err)
+	}
+	if postOwners != 1 {
+		return ErrInvariantViolated
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// GetCurrentProjectOwner returns the user_id of the project's current
+// owner, or "" if there is none. Used by handleTransferOwnership when a
+// superadmin who is not a member initiates a transfer.
+func (s *Store) GetCurrentProjectOwner(projectID string) (string, error) {
+	var uid string
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT user_id FROM project_members WHERE project_id=$1 AND role='owner' LIMIT 1`,
+		projectID,
+	).Scan(&uid)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get current owner: %w", err)
+	}
+	return uid, nil
 }
 
 // CountActiveKeysForMember returns the number of api_keys with
