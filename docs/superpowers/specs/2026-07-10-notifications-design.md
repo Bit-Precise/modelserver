@@ -102,7 +102,7 @@ read_all endpoints — factored into one Store helper):
     audience_type = 'global'
  OR (audience_type = 'project'
      AND audience_id IN (SELECT project_id FROM project_members
-                         WHERE user_id = $me AND removed_at IS NULL))
+                         WHERE user_id = $me))
  OR (audience_type = 'user' AND audience_id = $me)
 ```
 
@@ -358,9 +358,11 @@ manual verification + PR review.
 - **R2 — Edit-not-re-notifying is a footgun.** Admin dialog's yellow
   banner is the only guard. Accepted — it matches how every real
   in-dashboard notification system behaves (Slack, GitHub, Linear).
-- **R3 — Members removed from a project.** `project_members.removed_at
-  IS NULL` filter in §3.1 keeps them from seeing project notifications
-  once ex-members.
+- **R3 — Members removed from a project.** `project_members` uses hard
+  delete on removal (row is `DELETE`d, see 001_init.sql). Ex-members
+  therefore stop matching the project subquery immediately and lose
+  visibility on the project's outstanding notifications — the desired
+  behavior, no extra filter needed.
 - **R4 — Badge flicker.** `staleTime: 30_000` on the polling hook
   suppresses duplicate fetches when the tab regains focus during a
   polling window.
