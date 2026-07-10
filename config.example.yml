@@ -145,3 +145,11 @@ http_log:
   max_response_body: 52428800
   # In-memory upload queue depth. Uploads exceeding this are dropped with a warning.
   buffer_size: 1000
+  # Model publishers whose request+response bodies get uploaded to S3.
+  # A request whose model's publisher is not in this list skips upload
+  # even when enabled=true. Default is [anthropic, openai] — GPT bodies
+  # (including gpt-5.6-sol/terra/luna and gpt-image-2) upload alongside
+  # Claude bodies. Set to [anthropic] to preserve pre-2026-07 behavior.
+  # No wildcard — add new publishers (gemini, deepseek, glm, …) by
+  # name so future catalog migrations do not silently enable logging.
+  publishers: ["anthropic", "openai"]
