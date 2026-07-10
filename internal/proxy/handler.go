@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/modelserver/modelserver/internal/collector"
+	"github.com/modelserver/modelserver/internal/config"
 	"github.com/modelserver/modelserver/internal/httplog"
 	"github.com/modelserver/modelserver/internal/modelcatalog"
 	"github.com/modelserver/modelserver/internal/store"
@@ -32,10 +33,11 @@ type Handler struct {
 	maxBodySize       int64
 	imagesMaxBodySize int64
 	httpLogger        *httplog.Logger
+	httpLogAllowlist  map[string]struct{}
 }
 
 // NewHandler creates a new proxy handler.
-func NewHandler(executor *Executor, router *Router, st *store.Store, coll *collector.Collector, catalog modelcatalog.Catalog, logger *slog.Logger, maxBodySize int64, imagesMaxBodySize int64, bl *httplog.Logger) *Handler {
+func NewHandler(executor *Executor, router *Router, st *store.Store, coll *collector.Collector, catalog modelcatalog.Catalog, logger *slog.Logger, maxBodySize int64, imagesMaxBodySize int64, bl *httplog.Logger, blCfg config.HttpLogConfig) *Handler {
 	return &Handler{
 		executor:          executor,
 		router:            router,
@@ -46,7 +48,32 @@ func NewHandler(executor *Executor, router *Router, st *store.Store, coll *colle
 		maxBodySize:       maxBodySize,
 		imagesMaxBodySize: imagesMaxBodySize,
 		httpLogger:        bl,
+		httpLogAllowlist:  buildHttpLogAllowlist(blCfg),
 	}
+}
+
+// buildHttpLogAllowlist normalizes cfg.Publishers into a lookup set. See
+// httpLogAllowsPublisher for the match rules; this function is the write
+// side of the same normalization contract (both sides apply
+// strings.TrimSpace + strings.ToLower before comparing).
+func buildHttpLogAllowlist(cfg config.HttpLogConfig) map[string]struct{} {
+	m := make(map[string]struct{}, len(cfg.Publishers))
+	for _, p := range cfg.Publishers {
+		m[strings.ToLower(strings.TrimSpace(p))] = struct{}{}
+	}
+	return m
+}
+
+// httpLogAllowsPublisher reports whether the given model publisher is on
+// the S3-upload allowlist. Comparison is case-insensitive and trims
+// surrounding whitespace on both sides so an operator yaml entry like
+// "OpenAI" or " anthropic " still matches. An empty-string publisher
+// ("" — unlabelled catalog rows from migration 031) only matches when
+// "" is explicitly in the allowlist; the default list does not include
+// it, so unlabelled rows are non-logging by default.
+func (h *Handler) httpLogAllowsPublisher(pub string) bool {
+	_, ok := h.httpLogAllowlist[strings.ToLower(strings.TrimSpace(pub))]
+	return ok
 }
 
 // resolveModel looks up a raw client-supplied model name in the catalog.
@@ -511,7 +538,7 @@ func (h *Handler) handleProxyRequest(w http.ResponseWriter, r *http.Request, ing
 	}
 
 	if h.httpLogger != nil {
-		if m := ModelFromContext(r.Context()); m != nil && m.Publisher == types.PublisherAnthropic {
+		if m := ModelFromContext(r.Context()); m != nil && h.httpLogAllowsPublisher(m.Publisher) {
 			reqCtx.HttpLogEnabled = true
 		}
 	}

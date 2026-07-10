@@ -207,7 +207,7 @@ func main() {
 			"keepalive", cfg.Server.SSEKeepaliveInterval,
 			"idle_timeout", cfg.Server.StreamIdleTimeout)
 	}
-	proxyHandler := proxy.NewHandler(executor, router, st, coll, catalog, logger, cfg.Server.MaxRequestBody, cfg.Images.MaxBodySize, httpLogger)
+	proxyHandler := proxy.NewHandler(executor, router, st, coll, catalog, logger, cfg.Server.MaxRequestBody, cfg.Images.MaxBodySize, httpLogger, cfg.HttpLog)
 
 	// --- Proxy server ---
 	proxyRouter := chi.NewRouter()

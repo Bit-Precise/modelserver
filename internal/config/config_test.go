@@ -58,6 +58,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Log.Format != "json" {
 		t.Errorf("Log.Format = %q, want %q", cfg.Log.Format, "json")
 	}
+	if got, want := cfg.HttpLog.Publishers, []string{"anthropic", "openai"}; !equalStringSlice(got, want) {
+		t.Errorf("HttpLog.Publishers = %v, want %v", got, want)
+	}
 }
 
 // TestLoadCustomValues verifies that YAML values override defaults.
@@ -531,4 +534,63 @@ func TestExtraUsageConfig_InvertedMinMaxRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for min > max")
 	}
+}
+
+// TestLoadHttpLogPublishersOverride verifies operator-supplied publishers
+// override the default and that an explicit empty slice is respected
+// (empty allowlist = no publisher logs, even with http_log.enabled=true).
+func TestLoadHttpLogPublishersOverride(t *testing.T) {
+	setValidJWTSecret(t)
+
+	t.Run("explicit anthropic-only", func(t *testing.T) {
+		cfg, err := Load([]byte(`
+db:
+  url: "postgres://x@y/z"
+encryption:
+  key: "12345678901234567890123456789012"
+http_log:
+  publishers: ["anthropic"]
+`))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got, want := cfg.HttpLog.Publishers, []string{"anthropic"}; !equalStringSlice(got, want) {
+			t.Errorf("HttpLog.Publishers = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("explicit empty slice", func(t *testing.T) {
+		cfg, err := Load([]byte(`
+db:
+  url: "postgres://x@y/z"
+encryption:
+  key: "12345678901234567890123456789012"
+http_log:
+  publishers: []
+`))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(cfg.HttpLog.Publishers) != 0 {
+			t.Errorf("HttpLog.Publishers = %v, want empty", cfg.HttpLog.Publishers)
+		}
+	})
+}
+
+// equalStringSlice compares two string slices element by element in order.
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// setValidJWTSecret sets a valid JWT secret via environment variable to satisfy Load's requirements.
+func setValidJWTSecret(t *testing.T) {
+	t.Setenv("MODELSERVER_AUTH_JWT_SECRET", "test-jwt-secret-key")
 }

@@ -209,6 +209,18 @@ type HttpLogConfig struct {
 	MaxRequestBody  int64  `yaml:"max_request_body"   mapstructure:"max_request_body"`
 	MaxResponseBody int64  `yaml:"max_response_body"  mapstructure:"max_response_body"`
 	BufferSize      int    `yaml:"buffer_size"        mapstructure:"buffer_size"`
+	// Publishers is the allowlist of model publishers whose request+response
+	// bodies get uploaded to S3. A request whose resolved model's publisher
+	// field is not in this set skips upload even when http_log.enabled is
+	// true and the model is otherwise routable. Default is
+	// ["anthropic", "openai"] — set explicitly to ["anthropic"] to preserve
+	// pre-2026-07 behavior, or expand as new providers land (e.g.
+	// ["anthropic", "openai", "gemini"]). Empty-string publishers (unlabelled
+	// catalog rows) are only allowed if "" itself appears here. No wildcard —
+	// adding a publisher must be an explicit operator opt-in so a future
+	// catalog migration that introduces a new publisher does not silently
+	// enable body logging for it.
+	Publishers []string `yaml:"publishers" mapstructure:"publishers"`
 }
 
 // ImagesConfig holds endpoint-specific limits for OpenAI image APIs.
@@ -320,6 +332,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("http_log.max_request_body", 52428800)
 	v.SetDefault("http_log.max_response_body", 52428800)
 	v.SetDefault("http_log.buffer_size", 1000)
+	v.SetDefault("http_log.publishers", []string{"anthropic", "openai"})
 	_ = v.BindEnv("http_log.bucket")
 	_ = v.BindEnv("http_log.region")
 	_ = v.BindEnv("http_log.endpoint")
