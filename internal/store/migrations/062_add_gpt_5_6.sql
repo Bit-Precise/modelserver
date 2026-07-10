@@ -7,6 +7,10 @@
 -- cache_writes charge (input * 1.25) and publishes an explicit Short/Long
 -- context split (input/cached/cache_write x2, output x1.5).
 --
+-- Source (fetched 2026-07-10):
+--   https://developers.openai.com/api/docs/models
+--   https://developers.openai.com/api/docs/pricing
+--
 -- Catalog rate = official OpenAI API price / 7.5 (project-wide convention,
 -- see 001_init.sql:240 and 035_seed_catalog_default_credit_rates.sql).
 -- The Short-tier price is the base; long_context block reproduces the
@@ -23,6 +27,12 @@
 --
 -- Plan/policy rate = catalog * 0.2 (gpt-5.x subscription multiplier from
 -- 047_gpt_5_x_plan_rebase.sql * 2x from 053_gpt_plan_prices_2x.sql).
+-- Note: cache_creation is derived as plan_input * 1.25 (preserving the
+-- upstream cache_writes = input * 1.25 invariant end-to-end), NOT as
+-- catalog_cache_creation * 0.2 — the two would differ by ~0.006% due to
+-- rounding of catalog values at 3 dp. Values chosen so the plan-side
+-- ratio matches OpenAI's own pricing structure exactly, and Task 2's
+-- Go map + Task 3's TS map mirror the same numbers.
 --
 -- Long-context threshold: OpenAI does not publish the token cutoff for
 -- 5.6's Short/Long tiers. We reuse 272000 (project convention from
