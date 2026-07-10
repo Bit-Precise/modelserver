@@ -10,6 +10,7 @@ import {
   Users,
   FileText,
   BarChart3,
+  Bell,
   Zap,
   Settings,
   Shield,
@@ -24,18 +25,23 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useUnreadNotificationCount } from "@/api/notifications";
 
 function SidebarLink({
   to,
   icon: Icon,
   children,
   end,
+  badge,
 }: {
   to: string;
   icon: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
   end?: boolean;
+  badge?: number;
 }) {
+  const showBadge = typeof badge === "number" && badge > 0;
+  const badgeText = badge && badge >= 100 ? "99+" : String(badge);
   return (
     <NavLink
       to={to}
@@ -50,7 +56,12 @@ function SidebarLink({
       }
     >
       <Icon className="h-4 w-4" />
-      {children}
+      <span className="flex-1">{children}</span>
+      {showBadge && (
+        <span className="bg-primary text-primary-foreground text-[10px] leading-none px-1.5 py-0.5 rounded-full">
+          {badgeText}
+        </span>
+      )}
     </NavLink>
   );
 }
@@ -58,6 +69,8 @@ function SidebarLink({
 export function Sidebar() {
   const { user, logout } = useAuth();
   const { projectId } = useParams<{ projectId: string }>();
+  const { data: unreadResp } = useUnreadNotificationCount();
+  const unreadCount = unreadResp?.data?.count ?? 0;
 
   const initials =
     user?.nickname
@@ -83,6 +96,9 @@ export function Sidebar() {
       <Separator />
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
+        <SidebarLink to="/notifications" icon={Bell} badge={unreadCount}>
+          Notifications
+        </SidebarLink>
         <SidebarLink to="/projects" icon={FolderOpen}>
           Projects
         </SidebarLink>
@@ -165,6 +181,9 @@ export function Sidebar() {
             </SidebarLink>
             <SidebarLink to="/admin/oauth-clients" icon={KeyRound}>
               OAuth Clients
+            </SidebarLink>
+            <SidebarLink to="/admin/notifications" icon={Bell}>
+              Notifications
             </SidebarLink>
           </>
         )}
