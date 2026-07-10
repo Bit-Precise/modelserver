@@ -71,6 +71,7 @@ import { OAuthClientsPage } from "@/pages/admin/OAuthClientsPage";
 
 // Notifications
 import { NotificationsPage } from "@/pages/notifications/NotificationsPage";
+import { AdminNotificationsPage } from "@/pages/admin/NotificationsPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -121,6 +122,7 @@ export function App() {
                 <Route path="admin/upstreams" element={<UpstreamsPage />} />
                 <Route path="admin/upstream-groups" element={<UpstreamGroupsPage />} />
                 <Route path="admin/oauth-clients" element={<OAuthClientsPage />} />
+                <Route path="admin/notifications" element={<AdminNotificationsPage />} />
               </Route>
             </Routes>
           </BrowserRouter>
