@@ -90,7 +90,7 @@ existing pattern for `/projects` (any authenticated) vs `/admin/projects`
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET  | `/notifications?cursor=<created_at>&limit=50` | Paginated (DESC) list of notifications visible to `$me`: broadcast ∪ project I'm in ∪ addressed to me. LEFT JOIN reads to attach `read_at`. |
+| GET  | `/notifications?page=1&per_page=50` | Paginated (DESC by `created_at`) list of notifications visible to `$me`: broadcast ∪ project I'm in ∪ addressed to me. LEFT JOIN reads to attach `read_at`. Response uses the project-standard `{data:[…], meta:{total,page,per_page,total_pages}}` envelope via `writeList`. |
 | GET  | `/notifications/unread_count` | Returns `{count: N}`. Sidebar badge polls at 45 s. |
 | POST | `/notifications/{id}/read` | Idempotent `INSERT ... ON CONFLICT DO NOTHING` into reads. Always 200 empty — a request against a soft-deleted or invisible notification is a silent no-op, avoiding a confusing 404 when the frontend races an admin delete. The FK on `notification_reads` still guards against inserting against a hard-deleted row. |
 | POST | `/notifications/read_all` | Bulk `INSERT ... ON CONFLICT DO NOTHING` for every currently visible unread notification. Returns `{marked: N}`. |
@@ -123,7 +123,7 @@ round trip.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET    | `/admin/notifications?cursor=&limit=&audience_type=&include_deleted=` | Paginated (DESC) list of every notification. `include_deleted=1` includes soft-deleted rows; default excludes them. Each item carries `read_count` (`SELECT COUNT(*) FROM notification_reads`). |
+| GET    | `/admin/notifications?page=1&per_page=50&audience_type=&include_deleted=` | Paginated (DESC by `created_at`) list of every notification. `include_deleted=1` includes soft-deleted rows; default excludes them. Each item carries `read_count` (`SELECT COUNT(*) FROM notification_reads`). Response uses the project-standard `writeList` envelope. |
 | GET    | `/admin/notifications/{id}` | Single row with `read_count`. |
 | POST   | `/admin/notifications` | Body: `{title, body, audience_type, audience_id?}`. `created_by` = `$me`. |
 | PUT    | `/admin/notifications/{id}` | Same body shape. Bumps `updated_at`. Does NOT touch reads. |
@@ -205,7 +205,7 @@ single-column time-ordered list of expandable cards:
 - "Mark all as read" button → `POST /notifications/read_all` → single
   invalidation of the list + unread_count queries.
 - Empty state: "No notifications yet".
-- Pagination: cursor-based "Load more" button at page end, matching the
+- Pagination: page-based (`page` + `per_page`) "Load more" button at page end, matching the
   idiom used by `RequestsPage.tsx` / `TracesPage.tsx`. No infinite
   scroll (avoids extra polling & badge/window interaction).
 
@@ -343,7 +343,7 @@ r.Route("/admin/notifications", func(r chi.Router) {
 - 401 (no JWT), 403 (non-superadmin on `/admin/...`), 400 (audience_id
   missing or wrong shape), 404 (mark_read on invisible or deleted
   notification).
-- Pagination cursor round-trips deterministically.
+- Pagination `page`/`per_page` params clamp and default correctly.
 
 **Frontend**: no unit tests (dashboard has none as a convention);
 manual verification + PR review.
