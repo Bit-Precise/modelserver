@@ -3,8 +3,6 @@
 package contract
 
 import (
-	"io"
-
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -51,15 +49,7 @@ func NewAdminAPI(router chi.Router, options APIOptions) huma.API {
 	for k, v := range config.Formats {
 		formats[k] = v
 	}
-	formats["application/octet-stream"] = huma.Format{
-		Marshal: func(w io.Writer, v any) error {
-			if br, ok := v.(BytesResponse); ok && br.Reader != nil {
-				_, err := io.Copy(w, br.Reader)
-				return err
-			}
-			return nil
-		},
-	}
+	formats["application/octet-stream"] = huma.Format{Marshal: marshalBytesResponse}
 	config.Formats = formats
 
 	// DefaultConfig installs a response transformer which changes response

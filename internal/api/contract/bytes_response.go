@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -47,6 +48,20 @@ func (BytesResponse) Schema(huma.Registry) *huma.Schema {
 // OpenAPI document when no explicit Content-Type header field is set.
 func (BytesResponse) ContentType(string) string {
 	return "application/octet-stream"
+}
+
+// marshalBytesResponse is the application/octet-stream Marshal function used
+// by NewAdminAPI. It is a named function so that tests can call it directly.
+func marshalBytesResponse(w io.Writer, v any) error {
+	br, ok := v.(BytesResponse)
+	if !ok {
+		return fmt.Errorf("contract: BytesResponse format received %T; expected contract.BytesResponse", v)
+	}
+	if br.Reader == nil {
+		return fmt.Errorf("contract: BytesResponse.Reader is nil")
+	}
+	_, err := io.Copy(w, br.Reader)
+	return err
 }
 
 // ensure BytesResponse satisfies the Huma interfaces at compile time.

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -49,5 +50,31 @@ func TestBytesResponseStreamsBinaryPayload(t *testing.T) {
 	got, _ := io.ReadAll(recorder.Body)
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("body = %v, want %v", got, payload)
+	}
+}
+
+// TestMarshalBytesResponseNilReaderIsError verifies that marshalBytesResponse
+// returns a descriptive error when BytesResponse.Reader is nil, rather than
+// silently writing an empty body.
+func TestMarshalBytesResponseNilReaderIsError(t *testing.T) {
+	err := marshalBytesResponse(io.Discard, BytesResponse{Reader: nil})
+	if err == nil {
+		t.Fatal("marshalBytesResponse with nil Reader returned nil error, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "nil") {
+		t.Errorf("error = %q, want message mentioning 'nil'", err.Error())
+	}
+}
+
+// TestMarshalBytesResponseWrongTypeIsError verifies that marshalBytesResponse
+// returns a descriptive error when given a value that is not a BytesResponse,
+// rather than silently writing an empty body.
+func TestMarshalBytesResponseWrongTypeIsError(t *testing.T) {
+	err := marshalBytesResponse(io.Discard, "not a BytesResponse")
+	if err == nil {
+		t.Fatal("marshalBytesResponse with wrong type returned nil error, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "BytesResponse") {
+		t.Errorf("error = %q, want message mentioning 'BytesResponse'", err.Error())
 	}
 }
