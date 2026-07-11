@@ -3,6 +3,8 @@ package auth
 import (
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestJWT_GenerateAndValidate(t *testing.T) {
@@ -61,5 +63,27 @@ func TestJWT_InvalidSecret(t *testing.T) {
 	_, err := j2.ValidateToken(access)
 	if err == nil {
 		t.Error("expected error for wrong secret")
+	}
+}
+
+func TestJWT_RejectsNonHS256HMACAlgorithm(t *testing.T) {
+	const secret = "test-secret-at-least-32-characters-long"
+	j := NewJWTManager(secret, 15*time.Minute, 168*time.Hour)
+
+	claims := Claims{
+		UserID:    "user-123",
+		Email:     "user@example.com",
+		TokenType: "access",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+		},
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS384, claims).SignedString([]byte(secret))
+	if err != nil {
+		t.Fatalf("sign HS384 token: %v", err)
+	}
+
+	if _, err := j.ValidateToken(token); err == nil {
+		t.Fatal("ValidateToken accepted HS384 token; want exact HS256 enforcement")
 	}
 }

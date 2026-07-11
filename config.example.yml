@@ -30,9 +30,10 @@ db:
   url: "postgres://user:password@localhost:5432/modelserver?sslmode=disable"
 
 auth:
-  # REQUIRED — Secret used to sign JWT tokens. Use a long random string.
+  # REQUIRED — Secret used to sign JWT tokens. Generate at least 32 random
+  # bytes (for example: openssl rand -base64 32); startup fails while empty.
   # Can also be set via MODELSERVER_AUTH_JWT_SECRET environment variable.
-  jwt_secret: "change-me-to-a-long-random-secret"
+  jwt_secret: ""
   # How long an access token remains valid.
   access_token_ttl: 15m
   # How long a refresh token remains valid.

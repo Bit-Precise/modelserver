@@ -31,13 +31,13 @@ type topupAmounts struct {
 
 // extraUsageGetResponse packs settings + derived counters for the dashboard.
 type extraUsageGetResponse struct {
-	Enabled             bool             `json:"enabled"`
-	BalanceCredits      int64            `json:"balance_credits"`
-	MonthlyLimitCredits int64            `json:"monthly_limit_credits"`
-	MonthlySpentCredits int64            `json:"monthly_spent_credits"`
-	MonthlyWindowStart  string           `json:"monthly_window_start"`
-	BypassBalanceCheck  bool             `json:"bypass_balance_check"`
-	UpdatedAt           time.Time        `json:"updated_at,omitempty"`
+	Enabled             bool      `json:"enabled"`
+	BalanceCredits      int64     `json:"balance_credits"`
+	MonthlyLimitCredits int64     `json:"monthly_limit_credits"`
+	MonthlySpentCredits int64     `json:"monthly_spent_credits"`
+	MonthlyWindowStart  string    `json:"monthly_window_start"`
+	BypassBalanceCheck  bool      `json:"bypass_balance_check"`
+	UpdatedAt           time.Time `json:"updated_at,omitempty"`
 
 	CreditUnitPrices creditUnitPrices `json:"credit_unit_prices"`
 	MinTopup         topupAmounts     `json:"min_topup"`
@@ -316,11 +316,12 @@ func handleCreateExtraUsageTopup(st *store.Store, payClient billing.PaymentClien
 
 // handleGetExtraUsageTopup fetches a single topup order's status (polled by
 // the frontend while the user pays).
-func handleGetExtraUsageTopup(st *store.Store) http.HandlerFunc {
+func handleGetExtraUsageTopup(st orderReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := chi.URLParam(r, "projectID")
 		orderID := chi.URLParam(r, "orderID")
 		order, err := st.GetOrderByID(orderID)
-		if err != nil || order == nil {
+		if err != nil || order == nil || !sameProjectID(order.ProjectID, projectID) {
 			writeError(w, http.StatusNotFound, "not_found", "order not found")
 			return
 		}
@@ -460,4 +461,3 @@ func handleAdminExtraUsageSetBypass(st *store.Store) http.HandlerFunc {
 		writeData(w, http.StatusOK, out)
 	}
 }
-

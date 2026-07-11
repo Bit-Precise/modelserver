@@ -8,6 +8,15 @@ import (
 	"github.com/modelserver/modelserver/internal/types"
 )
 
+type traceReader interface {
+	GetTraceByID(id string) (*types.Trace, error)
+}
+
+type traceRequestsReader interface {
+	traceReader
+	ListRequestsByTraceID(traceID string) ([]types.Request, error)
+}
+
 func handleListTraces(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projectID := chi.URLParam(r, "projectID")
@@ -29,10 +38,11 @@ func handleListTraces(st *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleGetTrace(st *store.Store) http.HandlerFunc {
+func handleGetTrace(st traceReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := chi.URLParam(r, "projectID")
 		trace, err := st.GetTraceByID(chi.URLParam(r, "traceID"))
-		if err != nil || trace == nil {
+		if err != nil || trace == nil || !sameProjectID(trace.ProjectID, projectID) {
 			writeError(w, http.StatusNotFound, "not_found", "trace not found")
 			return
 		}
@@ -40,11 +50,17 @@ func handleGetTrace(st *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleListTraceRequests(st *store.Store) http.HandlerFunc {
+func handleListTraceRequests(st traceRequestsReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		caller := UserFromContext(r.Context())
 		callerMember := MemberFromContext(r.Context())
+		projectID := chi.URLParam(r, "projectID")
 		traceID := chi.URLParam(r, "traceID")
+		trace, err := st.GetTraceByID(traceID)
+		if err != nil || trace == nil || !sameProjectID(trace.ProjectID, projectID) {
+			writeError(w, http.StatusNotFound, "not_found", "trace not found")
+			return
+		}
 		requests, err := st.ListRequestsByTraceID(traceID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to list trace requests")
@@ -69,4 +85,3 @@ func handleListTraceRequests(st *store.Store) http.HandlerFunc {
 		writeData(w, http.StatusOK, filtered)
 	}
 }
-

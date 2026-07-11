@@ -6,7 +6,29 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/modelserver/modelserver/internal/store"
+	"github.com/modelserver/modelserver/internal/types"
 )
+
+type subscriptionReader interface {
+	GetSubscriptionByID(id string) (*types.Subscription, error)
+}
+
+type subscriptionUpdater interface {
+	subscriptionReader
+	UpdateSubscriptionStatusForProject(projectID, id, status string) (bool, error)
+}
+
+// requireSubscriptionOverride restricts the legacy direct subscription write
+// endpoints to explicit superadmin operations. Normal project billing must go
+// through orders and the signed delivery webhook.
+func requireSubscriptionOverride(w http.ResponseWriter, r *http.Request) bool {
+	user := UserFromContext(r.Context())
+	if user == nil || !user.IsSuperadmin {
+		writeError(w, http.StatusForbidden, "forbidden", "superadmin access required")
+		return false
+	}
+	return true
+}
 
 func handleListSubscriptions(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -22,6 +44,9 @@ func handleListSubscriptions(st *store.Store) http.HandlerFunc {
 
 func handleCreateSubscription(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireSubscriptionOverride(w, r) {
+			return
+		}
 		projectID := chi.URLParam(r, "projectID")
 		var body struct {
 			PlanName  string `json:"plan_name"`
@@ -69,10 +94,11 @@ func handleCreateSubscription(st *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleGetSubscription(st *store.Store) http.HandlerFunc {
+func handleGetSubscription(st subscriptionReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := chi.URLParam(r, "projectID")
 		sub, err := st.GetSubscriptionByID(chi.URLParam(r, "subID"))
-		if err != nil || sub == nil {
+		if err != nil || sub == nil || !sameProjectID(sub.ProjectID, projectID) {
 			writeError(w, http.StatusNotFound, "not_found", "subscription not found")
 			return
 		}
@@ -80,9 +106,18 @@ func handleGetSubscription(st *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleUpdateSubscription(st *store.Store) http.HandlerFunc {
+func handleUpdateSubscription(st subscriptionUpdater) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireSubscriptionOverride(w, r) {
+			return
+		}
+		projectID := chi.URLParam(r, "projectID")
 		subID := chi.URLParam(r, "subID")
+		sub, err := st.GetSubscriptionByID(subID)
+		if err != nil || sub == nil || !sameProjectID(sub.ProjectID, projectID) {
+			writeError(w, http.StatusNotFound, "not_found", "subscription not found")
+			return
+		}
 		var body struct {
 			Status string `json:"status"`
 		}
@@ -91,12 +126,17 @@ func handleUpdateSubscription(st *store.Store) http.HandlerFunc {
 			return
 		}
 
-		if err := st.UpdateSubscriptionStatus(subID, body.Status); err != nil {
+		updated, err := st.UpdateSubscriptionStatusForProject(projectID, subID, body.Status)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to update subscription")
 			return
 		}
+		if !updated {
+			writeError(w, http.StatusNotFound, "not_found", "subscription not found")
+			return
+		}
 
-		sub, _ := st.GetSubscriptionByID(subID)
+		sub, _ = st.GetSubscriptionByID(subID)
 		writeData(w, http.StatusOK, sub)
 	}
 }

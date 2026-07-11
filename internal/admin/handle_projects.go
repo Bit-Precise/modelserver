@@ -83,12 +83,12 @@ type projectOwnerSnapshot struct {
 // projectSubscriptionOverview is the per-project payload returned by the
 // admin subscriptions-overview endpoint.
 type projectSubscriptionOverview struct {
-	ProjectID     string                         `json:"project_id"`
-	PlanID        string                         `json:"plan_id,omitempty"`
-	PlanName      string                         `json:"plan_name,omitempty"`
-	DisplayName   string                         `json:"display_name,omitempty"`
-	Windows       []ratelimit.CreditWindowStatus `json:"windows"`
-	Owner         *projectOwnerSnapshot          `json:"owner,omitempty"`
+	ProjectID   string                         `json:"project_id"`
+	PlanID      string                         `json:"plan_id,omitempty"`
+	PlanName    string                         `json:"plan_name,omitempty"`
+	DisplayName string                         `json:"display_name,omitempty"`
+	Windows     []ratelimit.CreditWindowStatus `json:"windows"`
+	Owner       *projectOwnerSnapshot          `json:"owner,omitempty"`
 	// PeriodCreditsK is credits consumed since the active subscription's
 	// StartsAt, rounded to integer thousands. Absent when there is no
 	// active subscription.
@@ -458,6 +458,10 @@ func handleAddMember(st *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "bad_request", "email and role are required")
 			return
 		}
+		if !types.IsValidProjectRole(body.Role) {
+			writeError(w, http.StatusBadRequest, "invalid_role", "role must be owner, maintainer, or developer")
+			return
+		}
 
 		// Resolve email to user ID. Generic error to avoid leaking registration status.
 		user, err := st.GetUserByEmail(body.Email)
@@ -477,8 +481,10 @@ func handleAddMember(st *store.Store) http.HandlerFunc {
 			// exist yet, so we pass the requested role as targetRole. isSelf is
 			// always false on add: a user cannot add themselves to a project
 			// via this endpoint (caller must already be owner/maintainer).
+			caller := UserFromContext(r.Context())
 			callerMember := MemberFromContext(r.Context())
-			if ok, status, code, msg := canSetMemberQuota(callerMember, body.Role, false); !ok {
+			callerIsSuperadmin := caller != nil && caller.IsSuperadmin
+			if ok, status, code, msg := canSetMemberQuota(callerMember, callerIsSuperadmin, body.Role, false); !ok {
 				writeError(w, status, code, msg)
 				return
 			}
@@ -527,6 +533,10 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 				"at least one of role, credit_quota_percent, clear_quota, or denied_models must be provided")
 			return
 		}
+		if body.Role != nil && !types.IsValidProjectRole(*body.Role) {
+			writeError(w, http.StatusBadRequest, "invalid_role", "role must be owner, maintainer, or developer")
+			return
+		}
 
 		// Validate credit_quota_percent range.
 		if body.CreditQuotaPct != nil && (*body.CreditQuotaPct < 0 || *body.CreditQuotaPct > 100) {
@@ -564,7 +574,7 @@ func handleUpdateMember(st *store.Store) http.HandlerFunc {
 		// on owners. Self-quota and same-level quota are both allowed.
 		// denied_models is intentionally NOT subject to this check.
 		if body.CreditQuotaPct != nil || body.ClearQuota {
-			if ok, status, code, msg := canSetMemberQuota(callerMember, targetMember.Role, userID == caller.ID); !ok {
+			if ok, status, code, msg := canSetMemberQuota(callerMember, caller.IsSuperadmin, targetMember.Role, userID == caller.ID); !ok {
 				writeError(w, status, code, msg)
 				return
 			}
@@ -680,12 +690,12 @@ func handleCountAffectedKeysOnRemove(st *store.Store) http.HandlerFunc {
 
 // quotaWindowStatus holds per-window quota usage for a user.
 type quotaWindowStatus struct {
-	Window         string   `json:"window"`
-	WindowType     string   `json:"window_type"`
-	Limit          *int64   `json:"limit,omitempty"`
-	Used           *float64 `json:"used,omitempty"`
-	Percentage     float64  `json:"percentage"`
-	ResetsAt       string   `json:"resets_at,omitempty"`
+	Window     string   `json:"window"`
+	WindowType string   `json:"window_type"`
+	Limit      *int64   `json:"limit,omitempty"`
+	Used       *float64 `json:"used,omitempty"`
+	Percentage float64  `json:"percentage"`
+	ResetsAt   string   `json:"resets_at,omitempty"`
 }
 
 // serveQuotaUsage is the shared core logic for quota usage responses.

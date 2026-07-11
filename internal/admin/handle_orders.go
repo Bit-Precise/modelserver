@@ -15,6 +15,15 @@ import (
 	"github.com/modelserver/modelserver/internal/types"
 )
 
+type orderReader interface {
+	GetOrderByID(id string) (*types.Order, error)
+}
+
+type orderCanceller interface {
+	orderReader
+	CancelOrderForProject(projectID, id string) (bool, error)
+}
+
 // buildReturnURL joins a configured billing return URL base with the
 // dashboard subscription route for a specific project. Operators set the
 // base (e.g. `https://code.cs.ac.cn/projects`); this function appends
@@ -44,10 +53,11 @@ func handleListOrders(st *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleGetOrder(st *store.Store) http.HandlerFunc {
+func handleGetOrder(st orderReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := chi.URLParam(r, "projectID")
 		order, err := st.GetOrderByID(chi.URLParam(r, "orderID"))
-		if err != nil || order == nil {
+		if err != nil || order == nil || !sameProjectID(order.ProjectID, projectID) {
 			writeError(w, http.StatusNotFound, "not_found", "order not found")
 			return
 		}
@@ -55,11 +65,12 @@ func handleGetOrder(st *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleCancelOrder(st *store.Store) http.HandlerFunc {
+func handleCancelOrder(st orderCanceller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := chi.URLParam(r, "projectID")
 		orderID := chi.URLParam(r, "orderID")
 		order, err := st.GetOrderByID(orderID)
-		if err != nil || order == nil {
+		if err != nil || order == nil || !sameProjectID(order.ProjectID, projectID) {
 			writeError(w, http.StatusNotFound, "not_found", "order not found")
 			return
 		}
@@ -67,7 +78,7 @@ func handleCancelOrder(st *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusConflict, "not_cancellable", "only pending or paying orders can be cancelled")
 			return
 		}
-		ok, err := st.CancelOrder(orderID)
+		ok, err := st.CancelOrderForProject(projectID, orderID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to cancel order")
 			return

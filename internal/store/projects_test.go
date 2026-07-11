@@ -2,10 +2,26 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/modelserver/modelserver/internal/types"
 )
+
+func TestProjectMemberStoreWritesRejectInvalidRole(t *testing.T) {
+	st := &Store{}
+
+	if err := st.AddProjectMember("project-1", "user-1", "administrator"); !errors.Is(err, ErrInvalidProjectRole) {
+		t.Fatalf("AddProjectMember error = %v, want ErrInvalidProjectRole", err)
+	}
+	if err := st.UpdateProjectMemberRole("project-1", "user-1", "OWNER"); !errors.Is(err, ErrInvalidProjectRole) {
+		t.Fatalf("UpdateProjectMemberRole error = %v, want ErrInvalidProjectRole", err)
+	}
+	role := "unknown"
+	if err := st.UpdateProjectMember("project-1", "user-1", &role, nil, nil); !errors.Is(err, ErrInvalidProjectRole) {
+		t.Fatalf("UpdateProjectMember error = %v, want ErrInvalidProjectRole", err)
+	}
+}
 
 // seedProjectOwnedBy inserts a project with the given created_by user.
 // Uses the existing seed helpers from extra_usage_db_test.go.

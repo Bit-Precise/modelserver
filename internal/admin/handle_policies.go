@@ -11,6 +11,20 @@ import (
 	"github.com/modelserver/modelserver/internal/types"
 )
 
+type policyReader interface {
+	GetPolicyByID(id string) (*types.RateLimitPolicy, error)
+}
+
+type policyUpdater interface {
+	policyReader
+	UpdatePolicyForProject(projectID, id string, updates map[string]interface{}) (bool, error)
+}
+
+type policyDeleter interface {
+	policyReader
+	DeletePolicyForProject(projectID, id string) (bool, error)
+}
+
 func handleListPolicies(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projectID := chi.URLParam(r, "projectID")
@@ -30,13 +44,13 @@ func handleCreatePolicy(st *store.Store, catalog modelcatalog.Catalog) http.Hand
 		}
 		projectID := chi.URLParam(r, "projectID")
 		var body struct {
-			Name             string                       `json:"name"`
-			IsDefault        bool                         `json:"is_default"`
-			CreditRules      []types.CreditRule           `json:"credit_rules"`
-			ModelCreditRates map[string]types.CreditRate  `json:"model_credit_rates"`
-			ClassicRules     []types.ClassicRule           `json:"classic_rules"`
-			StartsAt         string                       `json:"starts_at"`
-			ExpiresAt        string                       `json:"expires_at"`
+			Name             string                      `json:"name"`
+			IsDefault        bool                        `json:"is_default"`
+			CreditRules      []types.CreditRule          `json:"credit_rules"`
+			ModelCreditRates map[string]types.CreditRate `json:"model_credit_rates"`
+			ClassicRules     []types.ClassicRule         `json:"classic_rules"`
+			StartsAt         string                      `json:"starts_at"`
+			ExpiresAt        string                      `json:"expires_at"`
 		}
 		if err := decodeBody(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
@@ -80,10 +94,11 @@ func handleCreatePolicy(st *store.Store, catalog modelcatalog.Catalog) http.Hand
 	}
 }
 
-func handleGetPolicy(st *store.Store) http.HandlerFunc {
+func handleGetPolicy(st policyReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := chi.URLParam(r, "projectID")
 		policy, err := st.GetPolicyByID(chi.URLParam(r, "policyID"))
-		if err != nil || policy == nil {
+		if err != nil || policy == nil || !sameProjectID(policy.ProjectID, projectID) {
 			writeError(w, http.StatusNotFound, "not_found", "policy not found")
 			return
 		}
@@ -91,12 +106,18 @@ func handleGetPolicy(st *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleUpdatePolicy(st *store.Store, catalog modelcatalog.Catalog) http.HandlerFunc {
+func handleUpdatePolicy(st policyUpdater, catalog modelcatalog.Catalog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireRole(w, r, types.RoleOwner, types.RoleMaintainer) {
 			return
 		}
+		projectID := chi.URLParam(r, "projectID")
 		policyID := chi.URLParam(r, "policyID")
+		policy, err := st.GetPolicyByID(policyID)
+		if err != nil || policy == nil || !sameProjectID(policy.ProjectID, projectID) {
+			writeError(w, http.StatusNotFound, "not_found", "policy not found")
+			return
+		}
 		var body map[string]interface{}
 		if err := decodeBody(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
@@ -134,23 +155,40 @@ func handleUpdatePolicy(st *store.Store, catalog modelcatalog.Catalog) http.Hand
 			return
 		}
 
-		if err := st.UpdatePolicy(policyID, updates); err != nil {
+		updated, err := st.UpdatePolicyForProject(projectID, policyID, updates)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to update policy")
 			return
 		}
+		if !updated {
+			writeError(w, http.StatusNotFound, "not_found", "policy not found")
+			return
+		}
 
-		policy, _ := st.GetPolicyByID(policyID)
+		policy, _ = st.GetPolicyByID(policyID)
 		writeData(w, http.StatusOK, policy)
 	}
 }
 
-func handleDeletePolicy(st *store.Store) http.HandlerFunc {
+func handleDeletePolicy(st policyDeleter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireRole(w, r, types.RoleOwner, types.RoleMaintainer) {
 			return
 		}
-		if err := st.DeletePolicy(chi.URLParam(r, "policyID")); err != nil {
+		projectID := chi.URLParam(r, "projectID")
+		policyID := chi.URLParam(r, "policyID")
+		policy, err := st.GetPolicyByID(policyID)
+		if err != nil || policy == nil || !sameProjectID(policy.ProjectID, projectID) {
+			writeError(w, http.StatusNotFound, "not_found", "policy not found")
+			return
+		}
+		deleted, err := st.DeletePolicyForProject(projectID, policyID)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to delete policy")
+			return
+		}
+		if !deleted {
+			writeError(w, http.StatusNotFound, "not_found", "policy not found")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

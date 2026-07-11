@@ -129,6 +129,21 @@ func (s *Store) UpdateAPIKey(id string, updates map[string]interface{}) error {
 	return err
 }
 
+// UpdateAPIKeyForProject updates an API key only when it belongs to projectID.
+// The project predicate keeps project-scoped admin writes tenant-safe even if a
+// caller accidentally passes an ID from another project.
+func (s *Store) UpdateAPIKeyForProject(projectID, id string, updates map[string]interface{}) (bool, error) {
+	updates["updated_at"] = time.Now()
+	query, args := buildUpdateQuery("api_keys", "id", id, updates)
+	args = append(args, projectID)
+	query += fmt.Sprintf(" AND project_id = $%d AND deleted_at IS NULL", len(args))
+	res, err := s.pool.Exec(context.Background(), query, args...)
+	if err != nil {
+		return false, err
+	}
+	return res.RowsAffected() > 0, nil
+}
+
 // UpdateAPIKeyLastUsed updates the last_used_at timestamp.
 func (s *Store) UpdateAPIKeyLastUsed(id string) error {
 	_, err := s.pool.Exec(context.Background(), "UPDATE api_keys SET last_used_at = NOW() WHERE id = $1", id)
@@ -139,4 +154,15 @@ func (s *Store) UpdateAPIKeyLastUsed(id string) error {
 func (s *Store) DeleteAPIKey(id string) error {
 	_, err := s.pool.Exec(context.Background(), "UPDATE api_keys SET deleted_at = NOW() WHERE id = $1", id)
 	return err
+}
+
+// DeleteAPIKeyForProject soft-deletes an API key only within projectID.
+func (s *Store) DeleteAPIKeyForProject(projectID, id string) (bool, error) {
+	res, err := s.pool.Exec(context.Background(), `
+		UPDATE api_keys SET deleted_at = NOW()
+		WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, id, projectID)
+	if err != nil {
+		return false, err
+	}
+	return res.RowsAffected() > 0, nil
 }

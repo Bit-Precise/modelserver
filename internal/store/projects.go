@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,10 @@ import (
 )
 
 const projectColumns = `id, name, COALESCE(description, ''), created_by, status, settings, billing_tags, created_at, updated_at`
+
+// ErrInvalidProjectRole is returned before a project member write reaches the
+// database when the requested role is not in the shared role allowlist.
+var ErrInvalidProjectRole = errors.New("invalid project member role")
 
 func scanProject(row pgx.Row) (*types.Project, error) {
 	p := &types.Project{}
@@ -192,11 +197,13 @@ func (s *Store) UpdateProject(id string, updates map[string]interface{}) error {
 	return err
 }
 
-
 // --- Project Members ---
 
 // AddProjectMember adds a member to a project.
 func (s *Store) AddProjectMember(projectID, userID, role string) error {
+	if !types.IsValidProjectRole(role) {
+		return fmt.Errorf("%w: %q", ErrInvalidProjectRole, role)
+	}
 	_, err := s.pool.Exec(context.Background(), `
 		INSERT INTO project_members (user_id, project_id, role)
 		VALUES ($1, $2, $3)
@@ -297,6 +304,9 @@ func (s *Store) ListProjectMembersPaginated(projectID string, p types.Pagination
 
 // UpdateProjectMemberRole updates a member's role.
 func (s *Store) UpdateProjectMemberRole(projectID, userID, role string) error {
+	if !types.IsValidProjectRole(role) {
+		return fmt.Errorf("%w: %q", ErrInvalidProjectRole, role)
+	}
 	_, err := s.pool.Exec(context.Background(), `
 		UPDATE project_members SET role = $1
 		WHERE project_id = $2 AND user_id = $3`, role, projectID, userID)
@@ -324,6 +334,9 @@ func (s *Store) UpdateProjectMember(
 ) error {
 	if role == nil && creditQuotaPct == nil && deniedModels == nil {
 		return nil
+	}
+	if role != nil && !types.IsValidProjectRole(*role) {
+		return fmt.Errorf("%w: %q", ErrInvalidProjectRole, *role)
 	}
 
 	sets := make([]string, 0, 3)

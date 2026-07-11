@@ -13,6 +13,20 @@ import (
 	"github.com/modelserver/modelserver/internal/types"
 )
 
+type apiKeyReader interface {
+	GetAPIKeyByID(id string) (*types.APIKey, error)
+}
+
+type apiKeyUpdater interface {
+	apiKeyReader
+	UpdateAPIKeyForProject(projectID, id string, updates map[string]interface{}) (bool, error)
+}
+
+type apiKeyDeleter interface {
+	apiKeyReader
+	DeleteAPIKeyForProject(projectID, id string) (bool, error)
+}
+
 func handleListKeys(st *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projectID := chi.URLParam(r, "projectID")
@@ -128,10 +142,11 @@ func handleCreateKey(st *store.Store, encKey []byte, catalog modelcatalog.Catalo
 	}
 }
 
-func handleGetKey(st *store.Store) http.HandlerFunc {
+func handleGetKey(st apiKeyReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := chi.URLParam(r, "projectID")
 		key, err := st.GetAPIKeyByID(chi.URLParam(r, "keyID"))
-		if err != nil || key == nil {
+		if err != nil || key == nil || !sameProjectID(key.ProjectID, projectID) {
 			writeError(w, http.StatusNotFound, "not_found", "key not found")
 			return
 		}
@@ -143,12 +158,13 @@ func handleGetKey(st *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleUpdateKey(st *store.Store, catalog modelcatalog.Catalog) http.HandlerFunc {
+func handleUpdateKey(st apiKeyUpdater, catalog modelcatalog.Catalog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := chi.URLParam(r, "projectID")
 		keyID := chi.URLParam(r, "keyID")
 
 		key, err := st.GetAPIKeyByID(keyID)
-		if err != nil || key == nil {
+		if err != nil || key == nil || !sameProjectID(key.ProjectID, projectID) {
 			writeError(w, http.StatusNotFound, "not_found", "key not found")
 			return
 		}
@@ -189,8 +205,13 @@ func handleUpdateKey(st *store.Store, catalog modelcatalog.Catalog) http.Handler
 			return
 		}
 
-		if err := st.UpdateAPIKey(keyID, updates); err != nil {
+		updated, err := st.UpdateAPIKeyForProject(projectID, keyID, updates)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to update key")
+			return
+		}
+		if !updated {
+			writeError(w, http.StatusNotFound, "not_found", "key not found")
 			return
 		}
 
@@ -204,9 +225,9 @@ func handleUpdateKey(st *store.Store, catalog modelcatalog.Catalog) http.Handler
 // Developers can only access keys they created.
 func canAccessKey(r *http.Request, key *types.APIKey) bool {
 	member := MemberFromContext(r.Context())
-	// No member in context means superadmin (bypassed projectAccessMiddleware).
 	if member == nil {
-		return true
+		user := UserFromContext(r.Context())
+		return user != nil && user.IsSuperadmin
 	}
 	if member.Role == types.RoleOwner || member.Role == types.RoleMaintainer {
 		return true
@@ -215,15 +236,16 @@ func canAccessKey(r *http.Request, key *types.APIKey) bool {
 	return user != nil && key.CreatedBy == user.ID
 }
 
-func handleDeleteKey(st *store.Store) http.HandlerFunc {
+func handleDeleteKey(st apiKeyDeleter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireRole(w, r, types.RoleMaintainer, types.RoleOwner) {
 			return
 		}
 
+		projectID := chi.URLParam(r, "projectID")
 		keyID := chi.URLParam(r, "keyID")
 		key, err := st.GetAPIKeyByID(keyID)
-		if err != nil || key == nil {
+		if err != nil || key == nil || !sameProjectID(key.ProjectID, projectID) {
 			writeError(w, http.StatusNotFound, "not_found", "key not found")
 			return
 		}
@@ -233,8 +255,13 @@ func handleDeleteKey(st *store.Store) http.HandlerFunc {
 			return
 		}
 
-		if err := st.DeleteAPIKey(keyID); err != nil {
+		deleted, err := st.DeleteAPIKeyForProject(projectID, keyID)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "failed to delete key")
+			return
+		}
+		if !deleted {
+			writeError(w, http.StatusNotFound, "not_found", "key not found")
 			return
 		}
 

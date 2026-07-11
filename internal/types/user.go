@@ -9,6 +9,19 @@ const (
 	RoleDeveloper  = "developer"
 )
 
+// IsValidProjectRole reports whether role is one of the roles that may be
+// persisted for a project member. Keep API and store validation on this shared
+// allowlist so unknown roles cannot fall through authorization checks as a
+// more privileged non-developer value.
+func IsValidProjectRole(role string) bool {
+	switch role {
+	case RoleOwner, RoleMaintainer, RoleDeveloper:
+		return true
+	default:
+		return false
+	}
+}
+
 // User status constants.
 const (
 	UserStatusActive   = "active"
@@ -45,7 +58,7 @@ type ProjectMember struct {
 	ProjectID      string    `json:"project_id"`
 	Role           string    `json:"role"`
 	CreditQuotaPct *float64  `json:"credit_quota_percent"` // nil = no limit (effective 100%)
-	DeniedModels   []string  `json:"denied_models"`         // empty = no model denied
+	DeniedModels   []string  `json:"denied_models"`        // empty = no model denied
 	CreatedAt      time.Time `json:"created_at"`
 
 	// User is populated when the record is fetched with a join.
