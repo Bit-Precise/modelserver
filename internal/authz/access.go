@@ -1,7 +1,6 @@
 package authz
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -75,31 +74,12 @@ type AccessPolicy struct {
 	Policies           []PolicyID       `json:"conditions,omitempty"`
 	Superadmin         SuperadminRule   `json:"superadmin"`
 
-	// systemOnProjectPath is set only by SystemOnProjectPath(). It permits a
-	// non-empty ProjectIDPathParam under system scope for audit + resolver
-	// hookup. Kept unexported so callers cannot forge the combination.
-	systemOnProjectPath bool
-}
-
-// UnmarshalJSON implements json.Unmarshaler. It restores the unexported
-// systemOnProjectPath flag when the decoded fields match the exact shape that
-// SystemOnProjectPath produces, so that an AccessPolicy round-tripped through
-// JSON (e.g. via the x-modelserver-authz OpenAPI extension) still passes
-// Validate().
-func (a *AccessPolicy) UnmarshalJSON(data []byte) error {
-	type raw AccessPolicy // avoids infinite recursion
-	var r raw
-	if err := json.Unmarshal(data, &r); err != nil {
-		return err
-	}
-	*a = AccessPolicy(r)
-	if a.Mode == AccessModeRBAC &&
-		a.Scope == ScopeSystem &&
-		a.Superadmin == SuperadminRequired &&
-		strings.TrimSpace(a.ProjectIDPathParam) != "" {
-		a.systemOnProjectPath = true
-	}
-	return nil
+	// SystemOnProjectPath is set only by the SystemOnProjectPath() constructor.
+	// It is JSON-visible so it survives round-trips through x-modelserver-authz
+	// without heuristic inference. Any AccessPolicy carrying this flag also
+	// carries system scope, superadmin required, and a non-empty project path
+	// parameter. Validate() enforces all three.
+	SystemOnProjectPath bool `json:"systemOnProjectPath,omitempty"`
 }
 
 // Public declares an operation that needs no authentication.
@@ -233,7 +213,7 @@ func (a AccessPolicy) validateRBAC() error {
 		if a.Superadmin != SuperadminRequired {
 			return fmt.Errorf("authz: system access must explicitly require superadmin")
 		}
-		if a.systemOnProjectPath {
+		if a.SystemOnProjectPath {
 			if strings.TrimSpace(a.ProjectIDPathParam) == "" {
 				return fmt.Errorf("authz: SystemOnProjectPath requires a project path parameter")
 			}

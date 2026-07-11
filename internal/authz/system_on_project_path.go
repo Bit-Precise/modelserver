@@ -11,6 +11,6 @@ package authz
 func SystemOnProjectPath(permission Permission, projectIDPathParam string) AccessPolicy {
 	access := System(permission)
 	access.ProjectIDPathParam = projectIDPathParam
-	access.systemOnProjectPath = true
+	access.SystemOnProjectPath = true
 	return access
 }
