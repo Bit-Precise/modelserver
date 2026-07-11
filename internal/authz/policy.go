@@ -10,6 +10,9 @@ const (
 	PolicyOwnResource                PolicyID = "own-resource"
 	PolicyResourceProjectContainment PolicyID = "resource-project-containment"
 	PolicyMemberRoleHierarchy        PolicyID = "member-role-hierarchy"
+
+	PolicyKeyOwnedByCallerForDeveloper PolicyID = "key-owned-by-caller-for-developer"
+	PolicyMemberSelfOrElevated         PolicyID = "member-self-or-elevated"
 )
 
 // ResourceReference is the unresolved reference extracted by an HTTP adapter.

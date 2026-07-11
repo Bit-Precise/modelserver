@@ -64,3 +64,16 @@ func TestPolicyAndResourceResolverExtensionPoints(t *testing.T) {
 		t.Fatal("owner policy denied matching owner")
 	}
 }
+
+func TestNewPolicyIDConstantsAreStable(t *testing.T) {
+	t.Parallel()
+
+	if PolicyKeyOwnedByCallerForDeveloper != PolicyID("key-owned-by-caller-for-developer") {
+		t.Errorf("PolicyKeyOwnedByCallerForDeveloper = %q, want %q",
+			PolicyKeyOwnedByCallerForDeveloper, "key-owned-by-caller-for-developer")
+	}
+	if PolicyMemberSelfOrElevated != PolicyID("member-self-or-elevated") {
+		t.Errorf("PolicyMemberSelfOrElevated = %q, want %q",
+			PolicyMemberSelfOrElevated, "member-self-or-elevated")
+	}
+}
