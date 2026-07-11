@@ -46,7 +46,12 @@ func NewAdminAPI(router chi.Router, options APIOptions) huma.API {
 
 	// Register application/octet-stream so that BytesResponse bodies are
 	// streamed verbatim without going through the JSON pipeline.
-	config.Formats["application/octet-stream"] = huma.Format{
+	// Copy default formats to avoid mutating the shared global map.
+	formats := make(map[string]huma.Format, len(config.Formats)+1)
+	for k, v := range config.Formats {
+		formats[k] = v
+	}
+	formats["application/octet-stream"] = huma.Format{
 		Marshal: func(w io.Writer, v any) error {
 			if br, ok := v.(BytesResponse); ok && br.Reader != nil {
 				_, err := io.Copy(w, br.Reader)
@@ -55,6 +60,7 @@ func NewAdminAPI(router chi.Router, options APIOptions) huma.API {
 			return nil
 		},
 	}
+	config.Formats = formats
 
 	// DefaultConfig installs a response transformer which changes response
 	// bodies. Keep Huma's JSON schema registry, but do not expose or inject
