@@ -57,7 +57,7 @@ func registerPlanReadOperations(api huma.API, server *Server) {
 		Access:        access,
 		Authorize:     server.authorizationMiddleware,
 	}
-	registerWithLegacyTrailingSlash(api, listOperation, server.listPlans)
+	contract.RegisterWithLegacyTrailingSlash(api, listOperation, server.listPlans)
 
 	getOperation := contract.Operation{
 		ID:            "getPlan",
@@ -70,7 +70,7 @@ func registerPlanReadOperations(api huma.API, server *Server) {
 		Access:        access,
 		Authorize:     server.authorizationMiddleware,
 	}
-	registerWithLegacyTrailingSlash(api, getOperation, server.getPlan)
+	contract.RegisterWithLegacyTrailingSlash(api, getOperation, server.getPlan)
 }
 
 func (s *Server) listPlans(_ context.Context, input *listPlansInput) (*listPlansOutput, error) {

@@ -75,7 +75,7 @@ func registerUserReadOperations(api huma.API, server *Server) {
 		Access:        access,
 		Authorize:     server.authorizationMiddleware,
 	}
-	registerWithLegacyTrailingSlash(api, listOperation, server.listUsers)
+	contract.RegisterWithLegacyTrailingSlash(api, listOperation, server.listUsers)
 
 	contract.Register(api, contract.Operation{
 		ID:            "listUsersCompact",

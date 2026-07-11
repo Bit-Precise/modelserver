@@ -115,7 +115,7 @@ func Register(api huma.API, server *Server) {
 		Access:        authz.Authenticated(),
 		Authorize:     server.authorizationMiddleware,
 	}
-	registerWithLegacyTrailingSlash(api, listProjectsOperation, server.listProjects)
+	contract.RegisterWithLegacyTrailingSlash(api, listProjectsOperation, server.listProjects)
 
 	projectRead := authz.Project(authz.PermissionProjectRead, projectIDPathParam)
 	getProjectOperation := contract.Operation{
@@ -129,7 +129,7 @@ func Register(api huma.API, server *Server) {
 		Access:        projectRead,
 		Authorize:     server.authorizationMiddleware,
 	}
-	registerWithLegacyTrailingSlash(api, getProjectOperation, server.getProject)
+	contract.RegisterWithLegacyTrailingSlash(api, getProjectOperation, server.getProject)
 
 	contract.Register(api, contract.Operation{
 		ID:            "getProjectCapabilities",
@@ -148,24 +148,6 @@ func Register(api huma.API, server *Server) {
 	registerPlanReadOperations(api, server)
 }
 
-// registerWithLegacyTrailingSlash keeps the two routes which historically
-// lived at chi sub-router roots compatible with both spellings. The alias is
-// registered through the same contract path so it enforces the exact same
-// AccessPolicy. Hidden keeps generated clients on one canonical URL without
-// relying on document post-processing.
-func registerWithLegacyTrailingSlash[I, O any](
-	api huma.API,
-	operation contract.Operation,
-	handler func(context.Context, *I) (*O, error),
-) {
-	contract.Register(api, operation, handler)
-
-	alias := operation
-	alias.ID += "LegacyTrailingSlash"
-	alias.Path += "/"
-	alias.Hidden = true
-	contract.Register(api, alias, handler)
-}
 
 func (s *Server) getAuthConfig(context.Context, *emptyInput) (*authConfigOutput, error) {
 	if s == nil || s.Config == nil {
