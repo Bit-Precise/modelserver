@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
+	"github.com/modelserver/modelserver/internal/api/admin/v1/resolvers"
 	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/auth"
 	"github.com/modelserver/modelserver/internal/authz"
@@ -36,6 +37,25 @@ type Server struct {
 	Config    *config.Config
 	Resolvers map[string]authz.ResourceResolver
 	Policies  map[authz.PolicyID]authz.Policy
+}
+
+// effectivePolicies returns the caller-supplied policies map when set,
+// falling back to DefaultPolicies(). Callers must not mutate the result.
+func (s *Server) effectivePolicies() map[authz.PolicyID]authz.Policy {
+	if s.Policies != nil {
+		return s.Policies
+	}
+	return DefaultPolicies()
+}
+
+// effectiveResolvers returns the caller-supplied resolver registry when
+// set, falling back to the shared default registry. Callers must not
+// mutate the result.
+func (s *Server) effectiveResolvers() map[string]authz.ResourceResolver {
+	if s.Resolvers != nil {
+		return s.Resolvers
+	}
+	return resolvers.Default()
 }
 
 type requestAuthorization struct {
@@ -148,7 +168,7 @@ func (s *Server) authorizeRBAC(ctx huma.Context, access authz.AccessPolicy, auth
 
 func (s *Server) resolveAndEvaluatePolicies(ctx huma.Context, access authz.AccessPolicy, authorization *requestAuthorization) bool {
 	if access.Resource != nil {
-		resolver := s.Resolvers[access.Resource.ResourceType]
+		resolver := s.effectiveResolvers()[access.Resource.ResourceType]
 		if resolver == nil {
 			contract.WriteError(ctx, contract.NewError(http.StatusInternalServerError, "internal", "resource authorization is not configured", nil))
 			return false
@@ -166,7 +186,7 @@ func (s *Server) resolveAndEvaluatePolicies(ctx huma.Context, access authz.Acces
 	}
 
 	for _, policyID := range access.Policies {
-		policy := s.Policies[policyID]
+		policy := s.effectivePolicies()[policyID]
 		if policy == nil {
 			contract.WriteError(ctx, contract.NewError(http.StatusInternalServerError, "internal", "authorization policy is not configured", nil))
 			return false
