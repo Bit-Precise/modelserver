@@ -3,6 +3,8 @@
 package contract
 
 import (
+	"io"
+
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -39,6 +41,18 @@ func NewAdminAPI(router chi.Router, options APIOptions) huma.API {
 			Scheme:       "bearer",
 			BearerFormat: "JWT",
 			Description:  "ModelServer admin access token.",
+		},
+	}
+
+	// Register application/octet-stream so that BytesResponse bodies are
+	// streamed verbatim without going through the JSON pipeline.
+	config.Formats["application/octet-stream"] = huma.Format{
+		Marshal: func(w io.Writer, v any) error {
+			if br, ok := v.(BytesResponse); ok && br.Reader != nil {
+				_, err := io.Copy(w, br.Reader)
+				return err
+			}
+			return nil
 		},
 	}
 
