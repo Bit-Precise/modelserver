@@ -61,6 +61,43 @@ func TestSystemWithoutOptInRejectsProjectParam(t *testing.T) {
 	}
 }
 
+func TestSystemOnProjectPathJSONRoundTripPreservesOptIn(t *testing.T) {
+	t.Parallel()
+
+	original := SystemOnProjectPath(PermissionSystemSubscriptionOverride, "projectID")
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var decoded AccessPolicy
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("round-tripped policy failed Validate(): %v", err)
+	}
+}
+
+// TestSystemOnProjectPathJSONRoundTripNegative asserts that a plain System
+// policy (no ProjectIDPathParam) round-trips cleanly and does NOT accidentally
+// receive the systemOnProjectPath flag.
+func TestSystemOnProjectPathJSONRoundTripNegative(t *testing.T) {
+	t.Parallel()
+
+	original := System(PermissionSystemSubscriptionOverride)
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var decoded AccessPolicy
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("round-tripped System() policy failed Validate(): %v", err)
+	}
+}
+
 func TestSystemOnProjectPathJSONDoesNotLeakOptInFlag(t *testing.T) {
 	t.Parallel()
 

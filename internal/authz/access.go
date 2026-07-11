@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -78,6 +79,27 @@ type AccessPolicy struct {
 	// non-empty ProjectIDPathParam under system scope for audit + resolver
 	// hookup. Kept unexported so callers cannot forge the combination.
 	systemOnProjectPath bool
+}
+
+// UnmarshalJSON implements json.Unmarshaler. It restores the unexported
+// systemOnProjectPath flag when the decoded fields match the exact shape that
+// SystemOnProjectPath produces, so that an AccessPolicy round-tripped through
+// JSON (e.g. via the x-modelserver-authz OpenAPI extension) still passes
+// Validate().
+func (a *AccessPolicy) UnmarshalJSON(data []byte) error {
+	type raw AccessPolicy // avoids infinite recursion
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	*a = AccessPolicy(r)
+	if a.Mode == AccessModeRBAC &&
+		a.Scope == ScopeSystem &&
+		a.Superadmin == SuperadminRequired &&
+		strings.TrimSpace(a.ProjectIDPathParam) != "" {
+		a.systemOnProjectPath = true
+	}
+	return nil
 }
 
 // Public declares an operation that needs no authentication.
