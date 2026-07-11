@@ -105,14 +105,26 @@ PermissionSystemNotificationsRead   Permission = "system.notifications.read"
 PermissionSystemNotificationsManage Permission = "system.notifications.manage"
 
 // project
-PermissionProjectMembersUsageRead   Permission = "project.members.usage.read"
-PermissionProjectSubscriptionsWrite Permission = "project.subscriptions.write"
-PermissionProjectExtraUsageRead     Permission = "project.extra_usage.read"
-PermissionProjectExtraUsageWrite    Permission = "project.extra_usage.write"
-PermissionProjectExtraUsageTopup    Permission = "project.extra_usage.topup"
+PermissionProjectMembersUsageRead Permission = "project.members.usage.read"
+PermissionProjectExtraUsageRead   Permission = "project.extra_usage.read"
+PermissionProjectExtraUsageWrite  Permission = "project.extra_usage.write"
+PermissionProjectExtraUsageTopup  Permission = "project.extra_usage.topup"
 ```
 
-Existing `PermissionSystemSubscriptionOverride` remains, and is what
+Role grants for the new project permissions (added to
+`internal/authz/role.go`):
+
+- `PermissionProjectMembersUsageRead` — granted to all three roles
+  (developer, maintainer, owner). It is a strict subset of the
+  data reachable through `PermissionProjectMembersRead`; splitting it
+  out lets the members-usage endpoint be named separately in the spec
+  without loosening membership visibility.
+- `PermissionProjectExtraUsageRead` — all three roles.
+- `PermissionProjectExtraUsageWrite` — maintainer and owner (matches
+  legacy `requireRole(RoleOwner, RoleMaintainer)` on the endpoint).
+- `PermissionProjectExtraUsageTopup` — maintainer and owner.
+
+Existing `PermissionSystemSubscriptionOverride` remains and is what
 `SystemOnProjectPath` (below) enforces.
 
 **New policy IDs and semantics:**
@@ -121,11 +133,14 @@ Existing `PermissionSystemSubscriptionOverride` remains, and is what
   or holds project role `owner`/`maintainer`; otherwise requires
   `Resource.OwnerID == Principal.UserID`. Encodes the existing
   "developers can only touch keys they created" rule.
-- `PolicyRequireSuperadmin` — passes iff `Principal.Superadmin`. Used
-  under `SystemOnProjectPath` for subscription overrides.
 - `PolicyMemberSelfOrElevated` — passes for a caller reading their own
   member row (`Resource.ID == Principal.UserID`), or for owner /
   maintainer / superadmin.
+
+(An earlier draft added `PolicyRequireSuperadmin` for the subscription
+override case. It is deliberately not introduced: `SystemOnProjectPath`
+already enforces superadmin at the DSL level, and adding a policy layer
+on top would be redundant.)
 
 **New DSL helper:**
 
@@ -393,10 +408,10 @@ Aggregate additions summarized:
 
 - **New permissions:** `system.notifications.read`,
   `system.notifications.manage`, `project.members.usage.read`,
-  `project.subscriptions.write`, `project.extra_usage.read`,
-  `project.extra_usage.write`, `project.extra_usage.topup`.
+  `project.extra_usage.read`, `project.extra_usage.write`,
+  `project.extra_usage.topup`.
 - **New policies:** `key-owned-by-caller-for-developer`,
-  `require-superadmin`, `member-self-or-elevated`.
+  `member-self-or-elevated`.
 - **New DSL helper:** `authz.SystemOnProjectPath(...)`.
 - **Binary/302 responses:** E4, P2 (bytes); A3 (302). All three surfaces
   need explicit spec entries and are the only endpoints that skip typed
