@@ -29,6 +29,7 @@ var developerPermissions = []Permission{
 	PermissionProjectRead,
 	PermissionProjectModelsRead,
 	PermissionProjectMembersRead,
+	PermissionProjectMembersUsageRead,
 	PermissionProjectKeysCreate,
 	PermissionProjectKeysRead,
 	PermissionProjectKeysManage,
@@ -41,6 +42,7 @@ var developerPermissions = []Permission{
 	PermissionProjectRequestsRead,
 	PermissionProjectUsageRead,
 	PermissionProjectTracesRead,
+	PermissionProjectExtraUsageRead,
 }
 
 var maintainerPermissions = appendPermissions(developerPermissions,
@@ -51,6 +53,8 @@ var maintainerPermissions = appendPermissions(developerPermissions,
 	PermissionProjectOrdersCreate,
 	PermissionProjectOrdersManage,
 	PermissionProjectBillingManage,
+	PermissionProjectExtraUsageWrite,
+	PermissionProjectExtraUsageTopup,
 )
 
 var ownerPermissions = appendPermissions(maintainerPermissions,

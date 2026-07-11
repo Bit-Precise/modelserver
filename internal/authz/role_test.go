@@ -177,3 +177,43 @@ func TestPermissionChecksEnforceScope(t *testing.T) {
 		t.Fatal("project permission passed system permission check")
 	}
 }
+
+func TestNewProjectPermissionsRoleGrants(t *testing.T) {
+	t.Parallel()
+
+	developer, _ := PermissionsForRole(RoleDeveloper)
+	maintainer, _ := PermissionsForRole(RoleMaintainer)
+	owner, _ := PermissionsForRole(RoleOwner)
+
+	allRoles := []Permission{
+		PermissionProjectMembersUsageRead,
+		PermissionProjectExtraUsageRead,
+	}
+	for _, permission := range allRoles {
+		if !developer.Has(permission) {
+			t.Errorf("developer missing %q", permission)
+		}
+		if !maintainer.Has(permission) {
+			t.Errorf("maintainer missing %q", permission)
+		}
+		if !owner.Has(permission) {
+			t.Errorf("owner missing %q", permission)
+		}
+	}
+
+	maintainerAndUp := []Permission{
+		PermissionProjectExtraUsageWrite,
+		PermissionProjectExtraUsageTopup,
+	}
+	for _, permission := range maintainerAndUp {
+		if developer.Has(permission) {
+			t.Errorf("developer unexpectedly has %q", permission)
+		}
+		if !maintainer.Has(permission) {
+			t.Errorf("maintainer missing %q", permission)
+		}
+		if !owner.Has(permission) {
+			t.Errorf("owner missing %q", permission)
+		}
+	}
+}

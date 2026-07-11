@@ -27,6 +27,8 @@ const (
 	PermissionSystemRoutingRead          Permission = "system.routing.read"
 	PermissionSystemRoutingManage        Permission = "system.routing.manage"
 	PermissionSystemSubscriptionOverride Permission = "system.subscription.override"
+	PermissionSystemNotificationsRead    Permission = "system.notifications.read"
+	PermissionSystemNotificationsManage  Permission = "system.notifications.manage"
 
 	// Project-scoped permissions are granted by project roles. Resource-level
 	// policies may further narrow a permission (for example, to owned keys).
@@ -51,9 +53,13 @@ const (
 	PermissionProjectOrdersManage      Permission = "project.orders.manage"
 	PermissionProjectBillingRead       Permission = "project.billing.read"
 	PermissionProjectBillingManage     Permission = "project.billing.manage"
-	PermissionProjectRequestsRead      Permission = "project.requests.read"
-	PermissionProjectUsageRead         Permission = "project.usage.read"
-	PermissionProjectTracesRead        Permission = "project.traces.read"
+	PermissionProjectRequestsRead        Permission = "project.requests.read"
+	PermissionProjectUsageRead           Permission = "project.usage.read"
+	PermissionProjectTracesRead          Permission = "project.traces.read"
+	PermissionProjectMembersUsageRead    Permission = "project.members.usage.read"
+	PermissionProjectExtraUsageRead      Permission = "project.extra_usage.read"
+	PermissionProjectExtraUsageWrite     Permission = "project.extra_usage.write"
+	PermissionProjectExtraUsageTopup     Permission = "project.extra_usage.topup"
 )
 
 var permissionScopes = map[Permission]Scope{
@@ -76,6 +82,8 @@ var permissionScopes = map[Permission]Scope{
 	PermissionSystemRoutingRead:          ScopeSystem,
 	PermissionSystemRoutingManage:        ScopeSystem,
 	PermissionSystemSubscriptionOverride: ScopeSystem,
+	PermissionSystemNotificationsRead:    ScopeSystem,
+	PermissionSystemNotificationsManage:  ScopeSystem,
 	PermissionProjectRead:                ScopeProject,
 	PermissionProjectSettingsWrite:       ScopeProject,
 	PermissionProjectArchive:             ScopeProject,
@@ -100,6 +108,10 @@ var permissionScopes = map[Permission]Scope{
 	PermissionProjectRequestsRead:        ScopeProject,
 	PermissionProjectUsageRead:           ScopeProject,
 	PermissionProjectTracesRead:          ScopeProject,
+	PermissionProjectMembersUsageRead:    ScopeProject,
+	PermissionProjectExtraUsageRead:      ScopeProject,
+	PermissionProjectExtraUsageWrite:     ScopeProject,
+	PermissionProjectExtraUsageTopup:     ScopeProject,
 }
 
 // Valid reports whether p belongs to the built-in permission catalog.
