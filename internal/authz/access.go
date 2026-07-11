@@ -73,6 +73,11 @@ type AccessPolicy struct {
 	Resource           *ResourceBinding `json:"resource,omitempty"`
 	Policies           []PolicyID       `json:"conditions,omitempty"`
 	Superadmin         SuperadminRule   `json:"superadmin"`
+
+	// systemOnProjectPath is set only by SystemOnProjectPath(). It permits a
+	// non-empty ProjectIDPathParam under system scope for audit + resolver
+	// hookup. Kept unexported so callers cannot forge the combination.
+	systemOnProjectPath bool
 }
 
 // Public declares an operation that needs no authentication.
@@ -206,7 +211,11 @@ func (a AccessPolicy) validateRBAC() error {
 		if a.Superadmin != SuperadminRequired {
 			return fmt.Errorf("authz: system access must explicitly require superadmin")
 		}
-		if a.ProjectIDPathParam != "" {
+		if a.systemOnProjectPath {
+			if strings.TrimSpace(a.ProjectIDPathParam) == "" {
+				return fmt.Errorf("authz: SystemOnProjectPath requires a project path parameter")
+			}
+		} else if a.ProjectIDPathParam != "" {
 			return fmt.Errorf("authz: system access cannot declare a project path parameter")
 		}
 	case ScopeProject:
