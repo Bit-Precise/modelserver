@@ -1,6 +1,8 @@
 package adminv1
 
 import (
+	"time"
+
 	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
 )
@@ -50,8 +52,32 @@ type modelsStore interface {
 	DeleteModel(name string) error
 	ModelReferenceCountsFor(name string) (store.ModelReferenceCounts, error)
 }
-type adminSuperStore interface{}    // E — Admin (superadmin)
-type notificationsStore interface{} // F — Notifications user + admin
+// E — Admin global reads (superadmin)
+type adminSuperStore interface {
+	ListAllProjects(p types.PaginationParams, filters store.ProjectListFilters) ([]types.Project, int, error)
+	GetActiveSubscriptionsByProjectIDs(projectIDs []string) (map[string]*types.Subscription, error)
+	GetProjectOwnersByProjectIDs(projectIDs []string) (map[string]*types.User, error)
+	SumCreditsSinceByProjects(periodStarts map[string]time.Time) (map[string]float64, error)
+	SumCreditsInWindowByProjects(projectIDs []string, windowStart time.Time) (map[string]float64, error)
+	ListPlans(activeOnly bool) ([]types.Plan, error)
+	ListAllRequests(p types.PaginationParams, filters store.RequestFilters) ([]types.Request, int, error)
+	GetRequest(id string) (*types.Request, error)
+}
+
+// F — Notifications (user + admin)
+type notificationsStore interface {
+	ListAllNotifications(includeDeleted bool, audienceType string, p types.PaginationParams) ([]types.Notification, int, error)
+	GetNotification(id string) (*types.Notification, error)
+	CreateNotification(*types.Notification) error
+	UpdateNotification(id, title, body, audienceType string, audienceID *string) error
+	SoftDeleteNotification(id string) error
+	ListVisibleForUser(userID string, p types.PaginationParams) ([]types.Notification, int, error)
+	CountUnreadForUser(userID string) (int, error)
+	MarkNotificationRead(userID, notificationID string) error
+	MarkAllNotificationsRead(userID string) (int, error)
+	GetProjectByID(id string) (*types.Project, error)
+	GetUserByID(id string) (*types.User, error)
+}
 type extraUsageStore interface{}    // G — Extra usage user + admin
 type projectsStore interface{}      // H — Projects CRUD
 type membersStore interface{}       // I — Project members

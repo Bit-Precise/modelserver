@@ -159,10 +159,20 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 		"/api/v1/plans/{planID}",
 		"/api/v1/models",
 		"/api/v1/models/{name}",
+		"/api/v1/admin/projects",
+		"/api/v1/admin/requests",
+		"/api/v1/admin/projects/subscriptions-overview",
+		"/api/v1/admin/requests/{requestID}/http-log",
+		"/api/v1/admin/notifications",
+		"/api/v1/admin/notifications/{id}",
+		"/api/v1/notifications",
+		"/api/v1/notifications/unread_count",
 	}
 	expectedPostPaths := []string{
 		"/api/v1/auth/refresh",
 		"/api/v1/auth/oauth/{provider}",
+		"/api/v1/notifications/{id}/read",
+		"/api/v1/notifications/read_all",
 	}
 	wantPathCount := len(expectedGetPaths) + len(expectedPostPaths)
 	if len(api.OpenAPI().Paths) != wantPathCount {

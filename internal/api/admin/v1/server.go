@@ -12,6 +12,7 @@ import (
 	"github.com/modelserver/modelserver/internal/auth"
 	"github.com/modelserver/modelserver/internal/authz"
 	"github.com/modelserver/modelserver/internal/config"
+	"github.com/modelserver/modelserver/internal/httplog"
 	"github.com/modelserver/modelserver/internal/modelcatalog"
 	"github.com/modelserver/modelserver/internal/types"
 )
@@ -49,6 +50,9 @@ type Server struct {
 	Config         *config.Config
 	Resolvers      map[string]authz.ResourceResolver
 	Policies       map[authz.PolicyID]authz.Policy
+	AdminSuper     adminSuperStore
+	Notifications  notificationsStore
+	HTTPLog        *httplog.Logger
 }
 
 // effectivePolicies returns the caller-supplied policies map when set,

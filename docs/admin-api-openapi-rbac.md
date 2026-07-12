@@ -44,6 +44,22 @@ And these migrated model-catalog operations (Batch 4):
 - `PUT /api/v1/models/{name}`
 - `DELETE /api/v1/models/{name}`
 
+And these migrated admin-reads + notifications operations (Batch 5):
+
+- `GET /api/v1/admin/projects`
+- `GET /api/v1/admin/projects/subscriptions-overview`
+- `GET /api/v1/admin/requests`
+- `GET /api/v1/admin/requests/{requestID}/http-log`
+- `GET /api/v1/notifications`
+- `GET /api/v1/notifications/unread_count`
+- `POST /api/v1/notifications/{id}/read`
+- `POST /api/v1/notifications/read_all`
+- `GET /api/v1/admin/notifications`
+- `POST /api/v1/admin/notifications`
+- `GET /api/v1/admin/notifications/{id}`
+- `PUT /api/v1/admin/notifications/{id}`
+- `DELETE /api/v1/admin/notifications/{id}`
+
 All other management routes remain on their legacy Chi handlers until they are
 individually migrated. A route must not be registered by both implementations.
 
