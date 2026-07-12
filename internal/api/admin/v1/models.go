@@ -328,3 +328,39 @@ func (s *Server) getModel(ctx context.Context, input *GetModelInput) (*GetModelO
 		},
 	}, nil
 }
+
+// deleteModel handles DELETE /api/v1/models/{name}.
+// Preserves handleDeleteModel wire behavior exactly:
+//  1. Fetch existing via GetModelByName — 404 if nil OR error (legacy conflates both).
+//  2. s.Models.ModelReferenceCountsFor(name) — 500 internal "failed to count references" on error.
+//  3. If counts.Total() > 0 → 409 conflict "model is referenced; set status=disabled or clear references first" with counts as details.
+//  4. s.Models.DeleteModel(name) — 400 bad_request on error (not 500 — preserve legacy 400).
+//  5. refreshCatalog(ctx).
+//  6. Return (&DeleteModelOutput{}, nil).
+func (s *Server) deleteModel(ctx context.Context, input *DeleteModelInput) (*DeleteModelOutput, error) {
+	if s == nil || s.Models == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "model management store is not configured", nil)
+	}
+
+	existing, err := s.Models.GetModelByName(input.Name)
+	if err != nil || existing == nil {
+		return nil, contract.NewError(http.StatusNotFound, "not_found", "model not found", nil)
+	}
+
+	counts, err := s.Models.ModelReferenceCountsFor(input.Name)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to count references", nil)
+	}
+	if counts.Total() > 0 {
+		return nil, contract.NewError(http.StatusConflict, "conflict",
+			"model is referenced; set status=disabled or clear references first", counts)
+	}
+
+	if err := s.Models.DeleteModel(input.Name); err != nil {
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", err.Error(), nil)
+	}
+
+	s.refreshCatalog(ctx)
+
+	return &DeleteModelOutput{}, nil
+}

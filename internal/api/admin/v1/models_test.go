@@ -23,9 +23,12 @@ type fakeModelsStore struct {
 	model             *types.Model
 	getErr            error
 	referenceErr      error
+	referenceCounts   store.ModelReferenceCounts
 	createErr         error
 	createdModel      *types.Model
 	updateErr         error
+	deleteErr         error
+	lastDeletedName   string
 	lastUpdatedName   string
 	lastUpdates       map[string]any
 	lastListedStatus  string
@@ -70,7 +73,7 @@ func (s *fakeModelsStore) ModelReferenceCountsFor(name string) (store.ModelRefer
 	if s.referenceErr != nil {
 		return store.ModelReferenceCounts{}, s.referenceErr
 	}
-	return store.ModelReferenceCounts{}, nil
+	return s.referenceCounts, nil
 }
 
 func (s *fakeModelsStore) CreateModel(m *types.Model) error {
@@ -89,6 +92,10 @@ func (s *fakeModelsStore) UpdateModel(name string, updates map[string]any) error
 }
 
 func (s *fakeModelsStore) DeleteModel(name string) error {
+	s.lastDeletedName = name
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	return nil
 }
 
@@ -705,5 +712,128 @@ func TestUpdateModelHappyPath(t *testing.T) {
 	}
 	if out.Body.Data.DisplayName != "GPT-4 Updated" {
 		t.Errorf("response DisplayName = %q, want %q", out.Body.Data.DisplayName, "GPT-4 Updated")
+	}
+}
+
+// --- deleteModel Tests (4) ---
+
+// Test D1: GetModelByName returns nil → 404 "model not found"
+func TestDeleteModelNotFound(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{model: nil}
+	s := newModelsServerWithCatalog(t, st, &fakeCatalog{})
+	input := &DeleteModelInput{Name: "no-such-model"}
+
+	_, err := s.deleteModel(context.Background(), input)
+	assertStatusError(t, err, 404, "not_found")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "model not found" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "model not found")
+	}
+}
+
+// Test D2: ModelReferenceCountsFor error → 500 internal "failed to count references"
+func TestDeleteModelReferenceCountsError(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{
+		model:        &types.Model{Name: "gpt-4", Status: "active", Publisher: "openai"},
+		referenceErr: errors.New("database error"),
+	}
+	s := newModelsServerWithCatalog(t, st, &fakeCatalog{})
+	input := &DeleteModelInput{Name: "gpt-4"}
+
+	_, err := s.deleteModel(context.Background(), input)
+	assertStatusError(t, err, 500, "internal")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "failed to count references" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "failed to count references")
+	}
+}
+
+// Test D3: counts.Total() > 0 → 409 conflict with counts as details
+func TestDeleteModelReferencesExist(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{
+		model: &types.Model{Name: "gpt-4", Status: "active", Publisher: "openai"},
+		referenceCounts: store.ModelReferenceCounts{
+			Upstreams: 1,
+			Routes:    2,
+			Plans:     0,
+			Policies:  0,
+			APIKeys:   0,
+		},
+	}
+	s := newModelsServerWithCatalog(t, st, &fakeCatalog{})
+	input := &DeleteModelInput{Name: "gpt-4"}
+
+	_, err := s.deleteModel(context.Background(), input)
+	assertStatusError(t, err, 409, "conflict")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "model is referenced; set status=disabled or clear references first" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "model is referenced; set status=disabled or clear references first")
+	}
+
+	// Check that details contains the exact ModelReferenceCounts struct
+	if env.Payload.Details == nil {
+		t.Fatal("expected details to be non-nil")
+	}
+
+	// Cast details to ModelReferenceCounts and verify
+	details, ok := env.Payload.Details.(store.ModelReferenceCounts)
+	if !ok {
+		t.Fatalf("expected Details to be store.ModelReferenceCounts, got %T", env.Payload.Details)
+	}
+	if details.Upstreams != 1 || details.Routes != 2 {
+		t.Errorf("details = %+v, want {Upstreams: 1, Routes: 2, ...}", details)
+	}
+}
+
+// Test D4: Happy path (counts.Total() == 0) → 204; refresh called; DeleteModel called
+func TestDeleteModelHappyPath(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{
+		model:  &types.Model{Name: "gpt-4", Status: "active", Publisher: "openai"},
+		models: []types.Model{{Name: "gpt-4"}},
+		referenceCounts: store.ModelReferenceCounts{
+			Upstreams: 0,
+			Routes:    0,
+			Plans:     0,
+			Policies:  0,
+			APIKeys:   0,
+		},
+	}
+	cat := &fakeCatalog{}
+	s := newModelsServerWithCatalog(t, st, cat)
+	input := &DeleteModelInput{Name: "gpt-4"}
+
+	out, err := s.deleteModel(context.Background(), input)
+	if err != nil {
+		t.Fatalf("deleteModel() error = %v", err)
+	}
+
+	if out == nil {
+		t.Fatal("expected non-nil output")
+	}
+
+	// Assert DeleteModel was called with correct name
+	if st.lastDeletedName != "gpt-4" {
+		t.Errorf("lastDeletedName = %q, want %q", st.lastDeletedName, "gpt-4")
+	}
+
+	// Assert refreshCatalog was called (Swap should have been called)
+	if cat.swappedModels == nil {
+		t.Fatal("Catalog.Swap was not called after deleteModel")
 	}
 }
