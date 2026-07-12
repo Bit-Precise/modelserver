@@ -577,3 +577,50 @@ func TestDeleteNotificationHappyPath(t *testing.T) {
 		t.Fatal("response data.deleted = false, want true")
 	}
 }
+
+// Test 21: updateNotification — pgx.ErrNoRows → 404 not_found "notification not found or already deleted"
+func TestUpdateNotificationNotFound(t *testing.T) {
+	ns := &fakeNotificationsStore{updateErr: pgx.ErrNoRows}
+	recorder := httptest.NewRecorder()
+	body := `{"title":"Updated","body":"New body","audience_type":"global"}`
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, authenticatedJSONRequest(http.MethodPut, "/api/v1/admin/notifications/notif-gone", body))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body = %s", recorder.Code, recorder.Body.String())
+	}
+	var errResp contract.ErrorEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp.Payload.Code != "not_found" {
+		t.Fatalf("error code = %q, want not_found", errResp.Payload.Code)
+	}
+	if !strings.Contains(errResp.Payload.Message, "notification not found or already deleted") {
+		t.Fatalf("error message = %q", errResp.Payload.Message)
+	}
+}
+
+// Test 22: createNotification — audience resolve: project DB error → 500 internal
+func TestCreateNotificationAudienceDBError(t *testing.T) {
+	ns := &fakeNotificationsStore{
+		resolveProjectErr: errors.New("db unreachable"),
+	}
+	recorder := httptest.NewRecorder()
+	projectID := "proj-123"
+	body := `{"title":"Hello","body":"World","audience_type":"project","audience_id":"` + projectID + `"}`
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, authenticatedJSONRequest(http.MethodPost, "/api/v1/admin/notifications", body))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body = %s", recorder.Code, recorder.Body.String())
+	}
+	var errResp contract.ErrorEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp.Payload.Code != "internal" {
+		t.Fatalf("error code = %q, want internal", errResp.Payload.Code)
+	}
+	if !strings.Contains(errResp.Payload.Message, "failed to fetch project") {
+		t.Fatalf("error message = %q, want message about fetch project", errResp.Payload.Message)
+	}
+}
