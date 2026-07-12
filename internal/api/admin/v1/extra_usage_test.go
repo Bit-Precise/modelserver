@@ -2,13 +2,16 @@ package adminv1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/modelserver/modelserver/internal/api/contract"
+	"github.com/modelserver/modelserver/internal/authz"
 	"github.com/modelserver/modelserver/internal/billing"
 	"github.com/modelserver/modelserver/internal/config"
 	"github.com/modelserver/modelserver/internal/store"
@@ -908,5 +911,51 @@ func TestCreateTopupHappyPathStripe(t *testing.T) {
 	// Assert CreatePayment was called with correct currency
 	if payClient.createPaymentReq.Currency != "USD" {
 		t.Errorf("PaymentRequest.Currency = %q, want USD", payClient.createPaymentReq.Currency)
+	}
+}
+
+// TestCreateTopupPolicyRequiresProjectMembership guards the RequireProjectMembership()
+// invariant on POST /projects/{projectID}/extra-usage/topup. Losing this option
+// would silently reopen superadmin bypass on payment initiation. Runtime
+// enforcement is verified by handler tests via role-based checks; this test
+// locks the policy declaration itself so it cannot regress in a refactor.
+func TestCreateTopupPolicyRequiresProjectMembership(t *testing.T) {
+	t.Parallel()
+	router := chi.NewRouter()
+	api := contract.NewAdminAPI(router, contract.APIOptions{})
+	Register(api, nil)
+
+	var found bool
+	for path, item := range api.OpenAPI().Paths {
+		if path != "/api/v1/projects/{projectID}/extra-usage/topup" {
+			continue
+		}
+		if item.Post == nil {
+			continue
+		}
+		raw, ok := item.Post.Extensions["x-modelserver-authz"]
+		if !ok {
+			t.Fatalf("createExtraUsageTopup missing x-modelserver-authz extension")
+		}
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatalf("marshal authz extension: %v", err)
+		}
+		var access authz.AccessPolicy
+		if err := json.Unmarshal(encoded, &access); err != nil {
+			t.Fatalf("unmarshal authz extension: %v", err)
+		}
+		if access.Superadmin != authz.SuperadminNone {
+			t.Errorf("createExtraUsageTopup superadmin rule = %q, want %q (RequireProjectMembership() must not regress)",
+				access.Superadmin, authz.SuperadminNone)
+		}
+		if access.Permission != authz.PermissionProjectExtraUsageTopup {
+			t.Errorf("createExtraUsageTopup permission = %q, want %q",
+				access.Permission, authz.PermissionProjectExtraUsageTopup)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("createExtraUsageTopup POST operation not found in OpenAPI paths")
 	}
 }
