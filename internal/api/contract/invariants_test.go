@@ -2,15 +2,18 @@ package contract_test
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
+	"github.com/modelserver/modelserver/internal/admin"
 	adminv1 "github.com/modelserver/modelserver/internal/api/admin/v1"
 	"github.com/modelserver/modelserver/internal/api/admin/v1/resolvers"
 	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/authz"
+	"github.com/modelserver/modelserver/internal/config"
 )
 
 // buildAdminSpec returns the OpenAPI document produced by the current
@@ -158,4 +161,27 @@ func decodeAccessExtension(t *testing.T, raw any) (authz.AccessPolicy, bool) {
 		return authz.AccessPolicy{}, false
 	}
 	return access, true
+}
+
+func TestBatch02NoLegacyChiOverlap(t *testing.T) {
+	t.Parallel()
+
+	migrated := []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/auth/refresh"},
+		{http.MethodPost, "/api/v1/auth/oauth/github"},
+		{http.MethodPost, "/api/v1/auth/oauth/google"},
+		{http.MethodPost, "/api/v1/auth/oauth/oidc"},
+		{http.MethodGet, "/api/v1/auth/oauth/github/redirect"},
+		{http.MethodGet, "/api/v1/auth/oauth/google/redirect"},
+		{http.MethodGet, "/api/v1/auth/oauth/oidc/redirect"},
+	}
+	router := chi.NewRouter()
+	// Mount only the legacy admin routes; typed operations are excluded.
+	admin.MountRoutes(router, nil, &config.Config{}, nil, nil, nil, nil, nil)
+	for _, route := range migrated {
+		ctx := chi.NewRouteContext()
+		if router.Match(ctx, route.method, route.path) {
+			t.Errorf("legacy admin still registers %s %s", route.method, route.path)
+		}
+	}
 }
