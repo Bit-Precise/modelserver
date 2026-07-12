@@ -25,8 +25,19 @@ type authStore interface {
 	UserExists() (bool, error)
 	CreateProject(project *types.Project) error
 }
-type usersWriteStore interface{}    // B — Users writes
-type plansWriteStore interface{}    // C — Plans writes
+// B — Users writes: PUT /users/{userID} is served by the typed handler
+// via Server.Auth (see A — Auth), which already exposes UpdateUser +
+// GetUserByID. No separate usersWriteStore interface is needed.
+
+// C — Plans writes: READ and WRITE operations for plans. Consumed by
+// Server.Plans; both read and write handlers.
+type plansStore interface {
+	ListPlansPaginated(types.PaginationParams) ([]types.Plan, int, error)
+	GetPlanByID(string) (*types.Plan, error)
+	CreatePlan(*types.Plan) error
+	UpdatePlan(id string, updates map[string]any) error
+	DeletePlan(id string) error
+}
 type modelsStore interface{}        // D — Models catalog
 type adminSuperStore interface{}    // E — Admin (superadmin)
 type notificationsStore interface{} // F — Notifications user + admin

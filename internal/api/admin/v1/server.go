@@ -12,6 +12,7 @@ import (
 	"github.com/modelserver/modelserver/internal/auth"
 	"github.com/modelserver/modelserver/internal/authz"
 	"github.com/modelserver/modelserver/internal/config"
+	"github.com/modelserver/modelserver/internal/modelcatalog"
 	"github.com/modelserver/modelserver/internal/types"
 )
 
@@ -32,11 +33,12 @@ type tokenValidator interface {
 type Server struct {
 	Store     managementStore
 	Users     userReadStore
-	Plans     planReadStore
+	Plans     plansStore
 	Tokens    tokenValidator
 	Auth      authStore
 	JWT       *auth.JWTManager
 	EncKey    []byte
+	Catalog   modelcatalog.Catalog
 	// AssignFreePlan is a wiring shim invoked from cmd/modelserver so the
 	// typed auth handler can trigger the legacy assignFreePlan helper on
 	// new-user creation without importing internal/admin. Batch 7's

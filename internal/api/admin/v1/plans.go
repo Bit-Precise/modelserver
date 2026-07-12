@@ -10,11 +10,6 @@ import (
 	"github.com/modelserver/modelserver/internal/types"
 )
 
-type planReadStore interface {
-	ListPlansPaginated(types.PaginationParams) ([]types.Plan, int, error)
-	GetPlanByID(string) (*types.Plan, error)
-}
-
 type listPlansInput struct {
 	Page    int    `query:"page" default:"1" minimum:"1" doc:"Page number, starting at one."`
 	PerPage int    `query:"per_page" default:"20" minimum:"1" maximum:"100" doc:"Number of plans returned per page."`
