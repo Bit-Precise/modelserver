@@ -134,6 +134,7 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 
 	expectedPaths := []string{
 		"/api/v1/auth/config",
+		"/api/v1/auth/oauth/{provider}/redirect",
 		"/api/v1/me",
 		"/api/v1/me/capabilities",
 		"/api/v1/projects",

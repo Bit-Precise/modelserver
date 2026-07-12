@@ -758,6 +758,121 @@
         }
       }
     },
+    "/api/v1/auth/oauth/{provider}/redirect": {
+      "get": {
+        "description": "Generates a state token and emits a 302 redirect to the provider's authorize URL.",
+        "operationId": "oauthRedirect",
+        "parameters": [
+          {
+            "description": "OAuth provider identifier.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "description": "OAuth provider identifier.",
+              "enum": [
+                "github",
+                "google",
+                "oidc"
+              ],
+              "title": "OAuthProvider",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional Hydra login return URL. Only /oauth/login-prefixed values are honored.",
+            "explode": false,
+            "in": "query",
+            "name": "return_to",
+            "schema": {
+              "description": "Optional Hydra login return URL. Only /oauth/login-prefixed values are honored.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Forwarded protocol scheme from reverse proxy.",
+            "in": "header",
+            "name": "X-Forwarded-Proto,omitempty",
+            "schema": {
+              "description": "Forwarded protocol scheme from reverse proxy.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "HTTP Host header for callback URL construction.",
+            "in": "header",
+            "name": "Host,omitempty",
+            "schema": {
+              "description": "HTTP Host header for callback URL construction.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Found",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "description": "Provider authorize URL.",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [],
+        "summary": "Initiate OAuth provider redirect",
+        "tags": [
+          "Authentication"
+        ],
+        "x-modelserver-authz": {
+          "mode": "public",
+          "scope": "none",
+          "superadmin": "none"
+        }
+      }
+    },
     "/api/v1/me": {
       "get": {
         "operationId": "getCurrentUser",

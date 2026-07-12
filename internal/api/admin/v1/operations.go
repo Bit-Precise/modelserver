@@ -79,6 +79,18 @@ func Register(api huma.API, server *Server) {
 	}, server.getAuthConfig)
 
 	contract.Register(api, contract.Operation{
+		ID:            "oauthRedirect",
+		Method:        http.MethodGet,
+		Path:          "/api/v1/auth/oauth/{provider}/redirect",
+		Summary:       "Initiate OAuth provider redirect",
+		Description:   "Generates a state token and emits a 302 redirect to the provider's authorize URL.",
+		Tags:          []string{"Authentication"},
+		DefaultStatus: http.StatusFound,
+		Errors:        []int{http.StatusBadRequest, http.StatusNotImplemented, http.StatusInternalServerError},
+		Access:        authz.Public(),
+	}, server.oauthRedirect)
+
+	contract.Register(api, contract.Operation{
 		ID:            "getCurrentUser",
 		Method:        http.MethodGet,
 		Path:          "/api/v1/me",

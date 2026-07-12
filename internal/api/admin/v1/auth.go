@@ -2,6 +2,8 @@ package adminv1
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"log"
 	"net/http"
 	"strings"
@@ -165,6 +167,83 @@ func (s *Server) oauthCallback(ctx context.Context, input *OAuthCallbackInput) (
 		RefreshToken: refresh,
 		User:         user,
 	}}, nil
+}
+
+// oauthRedirect handles GET /auth/oauth/{provider}/redirect.
+//
+// It initiates the OAuth authorization flow by generating a random state token,
+// constructing the provider's authorize URL, and emitting a 302 redirect.
+//
+// Deviation from legacy handleOAuthRedirect: when X-Forwarded-Proto is absent,
+// the legacy handler defaulted to "http" unless r.TLS != nil. The typed handler
+// cannot access r.TLS, so it defaults to "https". Modern operators use TLS or a
+// reverse proxy that sets X-Forwarded-Proto.
+func (s *Server) oauthRedirect(ctx context.Context, input *OAuthRedirectInput) (*OAuthRedirectOutput, error) {
+	if s == nil || s.Config == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "auth handlers are not configured", nil)
+	}
+
+	callbackURL := s.oauthCallbackURL(input)
+	state := generateOAuthState()
+	if isValidReturnTo(input.ReturnTo) {
+		state = state + "|" + input.ReturnTo
+	}
+
+	var authURL string
+	switch input.Provider {
+	case OAuthProviderGitHub:
+		if s.Config.Auth.OAuth.GitHub.ClientID == "" {
+			return nil, contract.NewError(http.StatusNotImplemented, "not_configured", "GitHub OAuth not configured", nil)
+		}
+		gh := auth.NewGitHubOAuth(s.Config.Auth.OAuth.GitHub.ClientID, s.Config.Auth.OAuth.GitHub.ClientSecret, "")
+		authURL = gh.AuthCodeURL(state, callbackURL)
+	case OAuthProviderGoogle:
+		if s.Config.Auth.OAuth.Google.ClientID == "" {
+			return nil, contract.NewError(http.StatusNotImplemented, "not_configured", "Google OAuth not configured", nil)
+		}
+		g := auth.NewGoogleOAuth(s.Config.Auth.OAuth.Google.ClientID, s.Config.Auth.OAuth.Google.ClientSecret, "")
+		authURL = g.AuthCodeURL(state, callbackURL)
+	case OAuthProviderOIDC:
+		if s.Config.Auth.OAuth.OIDC.IssuerURL == "" {
+			return nil, contract.NewError(http.StatusNotImplemented, "not_configured", "OIDC not configured", nil)
+		}
+		p, err := auth.NewOIDCProvider(ctx, s.Config.Auth.OAuth.OIDC.IssuerURL, s.Config.Auth.OAuth.OIDC.ClientID, s.Config.Auth.OAuth.OIDC.ClientSecret, callbackURL)
+		if err != nil {
+			return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to initialize OIDC", nil)
+		}
+		authURL = p.AuthCodeURL(state, callbackURL)
+	default:
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", "unsupported provider", nil)
+	}
+
+	return &OAuthRedirectOutput{
+		Status:   http.StatusFound,
+		Location: authURL,
+	}, nil
+}
+
+// oauthCallbackURL returns the OAuth callback URL for this provider.
+// For OIDC, the configured RedirectURI is used when set. Otherwise the
+// URL is constructed from the X-Forwarded-Proto and Host headers.
+func (s *Server) oauthCallbackURL(input *OAuthRedirectInput) string {
+	if input.Provider == OAuthProviderOIDC && s.Config.Auth.OAuth.OIDC.RedirectURI != "" {
+		return s.Config.Auth.OAuth.OIDC.RedirectURI
+	}
+	scheme := input.XForwardedProto
+	if scheme == "" {
+		// Default to https; operators without TLS termination in front should
+		// set X-Forwarded-Proto explicitly. This is a documented deviation
+		// from the legacy handler, which defaulted to http.
+		scheme = "https"
+	}
+	return scheme + "://" + input.Host + "/auth/callback/" + string(input.Provider)
+}
+
+// generateOAuthState generates a 16-byte cryptographically random hex state token.
+func generateOAuthState() string {
+	stateBytes := make([]byte, 16)
+	_, _ = rand.Read(stateBytes)
+	return hex.EncodeToString(stateBytes)
 }
 
 // exchangeOAuthCode dispatches the OAuth code exchange to the appropriate

@@ -3,9 +3,12 @@ package adminv1
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/auth"
 	"github.com/modelserver/modelserver/internal/config"
@@ -179,6 +182,48 @@ func TestOAuthCallbackRejectsUnconfiguredOIDCProvider(t *testing.T) {
 // Note: exchange failures against a real provider require network access.
 // Coverage of the OAuth exchange itself lives at the auth package level.
 // This batch's tests exercise the routing and dispatch decisions only.
+
+func TestOAuthRedirectRoutesReturn302(t *testing.T) {
+	t.Parallel()
+	router := chi.NewRouter()
+	api := contract.NewAdminAPI(router, contract.APIOptions{})
+	Register(api, &Server{
+		Config: &config.Config{
+			Auth: config.AuthConfig{OAuth: config.OAuthConfig{
+				GitHub: config.OAuthProviderConfig{ClientID: "abc", ClientSecret: "def"},
+			}},
+		},
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/github/redirect", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Host", "api.example.com")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302; body = %s", recorder.Code, recorder.Body.String())
+	}
+	if loc := recorder.Header().Get("Location"); loc == "" {
+		t.Fatal("Location header is empty")
+	}
+}
+
+func TestOAuthRedirectUnknownProvider(t *testing.T) {
+	t.Parallel()
+	s := &Server{Config: &config.Config{}}
+	input := &OAuthRedirectInput{Provider: OAuthProvider("facebook")}
+	_, err := s.oauthRedirect(context.Background(), input)
+	assertStatusError(t, err, 400, "bad_request")
+}
+
+func TestOAuthRedirectNotConfigured(t *testing.T) {
+	t.Parallel()
+	s := &Server{Config: &config.Config{}}
+	input := &OAuthRedirectInput{Provider: OAuthProviderGitHub}
+	_, err := s.oauthRedirect(context.Background(), input)
+	assertStatusError(t, err, 501, "not_configured")
+}
 
 // assertStatusError extracts the HTTP status and code from a contract error.
 func assertStatusError(t *testing.T, err error, wantStatus int, wantCode string) {
