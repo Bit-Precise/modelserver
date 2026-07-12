@@ -39,9 +39,11 @@ func (s *fakePlansStore) DeletePlan(string) error                 { return nil }
 type fakeCatalog struct {
 	normalizeErr     error
 	normalizeUnknown []string
+	lastNames        []string
 }
 
 func (c *fakeCatalog) NormalizeNames(names []string) ([]string, error) {
+	c.lastNames = append([]string(nil), names...)
 	if len(c.normalizeUnknown) > 0 {
 		return nil, &modelcatalog.UnknownModelsError{Names: c.normalizeUnknown}
 	}
@@ -226,7 +228,8 @@ func TestCreatePlanUnknownModelInRates(t *testing.T) {
 func TestCreatePlanDefaultSentinelPreserved(t *testing.T) {
 	t.Parallel()
 	store := &fakePlansStore{}
-	s := newPlansServer(t, store, &fakeCatalog{})
+	catalog := &fakeCatalog{}
+	s := newPlansServer(t, store, catalog)
 	input := &CreatePlanInput{}
 	input.Body.Name = "My Plan"
 	input.Body.Slug = "my-plan"
@@ -248,6 +251,13 @@ func TestCreatePlanDefaultSentinelPreserved(t *testing.T) {
 	}
 	if rate.InputRate != 2.5 || rate.OutputRate != 5.0 {
 		t.Errorf("_default rate = %+v, want {InputRate:2.5 OutputRate:5.0}", rate)
+	}
+
+	// Verify that _default was excluded from NormalizeNames call.
+	for _, n := range catalog.lastNames {
+		if n == "_default" {
+			t.Errorf("NormalizeNames was called with _default sentinel; sentinel must be skipped: %v", catalog.lastNames)
+		}
 	}
 }
 

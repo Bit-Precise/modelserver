@@ -37,7 +37,7 @@ type CreatePlanOutput struct {
 // createPlan implements POST /api/v1/plans.
 // Behavior preserved byte-for-byte from internal/admin/handle_plans.go:81-138.
 func (s *Server) createPlan(_ context.Context, in *CreatePlanInput) (*CreatePlanOutput, error) {
-	if s == nil || s.Plans == nil {
+	if s == nil || s.Plans == nil || s.Catalog == nil {
 		return nil, contract.NewError(http.StatusInternalServerError, "internal", "plan management store is not configured", nil)
 	}
 
