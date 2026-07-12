@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/auth"
+	"github.com/modelserver/modelserver/internal/config"
 	"github.com/modelserver/modelserver/internal/types"
 )
 
@@ -119,6 +120,37 @@ func TestRefreshSuccess(t *testing.T) {
 		t.Fatalf("refresh must not set redirect_to; got %q", out.Body.RedirectTo)
 	}
 }
+
+func TestOAuthCallbackRejectsUnknownProvider(t *testing.T) {
+	t.Parallel()
+	s := &Server{
+		Auth:   &fakeAuthStore{},
+		Config: &config.Config{},
+		JWT:    auth.NewJWTManager("test-secret-at-least-32-characters-long", time.Minute, time.Hour),
+	}
+	input := &OAuthCallbackInput{Provider: OAuthProvider("facebook")}
+	input.Body.Code = "code"
+	_, err := s.oauthCallback(context.Background(), input)
+	assertStatusError(t, err, 400, "bad_request")
+}
+
+func TestOAuthCallbackRejectsUnconfiguredProvider(t *testing.T) {
+	t.Parallel()
+	// GitHub client ID unset -> 501 not_configured.
+	s := &Server{
+		Auth:   &fakeAuthStore{},
+		Config: &config.Config{},
+		JWT:    auth.NewJWTManager("test-secret-at-least-32-characters-long", time.Minute, time.Hour),
+	}
+	input := &OAuthCallbackInput{Provider: OAuthProviderGitHub}
+	input.Body.Code = "code"
+	_, err := s.oauthCallback(context.Background(), input)
+	assertStatusError(t, err, 501, "not_configured")
+}
+
+// Note: exchange failures against a real provider require network access.
+// Coverage of the OAuth exchange itself lives at the auth package level.
+// This batch's tests exercise the routing and dispatch decisions only.
 
 // assertStatusError extracts the HTTP status and code from a contract error.
 func assertStatusError(t *testing.T, err error, wantStatus int, wantCode string) {
