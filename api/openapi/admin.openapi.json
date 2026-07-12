@@ -957,18 +957,9 @@
           {
             "description": "Forwarded protocol scheme from reverse proxy.",
             "in": "header",
-            "name": "X-Forwarded-Proto,omitempty",
+            "name": "X-Forwarded-Proto",
             "schema": {
               "description": "Forwarded protocol scheme from reverse proxy.",
-              "type": "string"
-            }
-          },
-          {
-            "description": "HTTP Host header for callback URL construction.",
-            "in": "header",
-            "name": "Host,omitempty",
-            "schema": {
-              "description": "HTTP Host header for callback URL construction.",
               "type": "string"
             }
           }

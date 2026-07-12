@@ -65,8 +65,17 @@ type OAuthCallbackOutput struct {
 type OAuthRedirectInput struct {
 	Provider        OAuthProvider `path:"provider" doc:"OAuth provider identifier."`
 	ReturnTo        string        `query:"return_to,omitempty" doc:"Optional Hydra login return URL. Only /oauth/login-prefixed values are honored."`
-	XForwardedProto string        `header:"X-Forwarded-Proto,omitempty" doc:"Forwarded protocol scheme from reverse proxy."`
-	Host            string        `header:"Host,omitempty" doc:"HTTP Host header for callback URL construction."`
+	XForwardedProto string        `header:"X-Forwarded-Proto" doc:"Forwarded protocol scheme from reverse proxy."`
+	host            string
+}
+
+// Resolve is a Huma hook that fires after standard binding. It populates the
+// unexported host from the runtime context, which is where Go's net/http puts
+// the incoming Host header (r.Host) as opposed to r.Header, which no longer
+// contains it after ReadRequest.
+func (i *OAuthRedirectInput) Resolve(ctx huma.Context) []error {
+	i.host = ctx.Host()
+	return nil
 }
 
 // OAuthRedirectOutput streams a 302 redirect to the provider's authorize URL.
@@ -238,7 +247,7 @@ func (s *Server) oauthCallbackURL(input *OAuthRedirectInput) string {
 		// from the legacy handler, which defaulted to http.
 		scheme = "https"
 	}
-	return scheme + "://" + input.Host + "/auth/callback/" + string(input.Provider)
+	return scheme + "://" + input.host + "/auth/callback/" + string(input.Provider)
 }
 
 // generateOAuthState generates a 16-byte cryptographically random hex state token.

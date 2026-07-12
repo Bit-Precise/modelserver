@@ -588,9 +588,7 @@ export interface operations {
             };
             header?: {
                 /** @description Forwarded protocol scheme from reverse proxy. */
-                "X-Forwarded-Proto,omitempty"?: string;
-                /** @description HTTP Host header for callback URL construction. */
-                "Host,omitempty"?: string;
+                "X-Forwarded-Proto"?: string;
             };
             path: {
                 /** @description OAuth provider identifier. */

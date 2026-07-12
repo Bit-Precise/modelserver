@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -198,14 +199,28 @@ func TestOAuthRedirectRoutesReturn302(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/github/redirect", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
-	req.Header.Set("Host", "api.example.com")
+	// Set req.Host (the struct field) — not just the header — because Go's
+	// net/http stores the Host on r.Host after ReadRequest, not in r.Header.
+	// Huma's ctx.Host() reads r.Host, so this is the authoritative way to
+	// set it in tests.
+	req.Host = "api.example.com"
 	router.ServeHTTP(recorder, req)
 
 	if recorder.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302; body = %s", recorder.Code, recorder.Body.String())
 	}
-	if loc := recorder.Header().Get("Location"); loc == "" {
+	loc := recorder.Header().Get("Location")
+	if loc == "" {
 		t.Fatal("Location header is empty")
+	}
+	parsed, err := url.Parse(loc)
+	if err != nil {
+		t.Fatalf("Location %q does not parse: %v", loc, err)
+	}
+	redirectURI := parsed.Query().Get("redirect_uri")
+	wantRedirect := "https://api.example.com/auth/callback/github"
+	if redirectURI != wantRedirect {
+		t.Errorf("redirect_uri = %q, want %q (bug: input.Host or input.XForwardedProto did not bind)", redirectURI, wantRedirect)
 	}
 }
 
