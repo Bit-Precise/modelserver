@@ -2,12 +2,15 @@ package adminv1
 
 import (
 	"context"
+	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/authz"
+	"github.com/modelserver/modelserver/internal/ratelimit"
 	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
 )
@@ -92,6 +95,18 @@ func registerAdminReadOperations(api huma.API, server *Server) {
 		Access:        requestsAccess,
 		Authorize:     server.authorizationMiddleware,
 	}, server.listAllRequests)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "adminProjectsSubscriptionsOverview",
+		Method:        http.MethodGet,
+		Path:          "/api/v1/admin/projects/subscriptions-overview",
+		Summary:       "Get subscriptions overview for projects",
+		Tags:          []string{"Admin"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        projectsAccess,
+		Authorize:     server.authorizationMiddleware,
+	}, server.adminProjectsSubscriptionsOverview)
 }
 
 // listAllProjects handles GET /api/v1/admin/projects with optional filters.
@@ -126,6 +141,44 @@ func (s *Server) listAllProjects(_ context.Context, input *ListAllProjectsInput)
 		Data: items,
 		Meta: paginationMeta(total, pagination),
 	}}, nil
+}
+
+// ProjectOwnerSnapshot is the minimal owner info returned in the subscriptions
+// overview. Exported so it appears in the OpenAPI schema.
+type ProjectOwnerSnapshot struct {
+	ID       string `json:"id"`
+	Email    string `json:"email,omitempty"`
+	Nickname string `json:"nickname,omitempty"`
+	Picture  string `json:"picture,omitempty"`
+}
+
+// ProjectSubscriptionOverview is the per-project payload returned by the
+// admin subscriptions-overview endpoint. Exported for OpenAPI schema.
+type ProjectSubscriptionOverview struct {
+	ProjectID   string                         `json:"project_id"`
+	PlanID      string                         `json:"plan_id,omitempty"`
+	PlanName    string                         `json:"plan_name,omitempty"`
+	DisplayName string                         `json:"display_name,omitempty"`
+	Windows     []ratelimit.CreditWindowStatus `json:"windows" nullable:"false"`
+	Owner       *ProjectOwnerSnapshot          `json:"owner,omitempty"`
+	// PeriodCreditsK is credits consumed since the active subscription's
+	// StartsAt, rounded to integer thousands. Absent when there is no
+	// active subscription.
+	PeriodCreditsK *int64 `json:"period_credits_k,omitempty"`
+}
+
+// AdminProjectsSubscriptionsOverviewInput represents the query parameters for
+// GET /api/v1/admin/projects/subscriptions-overview.
+type AdminProjectsSubscriptionsOverviewInput struct {
+	ProjectIDs string `query:"project_ids,omitempty" doc:"Comma-separated project IDs."`
+}
+
+// AdminProjectsSubscriptionsOverviewOutput represents the response envelope for
+// GET /api/v1/admin/projects/subscriptions-overview.
+type AdminProjectsSubscriptionsOverviewOutput struct {
+	Body struct {
+		Data []ProjectSubscriptionOverview `json:"data" nullable:"false"`
+	}
 }
 
 // listAllRequests handles GET /api/v1/admin/requests with optional filters.
@@ -169,4 +222,176 @@ func (s *Server) listAllRequests(_ context.Context, input *ListAllRequestsInput)
 		Data: requests,
 		Meta: paginationMeta(total, pagination),
 	}}, nil
+}
+
+// adminProjectsSubscriptionsOverview handles
+// GET /api/v1/admin/projects/subscriptions-overview.
+// Returns active subscription + credit window usage for many projects in a
+// single response. Query param: project_ids (comma-separated). Empty → 200 {data:[]}.
+func (s *Server) adminProjectsSubscriptionsOverview(_ context.Context, input *AdminProjectsSubscriptionsOverviewInput) (*AdminProjectsSubscriptionsOverviewOutput, error) {
+	if s == nil || s.AdminSuper == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "admin store is not configured", nil)
+	}
+
+	raw := strings.TrimSpace(input.ProjectIDs)
+	empty := &AdminProjectsSubscriptionsOverviewOutput{}
+	empty.Body.Data = []ProjectSubscriptionOverview{}
+	if raw == "" {
+		return empty, nil
+	}
+	projectIDs := make([]string, 0, 16)
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			projectIDs = append(projectIDs, id)
+		}
+	}
+	if len(projectIDs) == 0 {
+		return empty, nil
+	}
+
+	activeSubs, err := s.AdminSuper.GetActiveSubscriptionsByProjectIDs(projectIDs)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to load subscriptions", nil)
+	}
+
+	owners, err := s.AdminSuper.GetProjectOwnersByProjectIDs(projectIDs)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to load project owners", nil)
+	}
+
+	// Per-project credits since the active subscription's StartsAt.
+	// Projects without an active subscription are simply omitted.
+	periodStarts := make(map[string]time.Time, len(activeSubs))
+	for pid, sub := range activeSubs {
+		if sub != nil {
+			periodStarts[pid] = sub.StartsAt
+		}
+	}
+	periodCredits, err := s.AdminSuper.SumCreditsSinceByProjects(periodStarts)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to load period credits", nil)
+	}
+
+	plans, err := s.AdminSuper.ListPlans(false)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to load plans", nil)
+	}
+	// subscription.PlanName stores the plan slug. Plan.Name is the human-facing tier name.
+	plansBySlug := make(map[string]*types.Plan, len(plans))
+	for i := range plans {
+		plansBySlug[plans[i].Slug] = &plans[i]
+	}
+
+	// Bucket (projectID, rule) by windowStart so we can issue one aggregate
+	// query per unique window start across all projects.
+	type ruleRef struct {
+		window      string
+		maxCred     int64
+		windowTyp   string
+		anchor      *time.Time
+		windowStart time.Time
+	}
+	bucketsByStart := make(map[time.Time]map[string]struct{}) // windowStart -> set of projectIDs
+	rulesByProject := make(map[string][]ruleRef, len(projectIDs))
+
+	for _, pid := range projectIDs {
+		sub := activeSubs[pid]
+		if sub == nil {
+			continue
+		}
+		plan := plansBySlug[sub.PlanName]
+		if plan == nil {
+			continue
+		}
+		policy := plan.ToPolicy(pid, &sub.StartsAt)
+		for _, rule := range policy.CreditRules {
+			ws := ratelimit.WindowStartTime(rule.Window, rule.WindowType, rule.AnchorTime)
+			if bucketsByStart[ws] == nil {
+				bucketsByStart[ws] = make(map[string]struct{})
+			}
+			bucketsByStart[ws][pid] = struct{}{}
+			rulesByProject[pid] = append(rulesByProject[pid], ruleRef{
+				window:      rule.Window,
+				maxCred:     rule.MaxCredits,
+				windowTyp:   rule.WindowType,
+				anchor:      rule.AnchorTime,
+				windowStart: ws,
+			})
+		}
+	}
+
+	// One SUM query per unique windowStart across all projects in that bucket.
+	// Keyed by (projectID, windowStart) so duplicate window names on the
+	// same project (rare but possible) don't collide.
+	type usageKey struct {
+		projectID   string
+		windowStart time.Time
+	}
+	usedByRule := make(map[usageKey]float64)
+	for ws, pidSet := range bucketsByStart {
+		pids := make([]string, 0, len(pidSet))
+		for pid := range pidSet {
+			pids = append(pids, pid)
+		}
+		sums, err := s.AdminSuper.SumCreditsInWindowByProjects(pids, ws)
+		if err != nil {
+			// Silently ignored per legacy behavior — the row shows 0 used.
+			continue
+		}
+		for pid, total := range sums {
+			usedByRule[usageKey{pid, ws}] = total
+		}
+	}
+
+	out := make([]ProjectSubscriptionOverview, 0, len(projectIDs))
+	for _, pid := range projectIDs {
+		row := ProjectSubscriptionOverview{ProjectID: pid, Windows: []ratelimit.CreditWindowStatus{}}
+		sub := activeSubs[pid]
+		if sub != nil {
+			row.PlanID = sub.PlanID
+			row.PlanName = sub.PlanName
+			if plan := plansBySlug[sub.PlanName]; plan != nil {
+				row.DisplayName = plan.DisplayName
+			}
+		}
+		if owner := owners[pid]; owner != nil {
+			row.Owner = &ProjectOwnerSnapshot{
+				ID:       owner.ID,
+				Email:    owner.Email,
+				Nickname: owner.Nickname,
+				Picture:  owner.Picture,
+			}
+		}
+		if sub != nil {
+			// Round to integer thousands at the API boundary.
+			k := int64(math.Round(periodCredits[pid] / 1000))
+			row.PeriodCreditsK = &k
+		}
+		for _, rr := range rulesByProject[pid] {
+			used := usedByRule[usageKey{pid, rr.windowStart}]
+			percentage := 0.0
+			if rr.maxCred > 0 {
+				percentage = (used / float64(rr.maxCred)) * 100
+				if percentage > 100 {
+					percentage = 100
+				}
+			}
+			percentage = math.Round(percentage*100) / 100
+			s := ratelimit.CreditWindowStatus{
+				Window:     rr.window,
+				Percentage: percentage,
+			}
+			if rr.windowTyp == types.WindowTypeCalendar || rr.windowTyp == types.WindowTypeFixed {
+				resetDur := ratelimit.WindowResetDuration(rr.window, rr.windowTyp, rr.anchor)
+				s.ResetsAt = time.Now().UTC().Add(resetDur).Format(time.RFC3339)
+			}
+			row.Windows = append(row.Windows, s)
+		}
+		out = append(out, row)
+	}
+
+	output := &AdminProjectsSubscriptionsOverviewOutput{}
+	output.Body.Data = out
+	return output, nil
 }

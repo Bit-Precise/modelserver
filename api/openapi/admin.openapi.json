@@ -1,6 +1,21 @@
 {
   "components": {
     "schemas": {
+      "AdminProjectsSubscriptionsOverviewOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectSubscriptionOverview"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
       "AuthConfig": {
         "additionalProperties": false,
         "properties": {
@@ -250,6 +265,26 @@
           "window",
           "window_type",
           "max_credits"
+        ],
+        "type": "object"
+      },
+      "CreditWindowStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "percentage": {
+            "format": "double",
+            "type": "number"
+          },
+          "resets_at": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "window",
+          "percentage"
         ],
         "type": "object"
       },
@@ -1041,6 +1076,62 @@
         ],
         "type": "object"
       },
+      "ProjectOwnerSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "nickname": {
+            "type": "string"
+          },
+          "picture": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "ProjectSubscriptionOverview": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/ProjectOwnerSnapshot"
+          },
+          "period_credits_k": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "plan_name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/CreditWindowStatus"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "project_id",
+          "windows"
+        ],
+        "type": "object"
+      },
       "RefreshInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -1538,6 +1629,90 @@
           }
         ],
         "summary": "List all projects",
+        "tags": [
+          "Admin"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.projects.read",
+          "superadmin": "required"
+        }
+      }
+    },
+    "/api/v1/admin/projects/subscriptions-overview": {
+      "get": {
+        "operationId": "adminProjectsSubscriptionsOverview",
+        "parameters": [
+          {
+            "description": "Comma-separated project IDs.",
+            "explode": false,
+            "in": "query",
+            "name": "project_ids",
+            "schema": {
+              "description": "Comma-separated project IDs.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProjectsSubscriptionsOverviewOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Get subscriptions overview for projects",
         "tags": [
           "Admin"
         ],

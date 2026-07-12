@@ -58,6 +58,7 @@ type adminSuperStore interface {
 	GetActiveSubscriptionsByProjectIDs(projectIDs []string) (map[string]*types.Subscription, error)
 	GetProjectOwnersByProjectIDs(projectIDs []string) (map[string]*types.User, error)
 	SumCreditsSinceByProjects(periodStarts map[string]time.Time) (map[string]float64, error)
+	SumCreditsInWindowByProjects(projectIDs []string, windowStart time.Time) (map[string]float64, error)
 	ListPlans(activeOnly bool) ([]types.Plan, error)
 	ListAllRequests(p types.PaginationParams, filters store.RequestFilters) ([]types.Request, int, error)
 	GetRequest(id string) (*types.Request, error)

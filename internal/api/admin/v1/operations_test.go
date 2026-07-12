@@ -161,6 +161,7 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 		"/api/v1/models/{name}",
 		"/api/v1/admin/projects",
 		"/api/v1/admin/requests",
+		"/api/v1/admin/projects/subscriptions-overview",
 	}
 	expectedPostPaths := []string{
 		"/api/v1/auth/refresh",
