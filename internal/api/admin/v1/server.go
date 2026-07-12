@@ -34,6 +34,9 @@ type Server struct {
 	Users     userReadStore
 	Plans     planReadStore
 	Tokens    tokenValidator
+	Auth      authStore
+	JWT       *auth.JWTManager
+	EncKey    []byte
 	Config    *config.Config
 	Resolvers map[string]authz.ResourceResolver
 	Policies  map[authz.PolicyID]authz.Policy
