@@ -184,6 +184,7 @@ func Register(api huma.API, server *Server) {
 	registerPlanWriteOperations(api, server)
 	registerModelOperations(api, server)
 	registerAdminReadOperations(api, server)
+	registerNotificationOperations(api, server)
 }
 
 
