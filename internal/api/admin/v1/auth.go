@@ -1,8 +1,12 @@
 package adminv1
 
 import (
+	"context"
+	"net/http"
+
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/types"
 )
 
@@ -65,4 +69,34 @@ type OAuthRedirectInput struct {
 type OAuthRedirectOutput struct {
 	Status   int    `header:"-" json:"-"`
 	Location string `header:"Location" doc:"Provider authorize URL."`
+}
+
+func (s *Server) refresh(_ context.Context, input *RefreshInput) (*RefreshOutput, error) {
+	if s == nil || s.Auth == nil || s.Tokens == nil || s.JWT == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "auth handlers are not configured", nil)
+	}
+
+	claims, err := s.Tokens.ValidateToken(input.Body.RefreshToken)
+	if err != nil || claims == nil {
+		return nil, contract.NewError(http.StatusUnauthorized, "unauthorized", "invalid refresh token", nil)
+	}
+	if claims.TokenType != "refresh" {
+		return nil, contract.NewError(http.StatusUnauthorized, "unauthorized", "expected refresh token", nil)
+	}
+
+	user, err := s.Auth.GetUserByID(claims.UserID)
+	if err != nil || user == nil || user.Status != types.UserStatusActive {
+		return nil, contract.NewError(http.StatusUnauthorized, "unauthorized", "user not found or disabled", nil)
+	}
+
+	access, refresh, err := s.JWT.GenerateTokenPair(user.ID, user.Email, user.IsSuperadmin)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to generate tokens", nil)
+	}
+
+	return &RefreshOutput{Body: authTokensBody{
+		AccessToken:  access,
+		RefreshToken: refresh,
+		User:         user,
+	}}, nil
 }
