@@ -79,16 +79,6 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 		r.Group(func(r chi.Router) {
 			r.Use(JWTAuthMiddleware(jwtMgr, st))
 
-			// Users (superadmin only).
-			r.Route("/users", func(r chi.Router) {
-				r.Use(RequireSuperadmin)
-			})
-
-			// Plans (superadmin only).
-			r.Route("/plans", func(r chi.Router) {
-				r.Use(RequireSuperadmin)
-			})
-
 			// Model catalog (superadmin only).
 			r.Route("/models", func(r chi.Router) {
 				r.Use(RequireSuperadmin)
