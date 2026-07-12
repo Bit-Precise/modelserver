@@ -520,6 +520,25 @@
         ],
         "type": "object"
       },
+      "ListResponseRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Request"
+            },
+            "type": "array"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "ListResponseUser": {
         "additionalProperties": false,
         "properties": {
@@ -1036,6 +1055,145 @@
         ],
         "type": "object"
       },
+      "Request": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "cache_creation_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "client_ip": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "created_by_nickname": {
+            "type": "string"
+          },
+          "created_by_picture": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
+          },
+          "extra_usage_cost_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "extra_usage_reason": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "http_log_path": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "input_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "is_extra_usage": {
+            "type": "boolean"
+          },
+          "latency_ms": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "model": {
+            "type": "string"
+          },
+          "msg_id": {
+            "type": "string"
+          },
+          "oauth_grant_client_name": {
+            "type": "string"
+          },
+          "oauth_grant_id": {
+            "type": "string"
+          },
+          "output_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "request_kind": {
+            "type": "string"
+          },
+          "retry_reason": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "selection_ms": {
+            "format": "double",
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "streaming": {
+            "type": "boolean"
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "ttft_ms": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "upstream_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "api_key_id",
+          "model",
+          "streaming",
+          "status",
+          "input_tokens",
+          "output_tokens",
+          "cache_creation_tokens",
+          "cache_read_tokens",
+          "latency_ms",
+          "ttft_ms",
+          "created_at"
+        ],
+        "type": "object"
+      },
       "UpdateModelInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -1254,6 +1412,314 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/projects": {
+      "get": {
+        "operationId": "listAllProjects",
+        "parameters": [
+          {
+            "explode": false,
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 1,
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "per_page",
+            "schema": {
+              "default": 20,
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "default": "created_at",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "project_id",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "owner",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponseProject"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "List all projects",
+        "tags": [
+          "Admin"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.projects.read",
+          "superadmin": "required"
+        }
+      }
+    },
+    "/api/v1/admin/requests": {
+      "get": {
+        "operationId": "listAllRequests",
+        "parameters": [
+          {
+            "explode": false,
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 1,
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "per_page",
+            "schema": {
+              "default": 20,
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "default": "created_at",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "model",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "request_kind",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "created_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "RFC3339 lower bound (inclusive)",
+            "explode": false,
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "description": "RFC3339 lower bound (inclusive)",
+              "type": "string"
+            }
+          },
+          {
+            "description": "RFC3339 upper bound (inclusive)",
+            "explode": false,
+            "in": "query",
+            "name": "until",
+            "schema": {
+              "description": "RFC3339 upper bound (inclusive)",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponseRequest"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "List all requests",
+        "tags": [
+          "Admin"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.requests.read",
+          "superadmin": "required"
+        }
+      }
+    },
     "/api/v1/auth/config": {
       "get": {
         "description": "Returns the public OAuth provider and login-page configuration.",

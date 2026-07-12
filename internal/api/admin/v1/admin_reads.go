@@ -33,7 +33,7 @@ func (input *ListAllProjectsInput) pagination() types.PaginationParams {
 
 // ListAllProjectsOutput represents the response envelope for GET /api/v1/admin/projects.
 type ListAllProjectsOutput struct {
-	Body ListResponse[types.Project]
+	Body ListResponse[Project]
 }
 
 // ListAllRequestsInput represents the query parameters for GET /api/v1/admin/requests.
@@ -116,8 +116,14 @@ func (s *Server) listAllProjects(_ context.Context, input *ListAllProjectsInput)
 		projects = []types.Project{}
 	}
 
-	return &ListAllProjectsOutput{Body: ListResponse[types.Project]{
-		Data: projects,
+	// Convert internal types.Project to admin/v1 Project DTO
+	items := make([]Project, len(projects))
+	for i := range projects {
+		items[i] = projectDTO(&projects[i])
+	}
+
+	return &ListAllProjectsOutput{Body: ListResponse[Project]{
+		Data: items,
 		Meta: paginationMeta(total, pagination),
 	}}, nil
 }
