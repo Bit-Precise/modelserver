@@ -1,8 +1,11 @@
 package adminv1
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 
+	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
 )
@@ -82,3 +85,72 @@ type DeleteModelInput struct {
 }
 
 type DeleteModelOutput struct{}
+
+// listModels handles GET /api/v1/models with optional status filter.
+// Behavior:
+// - If input.Status != "": call s.Models.ListModelsByStatus(input.Status)
+// - Else: call s.Models.ListModels()
+// - Error → 500 internal "failed to list models"
+// - For each model, call s.Models.ModelReferenceCountsFor(m.Name).
+//   Error → 500 internal "failed to count references: "+err.Error()
+// - Return {data: [ModelListRow{Model: m, ReferenceCounts: counts}]}
+// - Even if models slice is empty, emit {data: []} (not {data: null})
+func (s *Server) listModels(ctx context.Context, input *ListModelsInput) (*ListModelsOutput, error) {
+	if s == nil || s.Models == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "model management store is not configured", nil)
+	}
+
+	var (
+		models []types.Model
+		err    error
+	)
+	if input.Status != "" {
+		models, err = s.Models.ListModelsByStatus(input.Status)
+	} else {
+		models, err = s.Models.ListModels()
+	}
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to list models", nil)
+	}
+
+	rows := make([]ModelListRow, 0, len(models))
+	for _, m := range models {
+		counts, err := s.Models.ModelReferenceCountsFor(m.Name)
+		if err != nil {
+			return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to count references: "+err.Error(), nil)
+		}
+		rows = append(rows, ModelListRow{Model: m, ReferenceCounts: counts})
+	}
+
+	return &ListModelsOutput{
+		Body: DataResponse[[]ModelListRow]{
+			Data: rows,
+		},
+	}, nil
+}
+
+// getModel handles GET /api/v1/models/{name}.
+// Behavior:
+// - s.Models.GetModelByName(input.Name)
+// - Store error → 500 internal "failed to get model"
+// - Nil model → 404 not_found "model not found"
+// - Happy path → 200 with {data: model}
+func (s *Server) getModel(ctx context.Context, input *GetModelInput) (*GetModelOutput, error) {
+	if s == nil || s.Models == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "model management store is not configured", nil)
+	}
+
+	m, err := s.Models.GetModelByName(input.Name)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to get model", nil)
+	}
+	if m == nil {
+		return nil, contract.NewError(http.StatusNotFound, "not_found", "model not found", nil)
+	}
+
+	return &GetModelOutput{
+		Body: DataResponse[types.Model]{
+			Data: *m,
+		},
+	}, nil
+}
