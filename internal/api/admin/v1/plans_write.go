@@ -216,3 +216,26 @@ func (s *Server) updatePlan(_ context.Context, in *UpdatePlanInput) (*UpdatePlan
 
 	return &UpdatePlanOutput{Body: DataResponse[types.Plan]{Data: *plan}}, nil
 }
+
+// DeletePlanInput is the request for DELETE /api/v1/plans/{planID}.
+type DeletePlanInput struct {
+	PlanID string `path:"planID" doc:"Plan identifier."`
+}
+
+// DeletePlanOutput is an empty response struct for 204 No Content.
+type DeletePlanOutput struct{}
+
+// deletePlan implements DELETE /api/v1/plans/{planID}.
+// Behavior preserved byte-for-byte from internal/admin/handle_plans.go:240-249.
+// No existence check before delete; 204 on success whether plan existed or not.
+func (s *Server) deletePlan(_ context.Context, in *DeletePlanInput) (*DeletePlanOutput, error) {
+	if s == nil || s.Plans == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "plan management store is not configured", nil)
+	}
+
+	if err := s.Plans.DeletePlan(in.PlanID); err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to delete plan", nil)
+	}
+
+	return &DeletePlanOutput{}, nil
+}

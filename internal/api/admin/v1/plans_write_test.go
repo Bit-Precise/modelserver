@@ -3,6 +3,7 @@ package adminv1
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/modelserver/modelserver/internal/api/contract"
@@ -19,6 +20,8 @@ type fakePlansStore struct {
 	updateErr     error
 	lastUpdatedID string
 	lastUpdates   map[string]any
+	deletedID     string
+	deleteErr     error
 }
 
 func (s *fakePlansStore) ListPlansPaginated(types.PaginationParams) ([]types.Plan, int, error) {
@@ -39,7 +42,13 @@ func (s *fakePlansStore) UpdatePlan(id string, updates map[string]any) error {
 	s.lastUpdates = updates
 	return s.updateErr
 }
-func (s *fakePlansStore) DeletePlan(string) error                 { return nil }
+func (s *fakePlansStore) DeletePlan(id string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	s.deletedID = id
+	return nil
+}
 
 // fakeCatalog implements modelcatalog.Catalog for plan write tests.
 // By default NormalizeNames returns names verbatim; set normalizeUnknown
@@ -618,5 +627,41 @@ func TestUpdatePlanOnlyIsActiveFalse(t *testing.T) {
 	}
 	if _, ok := store.lastUpdates["is_active"]; !ok {
 		t.Error("updates map missing 'is_active'")
+	}
+}
+
+// ---- DeletePlan tests (Task 5) ----
+
+// --- DeletePlan Test 1: Store returns error → 500 internal "failed to delete plan" ---
+
+func TestDeletePlanStoreError(t *testing.T) {
+	t.Parallel()
+	store := &fakePlansStore{deleteErr: errors.New("database error")}
+	s := &Server{Plans: store}
+	in := &DeletePlanInput{PlanID: "plan-1"}
+
+	_, err := s.deletePlan(context.Background(), in)
+	assertPlanError(t, err, 500, "internal", "failed to delete plan")
+}
+
+// --- DeletePlan Test 2: Success → 204 No Content, empty output; verify deletedID ---
+
+func TestDeletePlanSuccess(t *testing.T) {
+	t.Parallel()
+	store := &fakePlansStore{}
+	s := &Server{Plans: store}
+	in := &DeletePlanInput{PlanID: "plan-1"}
+
+	out, err := s.deletePlan(context.Background(), in)
+	if err != nil {
+		t.Fatalf("deletePlan() error = %v", err)
+	}
+	if out == nil {
+		t.Fatal("expected non-nil output")
+	}
+
+	// Verify the correct plan ID was deleted.
+	if store.deletedID != "plan-1" {
+		t.Errorf("deletedID = %q, want %q", store.deletedID, "plan-1")
 	}
 }
