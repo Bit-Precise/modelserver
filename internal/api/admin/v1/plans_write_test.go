@@ -2,6 +2,7 @@ package adminv1
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/modelserver/modelserver/internal/api/contract"
@@ -9,12 +10,15 @@ import (
 	"github.com/modelserver/modelserver/internal/types"
 )
 
-// fakePlansStore records CreatePlan calls and satisfies plansStore.
+// fakePlansStore records CreatePlan and UpdatePlan calls and satisfies plansStore.
 type fakePlansStore struct {
-	created   *types.Plan
-	createErr error
-	plan      *types.Plan
-	getErr    error
+	created       *types.Plan
+	createErr     error
+	plan          *types.Plan
+	getErr        error
+	updateErr     error
+	lastUpdatedID string
+	lastUpdates   map[string]any
 }
 
 func (s *fakePlansStore) ListPlansPaginated(types.PaginationParams) ([]types.Plan, int, error) {
@@ -30,7 +34,11 @@ func (s *fakePlansStore) CreatePlan(p *types.Plan) error {
 	s.created = p
 	return nil
 }
-func (s *fakePlansStore) UpdatePlan(string, map[string]any) error { return nil }
+func (s *fakePlansStore) UpdatePlan(id string, updates map[string]any) error {
+	s.lastUpdatedID = id
+	s.lastUpdates = updates
+	return s.updateErr
+}
 func (s *fakePlansStore) DeletePlan(string) error                 { return nil }
 
 // fakeCatalog implements modelcatalog.Catalog for plan write tests.
@@ -335,5 +343,280 @@ func TestCreatePlanHappyPath(t *testing.T) {
 	}
 	if store.created == nil {
 		t.Fatal("plan was not stored via CreatePlan")
+	}
+}
+
+// ---- UpdatePlan tests (Task 4) ----
+
+// newUpdatePlanInput returns an UpdatePlanInput with PlanID pre-set.
+func newUpdatePlanInput(planID string) *UpdatePlanInput {
+	in := &UpdatePlanInput{}
+	in.PlanID = planID
+	return in
+}
+
+// mustRawJSON marshals v to json.RawMessage for building test inputs.
+func mustRawJSON(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("mustRawJSON: %v", err)
+	}
+	return json.RawMessage(b)
+}
+
+// newUpdatePlansServer returns a Server wired with a store that will return
+// planToReturn on GetPlanByID calls, used for success-path tests.
+func newUpdatePlansServer(t *testing.T, store *fakePlansStore, catalog modelcatalog.Catalog, planToReturn *types.Plan) *Server {
+	t.Helper()
+	store.plan = planToReturn
+	return &Server{Plans: store, Catalog: catalog}
+}
+
+// --- UpdatePlan Test 1: Empty body → 400 bad_request "no valid fields to update" ---
+
+func TestUpdatePlanEmptyBody(t *testing.T) {
+	t.Parallel()
+	store := &fakePlansStore{}
+	s := newUpdatePlansServer(t, store, &fakeCatalog{}, nil)
+	in := newUpdatePlanInput("plan-1")
+	// All Body fields are zero/nil — nothing to update.
+
+	_, err := s.updatePlan(context.Background(), in)
+	assertPlanError(t, err, 400, "bad_request", "no valid fields to update")
+}
+
+// --- UpdatePlan Test 2: model_credit_rates with unknown model → 400 unknown_models ---
+
+func TestUpdatePlanUnknownModel(t *testing.T) {
+	t.Parallel()
+	catalog := &fakeCatalog{normalizeUnknown: []string{"gpt-99"}}
+	store := &fakePlansStore{}
+	s := newUpdatePlansServer(t, store, catalog, nil)
+	in := newUpdatePlanInput("plan-1")
+	in.Body.ModelCreditRates = map[string]json.RawMessage{
+		"gpt-99": mustRawJSON(t, map[string]any{"input_rate": 1.0}),
+	}
+
+	_, err := s.updatePlan(context.Background(), in)
+	assertStatusError(t, err, 400, "unknown_model")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	details, ok := env.Payload.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("details is %T, want map[string]any", env.Payload.Details)
+	}
+	unknown, ok := details["unknown"]
+	if !ok {
+		t.Fatal("details missing 'unknown' key")
+	}
+	names, ok := unknown.([]string)
+	if !ok {
+		t.Fatalf("details['unknown'] is %T, want []string", unknown)
+	}
+	if len(names) != 1 || names[0] != "gpt-99" {
+		t.Errorf("unknown names = %v, want [gpt-99]", names)
+	}
+}
+
+// --- UpdatePlan Test 3: _default sentinel in model_credit_rates preserved ---
+
+func TestUpdatePlanDefaultSentinelPreserved(t *testing.T) {
+	t.Parallel()
+	catalog := &fakeCatalog{}
+	store := &fakePlansStore{}
+	returnedPlan := &types.Plan{ID: "plan-1", Name: "Test Plan"}
+	s := newUpdatePlansServer(t, store, catalog, returnedPlan)
+	in := newUpdatePlanInput("plan-1")
+	in.Body.ModelCreditRates = map[string]json.RawMessage{
+		"_default": mustRawJSON(t, map[string]any{"input_rate": 2.5}),
+	}
+
+	_, err := s.updatePlan(context.Background(), in)
+	if err != nil {
+		t.Fatalf("updatePlan() error = %v", err)
+	}
+
+	// _default must not have been passed to NormalizeNames.
+	for _, n := range catalog.lastNames {
+		if n == "_default" {
+			t.Errorf("NormalizeNames was called with _default sentinel: %v", catalog.lastNames)
+		}
+	}
+
+	// The store's updates map must contain model_credit_rates as []byte.
+	val, ok := store.lastUpdates["model_credit_rates"]
+	if !ok {
+		t.Fatal("updates map missing 'model_credit_rates'")
+	}
+	if _, ok := val.([]byte); !ok {
+		t.Errorf("model_credit_rates value is %T, want []byte", val)
+	}
+}
+
+// --- UpdatePlan Test 4: client_model_credit_rates with invalid bucket → 400 bad_request ---
+
+func TestUpdatePlanInvalidClientBucket(t *testing.T) {
+	t.Parallel()
+	store := &fakePlansStore{}
+	s := newUpdatePlansServer(t, store, &fakeCatalog{}, nil)
+	in := newUpdatePlanInput("plan-1")
+	in.Body.ClientModelCreditRates = map[string]json.RawMessage{
+		"not-a-valid-bucket": mustRawJSON(t, map[string]any{"input_rate": 1.0}),
+	}
+
+	_, err := s.updatePlan(context.Background(), in)
+	assertPlanError(t, err, 400, "bad_request", "invalid client bucket in client_model_credit_rates: not-a-valid-bucket")
+}
+
+// --- UpdatePlan Test 5: client_model_credit_rates with all valid buckets → success ---
+
+func TestUpdatePlanValidClientBuckets(t *testing.T) {
+	t.Parallel()
+	store := &fakePlansStore{}
+	returnedPlan := &types.Plan{ID: "plan-1", Name: "Test Plan"}
+	s := newUpdatePlansServer(t, store, &fakeCatalog{}, returnedPlan)
+	in := newUpdatePlanInput("plan-1")
+	in.Body.ClientModelCreditRates = map[string]json.RawMessage{
+		types.ClientBucketClaudeCodeCLI: mustRawJSON(t, map[string]any{"input_rate": 1.0}),
+		types.ClientBucketClaudeDesktop: mustRawJSON(t, map[string]any{"input_rate": 2.0}),
+		types.ClientBucketOther:         mustRawJSON(t, map[string]any{"input_rate": 0.5}),
+	}
+
+	_, err := s.updatePlan(context.Background(), in)
+	if err != nil {
+		t.Fatalf("updatePlan() error = %v", err)
+	}
+
+	// Verify client_model_credit_rates is stored as []byte.
+	val, ok := store.lastUpdates["client_model_credit_rates"]
+	if !ok {
+		t.Fatal("updates map missing 'client_model_credit_rates'")
+	}
+	if _, ok := val.([]byte); !ok {
+		t.Errorf("client_model_credit_rates value is %T, want []byte", val)
+	}
+}
+
+// --- UpdatePlan Test 6: Invalid credit_rules (fixed window with month) → 400 bad_request ---
+
+func TestUpdatePlanInvalidCreditRules(t *testing.T) {
+	t.Parallel()
+	store := &fakePlansStore{}
+	s := newUpdatePlansServer(t, store, &fakeCatalog{}, nil)
+	in := newUpdatePlanInput("plan-1")
+	in.Body.CreditRules = mustRawJSON(t, []map[string]any{
+		{"window": "1M", "window_type": "fixed", "max_credits": 1000},
+	})
+
+	_, err := s.updatePlan(context.Background(), in)
+	wantMsg := `month-based window "1M" is not supported with window_type "fixed" — use duration-based intervals like "7d"`
+	assertPlanError(t, err, 400, "bad_request", wantMsg)
+}
+
+// --- UpdatePlan Test 7: Happy path all fields → 200; complex fields stored as []byte ---
+
+func TestUpdatePlanHappyPathAllFields(t *testing.T) {
+	t.Parallel()
+	store := &fakePlansStore{}
+	returnedPlan := &types.Plan{ID: "plan-1", Name: "Updated Plan", IsActive: true}
+	s := newUpdatePlansServer(t, store, &fakeCatalog{}, returnedPlan)
+
+	name := "Updated Plan"
+	slug := "updated-plan"
+	displayName := "Updated"
+	description := "New description"
+	tierLevel := 3
+	groupTag := "premium"
+	priceCNYFen := int64(19900)
+	priceUSDCents := int64(2999)
+	periodMonths := 12
+	isActive := true
+
+	in := newUpdatePlanInput("plan-1")
+	in.Body.Name = &name
+	in.Body.Slug = &slug
+	in.Body.DisplayName = &displayName
+	in.Body.Description = &description
+	in.Body.TierLevel = &tierLevel
+	in.Body.GroupTag = &groupTag
+	in.Body.PriceCNYFen = &priceCNYFen
+	in.Body.PriceUSDCents = &priceUSDCents
+	in.Body.PeriodMonths = &periodMonths
+	in.Body.IsActive = &isActive
+	in.Body.CreditRules = mustRawJSON(t, []map[string]any{
+		{"window": "7d", "window_type": "fixed", "max_credits": 100000},
+	})
+	in.Body.ClassicRules = mustRawJSON(t, []map[string]any{
+		{"metric": "rpm", "limit": 60},
+	})
+	in.Body.ModelCreditRates = map[string]json.RawMessage{
+		"claude-3-opus": mustRawJSON(t, map[string]any{"input_rate": 1.0, "output_rate": 2.0}),
+	}
+	in.Body.ClientModelCreditRates = map[string]json.RawMessage{
+		types.ClientBucketOther: mustRawJSON(t, map[string]any{"input_rate": 0.5}),
+	}
+
+	out, err := s.updatePlan(context.Background(), in)
+	if err != nil {
+		t.Fatalf("updatePlan() error = %v", err)
+	}
+	if out == nil {
+		t.Fatal("expected non-nil output")
+	}
+	if out.Body.Data.Name != "Updated Plan" {
+		t.Errorf("plan.Name = %q, want %q", out.Body.Data.Name, "Updated Plan")
+	}
+
+	// Assert scalar fields are in updates map with correct types.
+	scalarFields := []string{"name", "slug", "display_name", "description", "tier_level",
+		"group_tag", "price_cny_fen", "price_usd_cents", "period_months", "is_active"}
+	for _, f := range scalarFields {
+		if _, ok := store.lastUpdates[f]; !ok {
+			t.Errorf("updates map missing scalar field %q", f)
+		}
+	}
+
+	// Assert complex fields are stored as []byte.
+	for _, f := range []string{"credit_rules", "classic_rules", "model_credit_rates", "client_model_credit_rates"} {
+		val, ok := store.lastUpdates[f]
+		if !ok {
+			t.Errorf("updates map missing complex field %q", f)
+			continue
+		}
+		if _, ok := val.([]byte); !ok {
+			t.Errorf("updates[%q] is %T, want []byte", f, val)
+		}
+	}
+}
+
+// --- UpdatePlan Test 8: Only is_active: false → 200; only is_active in updates map ---
+
+func TestUpdatePlanOnlyIsActiveFalse(t *testing.T) {
+	t.Parallel()
+	store := &fakePlansStore{}
+	returnedPlan := &types.Plan{ID: "plan-1", Name: "My Plan", IsActive: false}
+	s := newUpdatePlansServer(t, store, &fakeCatalog{}, returnedPlan)
+	in := newUpdatePlanInput("plan-1")
+	isActive := false
+	in.Body.IsActive = &isActive
+
+	out, err := s.updatePlan(context.Background(), in)
+	if err != nil {
+		t.Fatalf("updatePlan() error = %v", err)
+	}
+	if out == nil {
+		t.Fatal("expected non-nil output")
+	}
+
+	// Only is_active should be in the updates map.
+	if len(store.lastUpdates) != 1 {
+		t.Errorf("updates map has %d keys, want 1; keys = %v", len(store.lastUpdates), store.lastUpdates)
+	}
+	if _, ok := store.lastUpdates["is_active"]; !ok {
+		t.Error("updates map missing 'is_active'")
 	}
 }

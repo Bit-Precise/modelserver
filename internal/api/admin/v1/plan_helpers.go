@@ -7,6 +7,7 @@ package adminv1
 // last legacy chi handler that references the originals.
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/modelserver/modelserver/internal/modelcatalog"
@@ -36,6 +37,31 @@ func normalizeRateMapKeys(catalog modelcatalog.Catalog, in map[string]types.Cred
 		out[canonical[i]] = in[k]
 	}
 	if def, ok := in["_default"]; ok {
+		out["_default"] = def
+	}
+	return out, nil
+}
+
+// normalizeRateMapKeysRaw is the map[string]json.RawMessage variant used by the
+// typed updatePlan handler. It normalizes model-name keys against the catalog,
+// preserving the _default sentinel verbatim. Complex values stay as raw JSON.
+func normalizeRateMapKeysRaw(catalog modelcatalog.Catalog, raw map[string]json.RawMessage) (map[string]json.RawMessage, error) {
+	keys := make([]string, 0, len(raw))
+	for k := range raw {
+		if k == "_default" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	canonical, err := catalog.NormalizeNames(keys)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]json.RawMessage, len(raw))
+	for i, k := range keys {
+		out[canonical[i]] = raw[k]
+	}
+	if def, ok := raw["_default"]; ok {
 		out["_default"] = def
 	}
 	return out, nil
