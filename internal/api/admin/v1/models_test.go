@@ -2,7 +2,9 @@ package adminv1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -23,6 +25,9 @@ type fakeModelsStore struct {
 	referenceErr      error
 	createErr         error
 	createdModel      *types.Model
+	updateErr         error
+	lastUpdatedName   string
+	lastUpdates       map[string]any
 	lastListedStatus  string
 	lastQueriedName   string
 	callRecords       struct {
@@ -78,7 +83,9 @@ func (s *fakeModelsStore) CreateModel(m *types.Model) error {
 }
 
 func (s *fakeModelsStore) UpdateModel(name string, updates map[string]any) error {
-	return nil
+	s.lastUpdatedName = name
+	s.lastUpdates = updates
+	return s.updateErr
 }
 
 func (s *fakeModelsStore) DeleteModel(name string) error {
@@ -494,5 +501,209 @@ func TestCreateModelHappyPath(t *testing.T) {
 	}
 	if len(cat.swappedModels) != 1 || cat.swappedModels[0].Name != "gpt-4" {
 		t.Errorf("swappedModels = %v, want [{gpt-4 ...}]", cat.swappedModels)
+	}
+}
+
+// --- updateModel Tests (9) ---
+
+// newUpdateModelInput returns an UpdateModelInput for the given path name.
+func newUpdateModelInput(pathName string) *UpdateModelInput {
+	in := &UpdateModelInput{}
+	in.Name = pathName
+	return in
+}
+
+// strPtr returns a pointer to the given string.
+func strPtr(s string) *string { return &s }
+
+// Test U1: GetModelByName returns nil → 404.
+func TestUpdateModelNotFound(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{model: nil}
+	s := newModelsServerWithCatalog(t, st, &fakeCatalog{})
+	in := newUpdateModelInput("no-such-model")
+	in.Body.DisplayName = strPtr("New Name")
+
+	_, err := s.updateModel(context.Background(), in)
+	assertStatusError(t, err, 404, "not_found")
+}
+
+// Test U2: Body has non-nil Name pointer → 400 "canonical name is immutable".
+func TestUpdateModelNameImmutable(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{model: &types.Model{Name: "gpt-4", Publisher: "openai", Status: "active"}}
+	s := newModelsServerWithCatalog(t, st, &fakeCatalog{})
+	in := newUpdateModelInput("gpt-4")
+	in.Body.Name = strPtr("gpt-5")
+
+	_, err := s.updateModel(context.Background(), in)
+	assertModelError(t, err, 400, "bad_request", "canonical name is immutable; create a new model and retire this one instead")
+}
+
+// Test U3: Empty body (all nil/zero) → 400 "no valid fields to update".
+func TestUpdateModelEmptyBody(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{model: &types.Model{Name: "gpt-4", Publisher: "openai", Status: "active"}}
+	s := newModelsServerWithCatalog(t, st, &fakeCatalog{})
+	in := newUpdateModelInput("gpt-4")
+	// All fields are zero/nil — nothing set.
+
+	_, err := s.updateModel(context.Background(), in)
+	assertModelError(t, err, 400, "bad_request", "no valid fields to update")
+}
+
+// Test U4: Invalid status → 400 "status must be active or disabled".
+func TestUpdateModelInvalidStatus(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{model: &types.Model{Name: "gpt-4", Publisher: "openai", Status: "active"}}
+	s := newModelsServerWithCatalog(t, st, &fakeCatalog{})
+	in := newUpdateModelInput("gpt-4")
+	in.Body.Status = strPtr("broken")
+
+	_, err := s.updateModel(context.Background(), in)
+	assertModelError(t, err, 400, "bad_request", "status must be active or disabled")
+}
+
+// Test U5: Duplicate alias → 400 containing "duplicate alias".
+func TestUpdateModelDuplicateAlias(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{model: &types.Model{Name: "gpt-4", Publisher: "openai", Status: "active"}}
+	s := newModelsServerWithCatalog(t, st, &fakeCatalog{})
+	in := newUpdateModelInput("gpt-4")
+	aliases := []string{"alias-a", "alias-a"}
+	in.Body.Aliases = &aliases
+
+	_, err := s.updateModel(context.Background(), in)
+	assertStatusError(t, err, 400, "bad_request")
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if !strings.Contains(env.Payload.Message, "duplicate alias") {
+		t.Errorf("message = %q, want it to contain %q", env.Payload.Message, "duplicate alias")
+	}
+}
+
+// Test U6: default_credit_rate: null → updates["default_credit_rate"] is nil.
+func TestUpdateModelCreditRateNull(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{
+		model:  &types.Model{Name: "gpt-4", Publisher: "openai", Status: "active"},
+		models: []types.Model{{Name: "gpt-4"}},
+	}
+	cat := &fakeCatalog{}
+	s := newModelsServerWithCatalog(t, st, cat)
+	in := newUpdateModelInput("gpt-4")
+	in.Body.DefaultCreditRate = json.RawMessage("null")
+
+	_, err := s.updateModel(context.Background(), in)
+	if err != nil {
+		t.Fatalf("updateModel() unexpected error: %v", err)
+	}
+	val, ok := st.lastUpdates["default_credit_rate"]
+	if !ok {
+		t.Fatal("updates map missing key default_credit_rate")
+	}
+	if val != nil {
+		t.Errorf("updates[default_credit_rate] = %v, want nil", val)
+	}
+}
+
+// Test U7: default_credit_rate with input_rate: -1 → 400 "credit rates must be non-negative".
+func TestUpdateModelCreditRateNegative(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{model: &types.Model{Name: "gpt-4", Publisher: "openai", Status: "active"}}
+	s := newModelsServerWithCatalog(t, st, &fakeCatalog{})
+	in := newUpdateModelInput("gpt-4")
+	in.Body.DefaultCreditRate = json.RawMessage(`{"input_rate": -1, "output_rate": 0, "cache_creation_rate": 0, "cache_read_rate": 0}`)
+
+	_, err := s.updateModel(context.Background(), in)
+	assertModelError(t, err, 400, "bad_request", "credit rates must be non-negative")
+}
+
+// Test U8: Valid default_image_credit_rate object → updates["default_image_credit_rate"] is []byte.
+func TestUpdateModelImageCreditRateObject(t *testing.T) {
+	t.Parallel()
+	st := &fakeModelsStore{
+		model:  &types.Model{Name: "gpt-4", Publisher: "openai", Status: "active"},
+		models: []types.Model{{Name: "gpt-4"}},
+	}
+	cat := &fakeCatalog{}
+	s := newModelsServerWithCatalog(t, st, cat)
+	in := newUpdateModelInput("gpt-4")
+	in.Body.DefaultImageCreditRate = json.RawMessage(`{"text_input_rate":1,"text_cached_input_rate":0,"text_output_rate":2,"image_input_rate":3,"image_cached_input_rate":0,"image_output_rate":4}`)
+
+	_, err := s.updateModel(context.Background(), in)
+	if err != nil {
+		t.Fatalf("updateModel() unexpected error: %v", err)
+	}
+	val, ok := st.lastUpdates["default_image_credit_rate"]
+	if !ok {
+		t.Fatal("updates map missing key default_image_credit_rate")
+	}
+	if _, isBytes := val.([]byte); !isBytes {
+		t.Errorf("updates[default_image_credit_rate] type = %T, want []byte", val)
+	}
+}
+
+// Test U9: Happy path with several fields → 200; refresh called; refetch via GetModelByName.
+func TestUpdateModelHappyPath(t *testing.T) {
+	t.Parallel()
+	updated := &types.Model{Name: "gpt-4", DisplayName: "GPT-4 Updated", Status: "disabled", Publisher: "openai"}
+	st := &fakeModelsStore{
+		model:  &types.Model{Name: "gpt-4", Publisher: "openai", Status: "active"},
+		models: []types.Model{{Name: "gpt-4"}},
+	}
+	// After UpdateModel is called, GetModelByName should return the updated model.
+	// We simulate this by swapping model after update via a closure approach:
+	// The fakeModelsStore always returns st.model for GetModelByName;
+	// we set st.model to `updated` before calling so the refetch returns updated.
+	// Actually to test refetch after update, we need model to be returned on both
+	// the initial fetch and the refetch. Set model = existing initially; the handler
+	// will refetch after update, and since st.model stays as updated we pre-set it
+	// to the updated version. The first call (existence check) uses it too, so both
+	// return the same model — that's fine: the handler only checks nil on the first call.
+	st.model = updated
+	cat := &fakeCatalog{}
+	s := newModelsServerWithCatalog(t, st, cat)
+	in := newUpdateModelInput("gpt-4")
+	in.Body.DisplayName = strPtr("GPT-4 Updated")
+	in.Body.Status = strPtr("disabled")
+
+	out, err := s.updateModel(context.Background(), in)
+	if err != nil {
+		t.Fatalf("updateModel() unexpected error: %v", err)
+	}
+	if out == nil {
+		t.Fatal("expected non-nil output")
+	}
+
+	// Assert updates map contains the expected fields.
+	if st.lastUpdatedName != "gpt-4" {
+		t.Errorf("lastUpdatedName = %q, want %q", st.lastUpdatedName, "gpt-4")
+	}
+	if st.lastUpdates["display_name"] != "GPT-4 Updated" {
+		t.Errorf("updates[display_name] = %v, want %q", st.lastUpdates["display_name"], "GPT-4 Updated")
+	}
+	if st.lastUpdates["status"] != "disabled" {
+		t.Errorf("updates[status] = %v, want %q", st.lastUpdates["status"], "disabled")
+	}
+
+	// refreshCatalog must have been called.
+	if cat.swappedModels == nil {
+		t.Fatal("Catalog.Swap was not called after updateModel")
+	}
+
+	// GetModelByName must have been called at least twice (once for existence check, once for refetch).
+	if st.callRecords.getModelByName < 2 {
+		t.Errorf("GetModelByName called %d times, want >= 2", st.callRecords.getModelByName)
+	}
+
+	// Response carries the refetched model.
+	if out.Body.Data.Name != "gpt-4" {
+		t.Errorf("response Name = %q, want %q", out.Body.Data.Name, "gpt-4")
+	}
+	if out.Body.Data.DisplayName != "GPT-4 Updated" {
+		t.Errorf("response DisplayName = %q, want %q", out.Body.Data.DisplayName, "GPT-4 Updated")
 	}
 }

@@ -1,6 +1,7 @@
 package adminv1
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -196,6 +197,110 @@ func (s *Server) refreshCatalog(ctx context.Context) {
 		return
 	}
 	s.Catalog.Swap(models)
+}
+
+// updateModel handles PATCH /api/v1/models/{name} (and PUT, registered in Task 7).
+// Preserves handleUpdateModel wire behavior exactly:
+//  1. Fetch existing via GetModelByName — 404 if nil OR error (legacy conflates both).
+//  2. Reject if Body.Name is non-nil → 400 "canonical name is immutable".
+//  3. Propagate scalar pointer fields (DisplayName, Description, Status, Publisher, Aliases)
+//     when non-nil; validate Status and Aliases values.
+//  4. Handle default_credit_rate and default_image_credit_rate as json.RawMessage:
+//     nil/empty → skip; []byte("null") → clear (store nil); object → validate then store []byte.
+//  5. Propagate Metadata (RawMessage) when non-empty; no validation.
+//  6. Empty updates map → 400 "no valid fields to update".
+//  7. UpdateModel error → 400 bad_request (legacy behavior — not 500).
+//  8. refreshCatalog, then refetch via GetModelByName (silently ignore refetch error).
+func (s *Server) updateModel(ctx context.Context, input *UpdateModelInput) (*UpdateModelOutput, error) {
+	if s == nil || s.Models == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "model management store is not configured", nil)
+	}
+
+	existing, err := s.Models.GetModelByName(input.Name)
+	if err != nil || existing == nil {
+		return nil, contract.NewError(http.StatusNotFound, "not_found", "model not found", nil)
+	}
+
+	if input.Body.Name != nil {
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", "canonical name is immutable; create a new model and retire this one instead", nil)
+	}
+
+	updates := make(map[string]any)
+
+	if input.Body.DisplayName != nil {
+		updates["display_name"] = *input.Body.DisplayName
+	}
+	if input.Body.Description != nil {
+		updates["description"] = *input.Body.Description
+	}
+	if input.Body.Status != nil {
+		status := *input.Body.Status
+		if status != types.ModelStatusActive && status != types.ModelStatusDisabled {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request", "status must be active or disabled", nil)
+		}
+		updates["status"] = status
+	}
+	if input.Body.Aliases != nil {
+		aliases := *input.Body.Aliases
+		if err := validateAliases(existing.Name, aliases); err != nil {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request", err.Error(), nil)
+		}
+		updates["aliases"] = aliases
+	}
+	if len(input.Body.DefaultCreditRate) > 0 {
+		if bytes.Equal(input.Body.DefaultCreditRate, []byte("null")) {
+			updates["default_credit_rate"] = nil
+		} else {
+			var rate types.CreditRate
+			if err := json.Unmarshal(input.Body.DefaultCreditRate, &rate); err != nil {
+				return nil, contract.NewError(http.StatusBadRequest, "bad_request", "invalid default_credit_rate", nil)
+			}
+			if err := validateCreditRate(&rate); err != nil {
+				return nil, contract.NewError(http.StatusBadRequest, "bad_request", err.Error(), nil)
+			}
+			updates["default_credit_rate"] = []byte(input.Body.DefaultCreditRate)
+		}
+	}
+	if len(input.Body.DefaultImageCreditRate) > 0 {
+		if bytes.Equal(input.Body.DefaultImageCreditRate, []byte("null")) {
+			updates["default_image_credit_rate"] = nil
+		} else {
+			var rate types.ImageCreditRate
+			if err := json.Unmarshal(input.Body.DefaultImageCreditRate, &rate); err != nil {
+				return nil, contract.NewError(http.StatusBadRequest, "bad_request", "invalid default_image_credit_rate", nil)
+			}
+			if err := validateImageCreditRate(&rate); err != nil {
+				return nil, contract.NewError(http.StatusBadRequest, "bad_request", err.Error(), nil)
+			}
+			updates["default_image_credit_rate"] = []byte(input.Body.DefaultImageCreditRate)
+		}
+	}
+	if input.Body.Publisher != nil {
+		pub := *input.Body.Publisher
+		if err := validatePublisher(pub); err != nil {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request", err.Error(), nil)
+		}
+		updates["publisher"] = pub
+	}
+	if len(input.Body.Metadata) > 0 {
+		updates["metadata"] = []byte(input.Body.Metadata)
+	}
+
+	if len(updates) == 0 {
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", "no valid fields to update", nil)
+	}
+
+	if err := s.Models.UpdateModel(input.Name, updates); err != nil {
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", err.Error(), nil)
+	}
+
+	s.refreshCatalog(ctx)
+
+	updated, _ := s.Models.GetModelByName(input.Name)
+	if updated == nil {
+		return &UpdateModelOutput{Body: DataResponse[types.Model]{}}, nil
+	}
+	return &UpdateModelOutput{Body: DataResponse[types.Model]{Data: *updated}}, nil
 }
 
 // getModel handles GET /api/v1/models/{name}.
