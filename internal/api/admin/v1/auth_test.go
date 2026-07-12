@@ -148,6 +148,34 @@ func TestOAuthCallbackRejectsUnconfiguredProvider(t *testing.T) {
 	assertStatusError(t, err, 501, "not_configured")
 }
 
+func TestOAuthCallbackRejectsUnconfiguredGoogleProvider(t *testing.T) {
+	t.Parallel()
+	// Google client ID unset -> 501 not_configured.
+	s := &Server{
+		Auth:   &fakeAuthStore{},
+		Config: &config.Config{},
+		JWT:    auth.NewJWTManager("test-secret-at-least-32-characters-long", time.Minute, time.Hour),
+	}
+	input := &OAuthCallbackInput{Provider: OAuthProviderGoogle}
+	input.Body.Code = "code"
+	_, err := s.oauthCallback(context.Background(), input)
+	assertStatusError(t, err, 501, "not_configured")
+}
+
+func TestOAuthCallbackRejectsUnconfiguredOIDCProvider(t *testing.T) {
+	t.Parallel()
+	// OIDC issuer URL unset -> 501 not_configured.
+	s := &Server{
+		Auth:   &fakeAuthStore{},
+		Config: &config.Config{},
+		JWT:    auth.NewJWTManager("test-secret-at-least-32-characters-long", time.Minute, time.Hour),
+	}
+	input := &OAuthCallbackInput{Provider: OAuthProviderOIDC}
+	input.Body.Code = "code"
+	_, err := s.oauthCallback(context.Background(), input)
+	assertStatusError(t, err, 501, "not_configured")
+}
+
 // Note: exchange failures against a real provider require network access.
 // Coverage of the OAuth exchange itself lives at the auth package level.
 // This batch's tests exercise the routing and dispatch decisions only.
