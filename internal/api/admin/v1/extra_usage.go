@@ -2,19 +2,50 @@ package adminv1
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/authz"
+	"github.com/modelserver/modelserver/internal/billing"
+	"github.com/modelserver/modelserver/internal/metrics"
 	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
 )
 
+// CreateExtraUsageTopupInput is the typed input for POST /api/v1/projects/{projectID}/extra-usage/topup.
+type CreateExtraUsageTopupInput struct {
+	ProjectID string `path:"projectID" format:"uuid" doc:"Project identifier."`
+	Body      struct {
+		Channel     string `json:"channel" doc:"Payment channel: wechat, alipay, or stripe."`
+		AmountFen   *int64 `json:"amount_fen,omitempty" doc:"Amount in CNY fen (required for wechat/alipay)."`
+		AmountCents *int64 `json:"amount_cents,omitempty" doc:"Amount in USD cents (required for stripe)."`
+	}
+}
+
+// CreateExtraUsageTopupResponseData is the typed body for a 201 topup response.
+type CreateExtraUsageTopupResponseData struct {
+	OrderID    string `json:"order_id"`
+	Channel    string `json:"channel"`
+	Currency   string `json:"currency"`
+	Amount     int64  `json:"amount"`
+	Credits    int64  `json:"credits"`
+	PaymentURL string `json:"payment_url"`
+	PaymentRef string `json:"payment_ref"`
+}
+
+// CreateExtraUsageTopupOutput wraps the 201 body in the standard data envelope.
+type CreateExtraUsageTopupOutput struct {
+	Body DataResponse[CreateExtraUsageTopupResponseData]
+}
+
 func registerExtraUsageOperations(api huma.API, server *Server) {
 	read := authz.Project(authz.PermissionProjectExtraUsageRead, projectIDPathParam)
 	write := authz.Project(authz.PermissionProjectExtraUsageWrite, projectIDPathParam)
+	topup := authz.Project(authz.PermissionProjectExtraUsageTopup, projectIDPathParam, authz.RequireProjectMembership())
 
 	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
 		ID:            "getExtraUsage",
@@ -51,6 +82,19 @@ func registerExtraUsageOperations(api huma.API, server *Server) {
 		Access:        read,
 		Authorize:     server.authorizationMiddleware,
 	}, server.listExtraUsageTransactions)
+
+	contract.Register(api, contract.Operation{
+		ID:            "createExtraUsageTopup",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/projects/{projectID}/extra-usage/topup",
+		Summary:       "Create extra-usage topup order",
+		Description:   "Initiates a payment order to top up the project's extra-usage credit balance.",
+		Tags:          []string{"Extra Usage"},
+		DefaultStatus: http.StatusCreated,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusInternalServerError, http.StatusServiceUnavailable},
+		Access:        topup,
+		Authorize:     server.authorizationMiddleware,
+	}, server.createExtraUsageTopup)
 }
 
 // CreditUnitPrices holds the per-million-credit price in each supported
@@ -243,6 +287,152 @@ func (input *ListExtraUsageTransactionsInput) pagination() types.PaginationParam
 
 type ListExtraUsageTransactionsOutput struct {
 	Body ListResponse[types.ExtraUsageTransaction]
+}
+
+// createExtraUsageTopup handles POST /api/v1/projects/{projectID}/extra-usage/topup.
+// Creates a payment order for extra-usage credit topup and returns the payment URL.
+//
+// Behavior (matches legacy handleCreateExtraUsageTopup):
+//  1. Channel dispatch: wechat/alipay require amount_fen, stripe requires amount_cents.
+//     Wrong combinations or unknown channels → 400 bad_request.
+//  2. Validate amount bounds from ExtraUsageCfg → 400 bad_request.
+//  3. Daily-cap check via SumDailyExtraUsageTopupCredits → 409 daily_topup_limit if exceeded.
+//  4. CreateOrder (Pending, ExtraUsageTopup type, Metadata "{}") → 500 on store error.
+//  5. If PayClient == nil → mark order Failed + 503 payment_not_configured.
+//  6. PayClient.CreatePayment → on error, mark order Failed + 503 payment_provider_error.
+//  7. UpdateOrderPayment(orderID, PaymentRef, PaymentURL, Paying) → 500 on store error.
+//  8. metrics.IncExtraUsageTopupIntent(channel).
+//  9. Return 201 with {order_id, channel, currency, amount, credits, payment_url, payment_ref}.
+func (s *Server) createExtraUsageTopup(ctx context.Context, input *CreateExtraUsageTopupInput) (*CreateExtraUsageTopupOutput, error) {
+	if s == nil || s.ExtraUsage == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "extra usage store is not configured", nil)
+	}
+
+	var (
+		credits       int64
+		currency      string
+		paymentAmount int64
+	)
+
+	switch input.Body.Channel {
+	case "wechat", "alipay":
+		if input.Body.AmountFen == nil {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request",
+				"amount_fen is required for channel="+input.Body.Channel, nil)
+		}
+		if input.Body.AmountCents != nil {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request",
+				"amount_cents is not valid for channel="+input.Body.Channel, nil)
+		}
+		amt := *input.Body.AmountFen
+		if amt < s.ExtraUsageCfg.MinTopupCNYFen {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request",
+				fmt.Sprintf("amount_fen must be >= %d", s.ExtraUsageCfg.MinTopupCNYFen), nil)
+		}
+		if amt > s.ExtraUsageCfg.MaxTopupCNYFen {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request",
+				fmt.Sprintf("amount_fen must be <= %d", s.ExtraUsageCfg.MaxTopupCNYFen), nil)
+		}
+		credits = (amt * 1_000_000) / s.ExtraUsageCfg.CreditPriceCNYFen
+		currency = "CNY"
+		paymentAmount = amt
+
+	case "stripe":
+		if input.Body.AmountCents == nil {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request",
+				"amount_cents is required for channel=stripe", nil)
+		}
+		if input.Body.AmountFen != nil {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request",
+				"amount_fen is not valid for channel=stripe", nil)
+		}
+		amt := *input.Body.AmountCents
+		if amt < s.ExtraUsageCfg.MinTopupUSDCents {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request",
+				fmt.Sprintf("amount_cents must be >= %d", s.ExtraUsageCfg.MinTopupUSDCents), nil)
+		}
+		if amt > s.ExtraUsageCfg.MaxTopupUSDCents {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request",
+				fmt.Sprintf("amount_cents must be <= %d", s.ExtraUsageCfg.MaxTopupUSDCents), nil)
+		}
+		credits = (amt * 1_000_000) / s.ExtraUsageCfg.CreditPriceUSDCents
+		currency = "USD"
+		paymentAmount = amt
+
+	default:
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request",
+			"channel must be one of: wechat, alipay, stripe", nil)
+	}
+
+	// Daily cap check (currency-agnostic, always in credits).
+	dayStart := store.DayWindowStart()
+	todayCredits, err := s.ExtraUsage.SumDailyExtraUsageTopupCredits(input.ProjectID, dayStart)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to check daily topup cap", nil)
+	}
+	if s.ExtraUsageCfg.DailyTopupLimitCredits > 0 && todayCredits+credits > s.ExtraUsageCfg.DailyTopupLimitCredits {
+		return nil, contract.NewError(http.StatusConflict, "daily_topup_limit",
+			fmt.Sprintf("daily topup limit %d credits reached", s.ExtraUsageCfg.DailyTopupLimitCredits), nil)
+	}
+
+	order := &types.Order{
+		ProjectID:               input.ProjectID,
+		Periods:                 1,
+		UnitPrice:               paymentAmount,
+		Amount:                  paymentAmount,
+		Currency:                currency,
+		Status:                  types.OrderStatusPending,
+		Channel:                 input.Body.Channel,
+		Metadata:                "{}",
+		OrderType:               types.OrderTypeExtraUsageTopup,
+		ExtraUsageAmountCredits: credits,
+	}
+	if err := s.ExtraUsage.CreateOrder(order); err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to create order: "+err.Error(), nil)
+	}
+
+	if s.PayClient == nil {
+		_ = s.ExtraUsage.UpdateOrderStatus(order.ID, types.OrderStatusFailed)
+		return nil, contract.NewError(http.StatusServiceUnavailable, "payment_not_configured",
+			"payment provider is not configured", nil)
+	}
+
+	payResp, err := s.PayClient.CreatePayment(ctx, billing.PaymentRequest{
+		OrderID:     order.ID,
+		ProductName: fmt.Sprintf("extra-usage topup %d credits", credits),
+		Channel:     input.Body.Channel,
+		Currency:    currency,
+		Amount:      paymentAmount,
+		NotifyURL:   s.BillingCfg.NotifyURL,
+		ReturnURL:   s.BillingCfg.ReturnURL,
+	})
+	if err != nil {
+		slog.Default().Error("payment provider create failed",
+			"order_id", order.ID, "channel", input.Body.Channel, "err", err)
+		_ = s.ExtraUsage.UpdateOrderStatus(order.ID, types.OrderStatusFailed)
+		return nil, contract.NewError(http.StatusServiceUnavailable, "payment_provider_error",
+			"payment provider is unavailable", nil)
+	}
+
+	if err := s.ExtraUsage.UpdateOrderPayment(order.ID, payResp.PaymentRef, payResp.PaymentURL, types.OrderStatusPaying); err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to update order payment", nil)
+	}
+
+	metrics.IncExtraUsageTopupIntent(input.Body.Channel)
+
+	return &CreateExtraUsageTopupOutput{
+		Body: DataResponse[CreateExtraUsageTopupResponseData]{
+			Data: CreateExtraUsageTopupResponseData{
+				OrderID:    order.ID,
+				Channel:    input.Body.Channel,
+				Currency:   currency,
+				Amount:     paymentAmount,
+				Credits:    credits,
+				PaymentURL: payResp.PaymentURL,
+				PaymentRef: payResp.PaymentRef,
+			},
+		},
+	}, nil
 }
 
 // listExtraUsageTransactions handles GET /api/v1/projects/{projectID}/extra-usage/transactions.

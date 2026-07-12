@@ -175,6 +175,7 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 		"/api/v1/auth/oauth/{provider}",
 		"/api/v1/notifications/{id}/read",
 		"/api/v1/notifications/read_all",
+		"/api/v1/projects/{projectID}/extra-usage/topup",
 	}
 	wantPathCount := len(expectedGetPaths) + len(expectedPostPaths)
 	if len(api.OpenAPI().Paths) != wantPathCount {

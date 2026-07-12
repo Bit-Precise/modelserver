@@ -86,6 +86,67 @@
         ],
         "type": "object"
       },
+      "CreateExtraUsageTopupInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_cents": {
+            "description": "Amount in USD cents (required for stripe).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "amount_fen": {
+            "description": "Amount in CNY fen (required for wechat/alipay).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "channel": {
+            "description": "Payment channel: wechat, alipay, or stripe.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "CreateExtraUsageTopupResponseData": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "payment_ref": {
+            "type": "string"
+          },
+          "payment_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "channel",
+          "currency",
+          "amount",
+          "credits",
+          "payment_url",
+          "payment_ref"
+        ],
+        "type": "object"
+      },
       "CreateModelInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -331,6 +392,18 @@
         "required": [
           "window",
           "percentage"
+        ],
+        "type": "object"
+      },
+      "DataResponseCreateExtraUsageTopupResponseData": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/CreateExtraUsageTopupResponseData"
+          }
+        },
+        "required": [
+          "data"
         ],
         "type": "object"
       },
@@ -5447,6 +5520,133 @@
           "permission": "project.extra_usage.write",
           "projectIdPathParam": "projectID",
           "superadmin": "bypass"
+        }
+      }
+    },
+    "/api/v1/projects/{projectID}/extra-usage/topup": {
+      "post": {
+        "description": "Initiates a payment order to top up the project's extra-usage credit balance.",
+        "operationId": "createExtraUsageTopup",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "description": "Project identifier.",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExtraUsageTopupInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseCreateExtraUsageTopupResponseData"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Create extra-usage topup order",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.topup",
+          "projectIdPathParam": "projectID",
+          "superadmin": "none"
         }
       }
     },

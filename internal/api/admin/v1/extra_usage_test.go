@@ -3,11 +3,13 @@ package adminv1
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/modelserver/modelserver/internal/api/contract"
+	"github.com/modelserver/modelserver/internal/billing"
 	"github.com/modelserver/modelserver/internal/config"
 	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
@@ -532,4 +534,379 @@ func pointerBool(v bool) *bool {
 
 func pointerInt64(v int64) *int64 {
 	return &v
+}
+
+// --- G7 (createExtraUsageTopup) Fake helpers ---
+
+// fakePayClient is a test double for billing.PaymentClient.
+type fakePayClient struct {
+	createPaymentCalled bool
+	createPaymentReq    billing.PaymentRequest
+	createPaymentResp   billing.PaymentResponse
+	createPaymentErr    error
+}
+
+func (c *fakePayClient) CreatePayment(_ context.Context, req billing.PaymentRequest) (*billing.PaymentResponse, error) {
+	c.createPaymentCalled = true
+	c.createPaymentReq = req
+	if c.createPaymentErr != nil {
+		return nil, c.createPaymentErr
+	}
+	return &c.createPaymentResp, nil
+}
+
+// extendedFakeExtraUsageStore embeds fakeExtraUsageStore and adds topup-specific
+// tracking fields for G7 tests.
+type extendedFakeExtraUsageStore struct {
+	fakeExtraUsageStore
+
+	sumDailyTopupCredits int64
+	sumDailyTopupErr     error
+
+	createOrderCalledWith *types.Order
+	createOrderErr        error
+
+	updateOrderStatusCalls []struct {
+		orderID string
+		status  string
+	}
+
+	updateOrderPaymentCalls []struct {
+		orderID    string
+		paymentRef string
+		paymentURL string
+		status     string
+	}
+	updateOrderPaymentErr error
+}
+
+// Override SumDailyExtraUsageTopupCredits for topup tests.
+func (s *extendedFakeExtraUsageStore) SumDailyExtraUsageTopupCredits(projectID string, dayStart time.Time) (int64, error) {
+	return s.sumDailyTopupCredits, s.sumDailyTopupErr
+}
+
+// Override CreateOrder for topup tests.
+func (s *extendedFakeExtraUsageStore) CreateOrder(order *types.Order) error {
+	// Assign a deterministic test ID so tests can assert on it.
+	order.ID = "test-order-id"
+	s.createOrderCalledWith = order
+	return s.createOrderErr
+}
+
+// Override UpdateOrderStatus for topup tests.
+func (s *extendedFakeExtraUsageStore) UpdateOrderStatus(orderID, status string) error {
+	s.updateOrderStatusCalls = append(s.updateOrderStatusCalls, struct {
+		orderID string
+		status  string
+	}{orderID, status})
+	return nil
+}
+
+// Override UpdateOrderPayment for topup tests.
+func (s *extendedFakeExtraUsageStore) UpdateOrderPayment(orderID, paymentRef, paymentURL, status string) error {
+	s.updateOrderPaymentCalls = append(s.updateOrderPaymentCalls, struct {
+		orderID    string
+		paymentRef string
+		paymentURL string
+		status     string
+	}{orderID, paymentRef, paymentURL, status})
+	return s.updateOrderPaymentErr
+}
+
+func newTopupServer(st *extendedFakeExtraUsageStore, payClient billing.PaymentClient) *Server {
+	return &Server{
+		ExtraUsage:    st,
+		ExtraUsageCfg: testExtraUsageConfig(),
+		PayClient:     payClient,
+		BillingCfg: config.BillingConfig{
+			NotifyURL: "https://example.com/notify",
+			ReturnURL: "https://example.com/return",
+		},
+	}
+}
+
+// --- G7 Tests ---
+
+// Test 1: Unknown channel → 400 "channel must be one of: wechat, alipay, stripe"
+func TestCreateTopupUnknownChannel(t *testing.T) {
+	t.Parallel()
+	st := &extendedFakeExtraUsageStore{}
+	s := newTopupServer(st, nil)
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "paypal"
+
+	_, err := s.createExtraUsageTopup(context.Background(), input)
+	assertStatusError(t, err, 400, "bad_request")
+	env := err.(*contract.ErrorEnvelope)
+	if env.Payload.Message != "channel must be one of: wechat, alipay, stripe" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "channel must be one of: wechat, alipay, stripe")
+	}
+}
+
+// Test 2: wechat without amount_fen → 400 "amount_fen is required for channel=wechat"
+func TestCreateTopupWechatMissingAmountFen(t *testing.T) {
+	t.Parallel()
+	st := &extendedFakeExtraUsageStore{}
+	s := newTopupServer(st, nil)
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "wechat"
+	// AmountFen is nil
+
+	_, err := s.createExtraUsageTopup(context.Background(), input)
+	assertStatusError(t, err, 400, "bad_request")
+	env := err.(*contract.ErrorEnvelope)
+	if env.Payload.Message != "amount_fen is required for channel=wechat" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "amount_fen is required for channel=wechat")
+	}
+}
+
+// Test 3: wechat with amount_cents → 400 "amount_cents is not valid for channel=wechat"
+func TestCreateTopupWechatInvalidAmountCents(t *testing.T) {
+	t.Parallel()
+	st := &extendedFakeExtraUsageStore{}
+	s := newTopupServer(st, nil)
+	amt := int64(5000)
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "wechat"
+	input.Body.AmountFen = &amt
+	input.Body.AmountCents = &amt
+
+	_, err := s.createExtraUsageTopup(context.Background(), input)
+	assertStatusError(t, err, 400, "bad_request")
+	env := err.(*contract.ErrorEnvelope)
+	if env.Payload.Message != "amount_cents is not valid for channel=wechat" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "amount_cents is not valid for channel=wechat")
+	}
+}
+
+// Test 4: wechat below min → 400 "amount_fen must be >= <min>"
+func TestCreateTopupWechatBelowMin(t *testing.T) {
+	t.Parallel()
+	st := &extendedFakeExtraUsageStore{}
+	s := newTopupServer(st, nil)
+	// MinTopupCNYFen = 1000, use 500
+	amt := int64(500)
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "wechat"
+	input.Body.AmountFen = &amt
+
+	_, err := s.createExtraUsageTopup(context.Background(), input)
+	assertStatusError(t, err, 400, "bad_request")
+	env := err.(*contract.ErrorEnvelope)
+	want := fmt.Sprintf("amount_fen must be >= %d", testExtraUsageConfig().MinTopupCNYFen)
+	if env.Payload.Message != want {
+		t.Errorf("message = %q, want %q", env.Payload.Message, want)
+	}
+}
+
+// Test 5: stripe below min USD → 400 "amount_cents must be >= <min>"
+func TestCreateTopupStripeBelowMin(t *testing.T) {
+	t.Parallel()
+	st := &extendedFakeExtraUsageStore{}
+	s := newTopupServer(st, nil)
+	// MinTopupUSDCents = 167, use 100
+	amt := int64(100)
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "stripe"
+	input.Body.AmountCents = &amt
+
+	_, err := s.createExtraUsageTopup(context.Background(), input)
+	assertStatusError(t, err, 400, "bad_request")
+	env := err.(*contract.ErrorEnvelope)
+	want := fmt.Sprintf("amount_cents must be >= %d", testExtraUsageConfig().MinTopupUSDCents)
+	if env.Payload.Message != want {
+		t.Errorf("message = %q, want %q", env.Payload.Message, want)
+	}
+}
+
+// Test 6: Daily cap exceeded → 409 daily_topup_limit
+func TestCreateTopupDailyCapExceeded(t *testing.T) {
+	t.Parallel()
+	cfg := testExtraUsageConfig()
+	// today = DailyTopupLimitCredits-1, credits = large enough to exceed
+	st := &extendedFakeExtraUsageStore{
+		sumDailyTopupCredits: cfg.DailyTopupLimitCredits, // already at limit
+	}
+	s := newTopupServer(st, nil)
+	amt := int64(cfg.MinTopupCNYFen) // small amount, but already at cap
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "wechat"
+	input.Body.AmountFen = &amt
+
+	_, err := s.createExtraUsageTopup(context.Background(), input)
+	assertStatusError(t, err, 409, "daily_topup_limit")
+	env := err.(*contract.ErrorEnvelope)
+	want := fmt.Sprintf("daily topup limit %d credits reached", cfg.DailyTopupLimitCredits)
+	if env.Payload.Message != want {
+		t.Errorf("message = %q, want %q", env.Payload.Message, want)
+	}
+}
+
+// Test 7: PayClient nil → 503 payment_not_configured; assert order was marked Failed
+func TestCreateTopupPayClientNil(t *testing.T) {
+	t.Parallel()
+	st := &extendedFakeExtraUsageStore{}
+	s := newTopupServer(st, nil) // nil payClient
+	amt := int64(testExtraUsageConfig().MinTopupCNYFen)
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "wechat"
+	input.Body.AmountFen = &amt
+
+	_, err := s.createExtraUsageTopup(context.Background(), input)
+	assertStatusError(t, err, 503, "payment_not_configured")
+	env := err.(*contract.ErrorEnvelope)
+	if env.Payload.Message != "payment provider is not configured" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "payment provider is not configured")
+	}
+
+	// Assert order was created and then marked Failed
+	if st.createOrderCalledWith == nil {
+		t.Fatal("expected CreateOrder to be called")
+	}
+	if len(st.updateOrderStatusCalls) != 1 {
+		t.Fatalf("UpdateOrderStatus called %d times, want 1", len(st.updateOrderStatusCalls))
+	}
+	if st.updateOrderStatusCalls[0].status != types.OrderStatusFailed {
+		t.Errorf("status = %q, want %q", st.updateOrderStatusCalls[0].status, types.OrderStatusFailed)
+	}
+}
+
+// Test 8: PayClient CreatePayment error → 503 payment_provider_error; assert order was marked Failed
+func TestCreateTopupPayClientError(t *testing.T) {
+	t.Parallel()
+	payClient := &fakePayClient{
+		createPaymentErr: errors.New("provider down"),
+	}
+	st := &extendedFakeExtraUsageStore{}
+	s := newTopupServer(st, payClient)
+	amt := int64(testExtraUsageConfig().MinTopupCNYFen)
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "wechat"
+	input.Body.AmountFen = &amt
+
+	_, err := s.createExtraUsageTopup(context.Background(), input)
+	assertStatusError(t, err, 503, "payment_provider_error")
+	env := err.(*contract.ErrorEnvelope)
+	if env.Payload.Message != "payment provider is unavailable" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "payment provider is unavailable")
+	}
+
+	// Assert order was marked Failed
+	if len(st.updateOrderStatusCalls) != 1 {
+		t.Fatalf("UpdateOrderStatus called %d times, want 1", len(st.updateOrderStatusCalls))
+	}
+	if st.updateOrderStatusCalls[0].status != types.OrderStatusFailed {
+		t.Errorf("status = %q, want %q", st.updateOrderStatusCalls[0].status, types.OrderStatusFailed)
+	}
+}
+
+// Test 9: Happy path (wechat) → 201 with all 7 body fields populated
+func TestCreateTopupHappyPathWechat(t *testing.T) {
+	t.Parallel()
+	payClient := &fakePayClient{
+		createPaymentResp: billing.PaymentResponse{
+			PaymentRef: "ref-wechat-001",
+			PaymentURL: "https://pay.wechat.example/order/001",
+			Status:     "pending",
+		},
+	}
+	st := &extendedFakeExtraUsageStore{}
+	s := newTopupServer(st, payClient)
+
+	cfg := testExtraUsageConfig()
+	amt := int64(cfg.MinTopupCNYFen) // 1000 fen
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "wechat"
+	input.Body.AmountFen = &amt
+
+	output, err := s.createExtraUsageTopup(context.Background(), input)
+	if err != nil {
+		t.Fatalf("createExtraUsageTopup() error = %v", err)
+	}
+
+	data := output.Body.Data
+	if data.OrderID != "test-order-id" {
+		t.Errorf("order_id = %q, want test-order-id", data.OrderID)
+	}
+	if data.Channel != "wechat" {
+		t.Errorf("channel = %q, want wechat", data.Channel)
+	}
+	if data.Currency != "CNY" {
+		t.Errorf("currency = %q, want CNY", data.Currency)
+	}
+	if data.Amount != amt {
+		t.Errorf("amount = %d, want %d", data.Amount, amt)
+	}
+	// credits = (1000 * 1_000_000) / 5438
+	expectedCredits := (amt * 1_000_000) / cfg.CreditPriceCNYFen
+	if data.Credits != expectedCredits {
+		t.Errorf("credits = %d, want %d", data.Credits, expectedCredits)
+	}
+	if data.PaymentURL != "https://pay.wechat.example/order/001" {
+		t.Errorf("payment_url = %q, want %q", data.PaymentURL, "https://pay.wechat.example/order/001")
+	}
+	if data.PaymentRef != "ref-wechat-001" {
+		t.Errorf("payment_ref = %q, want %q", data.PaymentRef, "ref-wechat-001")
+	}
+
+	// Assert UpdateOrderPayment was called with Paying status
+	if len(st.updateOrderPaymentCalls) != 1 {
+		t.Fatalf("UpdateOrderPayment called %d times, want 1", len(st.updateOrderPaymentCalls))
+	}
+	call := st.updateOrderPaymentCalls[0]
+	if call.status != types.OrderStatusPaying {
+		t.Errorf("order payment status = %q, want %q", call.status, types.OrderStatusPaying)
+	}
+}
+
+// Test 10: Happy path (stripe with USD) → 201 with correct currency + credits calculation
+func TestCreateTopupHappyPathStripe(t *testing.T) {
+	t.Parallel()
+	payClient := &fakePayClient{
+		createPaymentResp: billing.PaymentResponse{
+			PaymentRef: "ref-stripe-002",
+			PaymentURL: "https://checkout.stripe.com/pay/002",
+			Status:     "pending",
+		},
+	}
+	st := &extendedFakeExtraUsageStore{}
+	s := newTopupServer(st, payClient)
+
+	cfg := testExtraUsageConfig()
+	amt := int64(cfg.MinTopupUSDCents) // 167 cents
+	input := &CreateExtraUsageTopupInput{ProjectID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	input.Body.Channel = "stripe"
+	input.Body.AmountCents = &amt
+
+	output, err := s.createExtraUsageTopup(context.Background(), input)
+	if err != nil {
+		t.Fatalf("createExtraUsageTopup() error = %v", err)
+	}
+
+	data := output.Body.Data
+	if data.Channel != "stripe" {
+		t.Errorf("channel = %q, want stripe", data.Channel)
+	}
+	if data.Currency != "USD" {
+		t.Errorf("currency = %q, want USD", data.Currency)
+	}
+	if data.Amount != amt {
+		t.Errorf("amount = %d, want %d", data.Amount, amt)
+	}
+	// credits = (167 * 1_000_000) / 907
+	expectedCredits := (amt * 1_000_000) / cfg.CreditPriceUSDCents
+	if data.Credits != expectedCredits {
+		t.Errorf("credits = %d, want %d", data.Credits, expectedCredits)
+	}
+	if data.PaymentURL != "https://checkout.stripe.com/pay/002" {
+		t.Errorf("payment_url = %q, want %q", data.PaymentURL, "https://checkout.stripe.com/pay/002")
+	}
+	if data.PaymentRef != "ref-stripe-002" {
+		t.Errorf("payment_ref = %q, want %q", data.PaymentRef, "ref-stripe-002")
+	}
+
+	// Assert CreatePayment was called with correct currency
+	if payClient.createPaymentReq.Currency != "USD" {
+		t.Errorf("PaymentRequest.Currency = %q, want USD", payClient.createPaymentReq.Currency)
+	}
 }
