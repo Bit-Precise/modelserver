@@ -174,7 +174,7 @@ func registerNotificationOperations(api huma.API, server *Server) {
 	authenticated := authz.Authenticated()
 	read := authz.System(authz.PermissionSystemNotificationsRead)
 
-	contract.Register(api, contract.Operation{
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
 		ID:            "listMyNotifications",
 		Method:        http.MethodGet,
 		Path:          "/api/v1/notifications",
@@ -187,7 +187,7 @@ func registerNotificationOperations(api huma.API, server *Server) {
 		Authorize:     server.authorizationMiddleware,
 	}, server.listMyNotifications)
 
-	contract.Register(api, contract.Operation{
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
 		ID:            "unreadNotificationCount",
 		Method:        http.MethodGet,
 		Path:          "/api/v1/notifications/unread_count",
@@ -200,7 +200,7 @@ func registerNotificationOperations(api huma.API, server *Server) {
 		Authorize:     server.authorizationMiddleware,
 	}, server.unreadNotificationCount)
 
-	contract.Register(api, contract.Operation{
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
 		ID:            "markNotificationRead",
 		Method:        http.MethodPost,
 		Path:          "/api/v1/notifications/{id}/read",
@@ -213,7 +213,7 @@ func registerNotificationOperations(api huma.API, server *Server) {
 		Authorize:     server.authorizationMiddleware,
 	}, server.markNotificationRead)
 
-	contract.Register(api, contract.Operation{
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
 		ID:            "markAllNotificationsRead",
 		Method:        http.MethodPost,
 		Path:          "/api/v1/notifications/read_all",
