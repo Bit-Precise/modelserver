@@ -41,6 +41,9 @@ func (store *routeTestStore) ListPlansPaginated(types.PaginationParams) ([]types
 	return []types.Plan{*store.plan}, 1, nil
 }
 func (store *routeTestStore) GetPlanByID(string) (*types.Plan, error) { return store.plan, nil }
+func (*routeTestStore) CreatePlan(*types.Plan) error                  { return nil }
+func (*routeTestStore) UpdatePlan(string, map[string]any) error       { return nil }
+func (*routeTestStore) DeletePlan(string) error                       { return nil }
 
 type routeTestTokens struct{}
 

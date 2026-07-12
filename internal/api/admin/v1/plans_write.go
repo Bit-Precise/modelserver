@@ -6,10 +6,52 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/modelserver/modelserver/internal/api/contract"
+	"github.com/modelserver/modelserver/internal/authz"
 	"github.com/modelserver/modelserver/internal/modelcatalog"
 	"github.com/modelserver/modelserver/internal/types"
 )
+
+func registerPlanWriteOperations(api huma.API, server *Server) {
+	access := authz.System(authz.PermissionSystemPlansManage)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "createPlan",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/plans",
+		Summary:       "Create plan",
+		Tags:          []string{"Plans"},
+		DefaultStatus: http.StatusCreated,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        access,
+		Authorize:     server.authorizationMiddleware,
+	}, server.createPlan)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "updatePlan",
+		Method:        http.MethodPut,
+		Path:          "/api/v1/plans/{planID}",
+		Summary:       "Update plan",
+		Tags:          []string{"Plans"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+		Access:        access,
+		Authorize:     server.authorizationMiddleware,
+	}, server.updatePlan)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "deletePlan",
+		Method:        http.MethodDelete,
+		Path:          "/api/v1/plans/{planID}",
+		Summary:       "Delete plan",
+		Tags:          []string{"Plans"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        access,
+		Authorize:     server.authorizationMiddleware,
+	}, server.deletePlan)
+}
 
 // CreatePlanInput is the request body for POST /api/v1/plans.
 // The 12 fields match the legacy handleCreatePlan body byte-for-byte.

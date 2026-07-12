@@ -71,6 +71,81 @@
         ],
         "type": "object"
       },
+      "CreatePlanInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "classic_rules": {
+            "items": {
+              "$ref": "#/components/schemas/ClassicRule"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "credit_rules": {
+            "items": {
+              "$ref": "#/components/schemas/CreditRule"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "group_tag": {
+            "type": "string"
+          },
+          "model_credit_rates": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CreditRate"
+            },
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "period_months": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "price_cny_fen": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "price_usd_cents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "tier_level": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "slug",
+          "display_name",
+          "description",
+          "tier_level",
+          "group_tag",
+          "price_cny_fen",
+          "price_usd_cents",
+          "period_months",
+          "credit_rules",
+          "model_credit_rates",
+          "classic_rules"
+        ],
+        "type": "object"
+      },
       "CreditRate": {
         "additionalProperties": false,
         "properties": {
@@ -658,6 +733,80 @@
         "required": [
           "refresh_token"
         ],
+        "type": "object"
+      },
+      "UpdatePlanInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "classic_rules": {},
+          "client_model_credit_rates": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "credit_rules": {},
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "group_tag": {
+            "type": "string"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "model_credit_rates": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "period_months": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "price_cny_fen": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "price_usd_cents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "tier_level": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "UpdateUserInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "is_superadmin": {
+            "type": "boolean"
+          },
+          "max_projects": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nickname": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "User": {
@@ -1355,9 +1504,174 @@
           "permission": "system.plans.read",
           "superadmin": "required"
         }
+      },
+      "post": {
+        "operationId": "createPlan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePlanInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponsePlan"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Create plan",
+        "tags": [
+          "Plans"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.plans.manage",
+          "superadmin": "required"
+        }
       }
     },
     "/api/v1/plans/{planID}": {
+      "delete": {
+        "operationId": "deletePlan",
+        "parameters": [
+          {
+            "description": "Plan identifier.",
+            "in": "path",
+            "name": "planID",
+            "required": true,
+            "schema": {
+              "description": "Plan identifier.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Delete plan",
+        "tags": [
+          "Plans"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.plans.manage",
+          "superadmin": "required"
+        }
+      },
       "get": {
         "operationId": "getPlan",
         "parameters": [
@@ -1447,6 +1761,118 @@
           "mode": "rbac",
           "scope": "system",
           "permission": "system.plans.read",
+          "superadmin": "required"
+        }
+      },
+      "put": {
+        "operationId": "updatePlan",
+        "parameters": [
+          {
+            "description": "Plan identifier.",
+            "in": "path",
+            "name": "planID",
+            "required": true,
+            "schema": {
+              "description": "Plan identifier.",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePlanInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponsePlan"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Update plan",
+        "tags": [
+          "Plans"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.plans.manage",
           "superadmin": "required"
         }
       }
@@ -2052,6 +2478,108 @@
           "mode": "rbac",
           "scope": "system",
           "permission": "system.users.read",
+          "superadmin": "required"
+        }
+      },
+      "put": {
+        "operationId": "updateUser",
+        "parameters": [
+          {
+            "description": "User identifier.",
+            "in": "path",
+            "name": "userID",
+            "required": true,
+            "schema": {
+              "description": "User identifier.",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseUser"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Update user",
+        "tags": [
+          "Users"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.users.write",
           "superadmin": "required"
         }
       }

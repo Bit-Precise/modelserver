@@ -82,17 +82,11 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 			// Users (superadmin only).
 			r.Route("/users", func(r chi.Router) {
 				r.Use(RequireSuperadmin)
-				r.Put("/{userID}", handleUpdateUser(st))
 			})
 
 			// Plans (superadmin only).
 			r.Route("/plans", func(r chi.Router) {
 				r.Use(RequireSuperadmin)
-				r.Post("/", handleCreatePlan(st, catalog))
-				r.Route("/{planID}", func(r chi.Router) {
-					r.Put("/", handleUpdatePlan(st, catalog))
-					r.Delete("/", handleDeletePlan(st))
-				})
 			})
 
 			// Model catalog (superadmin only).

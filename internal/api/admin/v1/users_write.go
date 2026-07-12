@@ -4,8 +4,24 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/modelserver/modelserver/internal/api/contract"
+	"github.com/modelserver/modelserver/internal/authz"
 )
+
+func registerUserWriteOperations(api huma.API, server *Server) {
+	contract.Register(api, contract.Operation{
+		ID:            "updateUser",
+		Method:        http.MethodPut,
+		Path:          "/api/v1/users/{userID}",
+		Summary:       "Update user",
+		Tags:          []string{"Users"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        authz.System(authz.PermissionSystemUsersWrite),
+		Authorize:     server.authorizationMiddleware,
+	}, server.updateUser)
+}
 
 type UpdateUserInput struct {
 	UserID string `path:"userID" doc:"User identifier."`
