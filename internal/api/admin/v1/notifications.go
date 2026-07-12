@@ -3,6 +3,7 @@ package adminv1
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -120,6 +121,55 @@ type GetNotificationOutput struct {
 	Body DataResponse[types.Notification]
 }
 
+// CreateNotificationInput is the typed request for POST /api/v1/admin/notifications.
+// No Huma-level validators are set to preserve the legacy 400 invalid_input wire shape.
+type CreateNotificationInput struct {
+	Body struct {
+		Title        string  `json:"title"`
+		Body         string  `json:"body"`
+		AudienceType string  `json:"audience_type"`
+		AudienceID   *string `json:"audience_id,omitempty"`
+	}
+}
+
+// CreateNotificationOutput is the response envelope for POST /api/v1/admin/notifications.
+type CreateNotificationOutput struct {
+	Body DataResponse[types.Notification]
+}
+
+// UpdateNotificationInput is the typed request for PUT /api/v1/admin/notifications/{id}.
+type UpdateNotificationInput struct {
+	ID   string `path:"id" doc:"Notification identifier."`
+	Body struct {
+		Title        string  `json:"title"`
+		Body         string  `json:"body"`
+		AudienceType string  `json:"audience_type"`
+		AudienceID   *string `json:"audience_id,omitempty"`
+	}
+}
+
+// UpdateNotificationOutput is the response envelope for PUT /api/v1/admin/notifications/{id}.
+type UpdateNotificationOutput struct {
+	Body DataResponse[types.Notification]
+}
+
+// DeleteNotificationInput carries the path parameter for DELETE /api/v1/admin/notifications/{id}.
+type DeleteNotificationInput struct {
+	ID string `path:"id" doc:"Notification identifier."`
+}
+
+// DeleteNotificationResponseData is the inner data for the delete response.
+// The legacy wire shape returns {"data": {"deleted": true}} at status 200 (not 204).
+type DeleteNotificationResponseData struct {
+	Deleted bool `json:"deleted"`
+}
+
+// DeleteNotificationOutput preserves the legacy wire quirk of returning
+// {"data": {"deleted": true}} at status 200 (not 204).
+type DeleteNotificationOutput struct {
+	Body DataResponse[DeleteNotificationResponseData]
+}
+
 func registerNotificationOperations(api huma.API, server *Server) {
 	authenticated := authz.Authenticated()
 	read := authz.System(authz.PermissionSystemNotificationsRead)
@@ -201,6 +251,47 @@ func registerNotificationOperations(api huma.API, server *Server) {
 		Access:        read,
 		Authorize:     server.authorizationMiddleware,
 	}, server.getNotification)
+
+	manage := authz.System(authz.PermissionSystemNotificationsManage)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "createNotification",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/admin/notifications",
+		Summary:       "Create notification",
+		Description:   "Creates a new notification. Returns 200 (legacy wire quirk, not 201).",
+		Tags:          []string{"Notifications"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        manage,
+		Authorize:     server.authorizationMiddleware,
+	}, server.createNotification)
+
+	contract.Register(api, contract.Operation{
+		ID:            "updateNotification",
+		Method:        http.MethodPut,
+		Path:          "/api/v1/admin/notifications/{id}",
+		Summary:       "Update notification",
+		Description:   "Updates an existing notification by ID.",
+		Tags:          []string{"Notifications"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+		Access:        manage,
+		Authorize:     server.authorizationMiddleware,
+	}, server.updateNotification)
+
+	contract.Register(api, contract.Operation{
+		ID:            "deleteNotification",
+		Method:        http.MethodDelete,
+		Path:          "/api/v1/admin/notifications/{id}",
+		Summary:       "Delete notification",
+		Description:   "Soft-deletes a notification. Returns 200 with {data:{deleted:true}} (legacy wire quirk, not 204).",
+		Tags:          []string{"Notifications"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+		Access:        manage,
+		Authorize:     server.authorizationMiddleware,
+	}, server.deleteNotification)
 }
 
 func (s *Server) listMyNotifications(ctx context.Context, input *ListMyNotificationsInput) (*ListMyNotificationsOutput, error) {
@@ -295,4 +386,103 @@ func (s *Server) getNotification(ctx context.Context, input *GetNotificationInpu
 	}
 
 	return &GetNotificationOutput{Body: DataResponse[types.Notification]{Data: *n}}, nil
+}
+
+func (s *Server) createNotification(ctx context.Context, input *CreateNotificationInput) (*CreateNotificationOutput, error) {
+	me, ok := authorizationFromContext(ctx)
+	if !ok {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "request authorization context is missing", nil)
+	}
+
+	payload := notificationCreatePayload{
+		Title:        input.Body.Title,
+		Body:         input.Body.Body,
+		AudienceType: input.Body.AudienceType,
+		AudienceID:   input.Body.AudienceID,
+	}
+	if code, msg := validateNotificationPayload(payload); code != "" {
+		return nil, contract.NewError(http.StatusBadRequest, code, msg, nil)
+	}
+	if payload.AudienceType != types.AudienceTypeGlobal {
+		if code, msg := resolveAudience(s.Notifications, payload.AudienceType, *payload.AudienceID); code != "" {
+			status := http.StatusBadRequest
+			if code == "internal" {
+				status = http.StatusInternalServerError
+			}
+			return nil, contract.NewError(status, code, msg, nil)
+		}
+	}
+
+	n := &types.Notification{
+		Title:        payload.Title,
+		Body:         payload.Body,
+		AudienceType: payload.AudienceType,
+		AudienceID:   payload.AudienceID,
+		CreatedBy:    me.Principal.UserID,
+	}
+	if err := s.Notifications.CreateNotification(n); err != nil {
+		log.Printf("ERROR notifications: create by=%s audience_type=%s: %v", me.Principal.UserID, payload.AudienceType, err)
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to create notification", nil)
+	}
+
+	return &CreateNotificationOutput{Body: DataResponse[types.Notification]{Data: *n}}, nil
+}
+
+func (s *Server) updateNotification(ctx context.Context, input *UpdateNotificationInput) (*UpdateNotificationOutput, error) {
+	_, ok := authorizationFromContext(ctx)
+	if !ok {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "request authorization context is missing", nil)
+	}
+
+	payload := notificationCreatePayload{
+		Title:        input.Body.Title,
+		Body:         input.Body.Body,
+		AudienceType: input.Body.AudienceType,
+		AudienceID:   input.Body.AudienceID,
+	}
+	if code, msg := validateNotificationPayload(payload); code != "" {
+		return nil, contract.NewError(http.StatusBadRequest, code, msg, nil)
+	}
+	if payload.AudienceType != types.AudienceTypeGlobal {
+		if code, msg := resolveAudience(s.Notifications, payload.AudienceType, *payload.AudienceID); code != "" {
+			status := http.StatusBadRequest
+			if code == "internal" {
+				status = http.StatusInternalServerError
+			}
+			return nil, contract.NewError(status, code, msg, nil)
+		}
+	}
+
+	if err := s.Notifications.UpdateNotification(input.ID, payload.Title, payload.Body, payload.AudienceType, payload.AudienceID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, contract.NewError(http.StatusNotFound, "not_found", "notification not found or already deleted", nil)
+		}
+		log.Printf("ERROR notifications: update id=%s: %v", input.ID, err)
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to update notification", nil)
+	}
+
+	n, err := s.Notifications.GetNotification(input.ID)
+	if err != nil {
+		log.Printf("ERROR notifications: reload_after_update id=%s: %v", input.ID, err)
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to reload notification", nil)
+	}
+
+	return &UpdateNotificationOutput{Body: DataResponse[types.Notification]{Data: *n}}, nil
+}
+
+func (s *Server) deleteNotification(ctx context.Context, input *DeleteNotificationInput) (*DeleteNotificationOutput, error) {
+	_, ok := authorizationFromContext(ctx)
+	if !ok {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "request authorization context is missing", nil)
+	}
+
+	if err := s.Notifications.SoftDeleteNotification(input.ID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, contract.NewError(http.StatusNotFound, "not_found", "notification not found or already deleted", nil)
+		}
+		log.Printf("ERROR notifications: soft_delete id=%s: %v", input.ID, err)
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to delete notification", nil)
+	}
+
+	return &DeleteNotificationOutput{Body: DataResponse[DeleteNotificationResponseData]{Data: DeleteNotificationResponseData{Deleted: true}}}, nil
 }

@@ -29,9 +29,9 @@ type fakeNotificationsStore struct {
 	lastListAllAudience   string
 	lastListAllPag        types.PaginationParams
 	// get
-	getItem           *types.Notification
-	getErr            error
-	lastGetID         string
+	getItem   *types.Notification
+	getErr    error
+	lastGetID string
 	// count
 	countVal        int
 	countErr        error
@@ -41,9 +41,29 @@ type fakeNotificationsStore struct {
 	lastMarkReadUserID string
 	lastMarkReadID     string
 	// mark all read
-	markAllMarked       int
-	markAllErr          error
-	lastMarkAllUserID   string
+	markAllMarked     int
+	markAllErr        error
+	lastMarkAllUserID string
+	// create
+	createCalledWith *types.Notification
+	createErr        error
+	// update
+	updateCalledWith struct {
+		ID           string
+		Title        string
+		Body         string
+		AudienceType string
+		AudienceID   *string
+	}
+	updateErr error
+	// delete
+	deleteCalledWith string
+	deleteErr        error
+	// GetProjectByID / GetUserByID for audience resolution
+	resolveProject *types.Project
+	resolveProjectErr error
+	resolveUser    *types.User
+	resolveUserErr error
 }
 
 func (f *fakeNotificationsStore) ListVisibleForUser(userID string, p types.PaginationParams) ([]types.Notification, int, error) {
@@ -108,15 +128,28 @@ func (f *fullFakeNotificationsStore) GetNotification(id string) (*types.Notifica
 	f.lastGetID = id
 	return f.getItem, f.getErr
 }
-func (f *fullFakeNotificationsStore) CreateNotification(_ *types.Notification) error { return nil }
-func (f *fullFakeNotificationsStore) UpdateNotification(_, _, _, _ string, _ *string) error {
-	return nil
+func (f *fullFakeNotificationsStore) CreateNotification(n *types.Notification) error {
+	f.createCalledWith = n
+	return f.createErr
 }
-func (f *fullFakeNotificationsStore) SoftDeleteNotification(_ string) error { return nil }
+func (f *fullFakeNotificationsStore) UpdateNotification(id, title, body, audienceType string, audienceID *string) error {
+	f.updateCalledWith.ID = id
+	f.updateCalledWith.Title = title
+	f.updateCalledWith.Body = body
+	f.updateCalledWith.AudienceType = audienceType
+	f.updateCalledWith.AudienceID = audienceID
+	return f.updateErr
+}
+func (f *fullFakeNotificationsStore) SoftDeleteNotification(id string) error {
+	f.deleteCalledWith = id
+	return f.deleteErr
+}
 func (f *fullFakeNotificationsStore) GetProjectByID(_ string) (*types.Project, error) {
-	return nil, nil
+	return f.resolveProject, f.resolveProjectErr
 }
-func (f *fullFakeNotificationsStore) GetUserByID(_ string) (*types.User, error) { return nil, nil }
+func (f *fullFakeNotificationsStore) GetUserByID(_ string) (*types.User, error) {
+	return f.resolveUser, f.resolveUserErr
+}
 
 // Test 1: listMyNotifications happy path
 func TestListMyNotificationsHappyPath(t *testing.T) {
@@ -358,5 +391,189 @@ func TestGetNotificationHappyPath(t *testing.T) {
 	}
 	if body.Data.ID != "admin-notif-42" {
 		t.Fatalf("response data.id = %q, want %q", body.Data.ID, "admin-notif-42")
+	}
+}
+
+// authenticatedJSONRequest creates an authenticated POST/PUT request with a JSON body.
+func authenticatedJSONRequest(method, target, body string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// Test 13: createNotification — validation error (invalid audience_type) → 400 invalid_input
+func TestCreateNotificationValidationError(t *testing.T) {
+	ns := &fakeNotificationsStore{}
+	recorder := httptest.NewRecorder()
+	body := `{"title":"Hello","body":"World","audience_type":"INVALID"}`
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, authenticatedJSONRequest(http.MethodPost, "/api/v1/admin/notifications", body))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", recorder.Code, recorder.Body.String())
+	}
+	var errResp contract.ErrorEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp.Payload.Code != "invalid_input" {
+		t.Fatalf("error code = %q, want invalid_input", errResp.Payload.Code)
+	}
+}
+
+// Test 14: createNotification — audience resolve: project not found → 400 invalid_audience
+func TestCreateNotificationAudienceProjectNotFound(t *testing.T) {
+	ns := &fakeNotificationsStore{
+		resolveProject: nil, // project not found
+	}
+	recorder := httptest.NewRecorder()
+	projectID := "proj-999"
+	body := `{"title":"Hello","body":"World","audience_type":"project","audience_id":"` + projectID + `"}`
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, authenticatedJSONRequest(http.MethodPost, "/api/v1/admin/notifications", body))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", recorder.Code, recorder.Body.String())
+	}
+	var errResp contract.ErrorEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp.Payload.Code != "invalid_audience" {
+		t.Fatalf("error code = %q, want invalid_audience", errResp.Payload.Code)
+	}
+	if !strings.Contains(errResp.Payload.Message, "not found") {
+		t.Fatalf("error message = %q, want message about not found", errResp.Payload.Message)
+	}
+}
+
+// Test 15: createNotification — audience resolve: project archived → 400 invalid_audience
+func TestCreateNotificationAudienceProjectArchived(t *testing.T) {
+	ns := &fakeNotificationsStore{
+		resolveProject: &types.Project{ID: "proj-archived", Status: types.ProjectStatusArchived},
+	}
+	recorder := httptest.NewRecorder()
+	body := `{"title":"Hello","body":"World","audience_type":"project","audience_id":"proj-archived"}`
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, authenticatedJSONRequest(http.MethodPost, "/api/v1/admin/notifications", body))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", recorder.Code, recorder.Body.String())
+	}
+	var errResp contract.ErrorEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp.Payload.Code != "invalid_audience" {
+		t.Fatalf("error code = %q, want invalid_audience", errResp.Payload.Code)
+	}
+	if !strings.Contains(errResp.Payload.Message, "archived") {
+		t.Fatalf("error message = %q, want message about archived", errResp.Payload.Message)
+	}
+}
+
+// Test 16: createNotification — store error → 500 internal
+func TestCreateNotificationStoreError(t *testing.T) {
+	ns := &fakeNotificationsStore{createErr: errors.New("db failure")}
+	recorder := httptest.NewRecorder()
+	body := `{"title":"Hello","body":"World","audience_type":"global"}`
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, authenticatedJSONRequest(http.MethodPost, "/api/v1/admin/notifications", body))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// Test 17: createNotification — happy path (global audience) → 200 with {data: notification}
+// Asserts CreatedBy is set from the auth context (testUserID).
+func TestCreateNotificationHappyPath(t *testing.T) {
+	ns := &fakeNotificationsStore{}
+	recorder := httptest.NewRecorder()
+	body := `{"title":"Hello","body":"World","audience_type":"global"}`
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, authenticatedJSONRequest(http.MethodPost, "/api/v1/admin/notifications", body))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", recorder.Code, recorder.Body.String())
+	}
+	if ns.createCalledWith == nil {
+		t.Fatal("CreateNotification was not called")
+	}
+	if ns.createCalledWith.CreatedBy != testUserID {
+		t.Fatalf("CreatedBy = %q, want %q", ns.createCalledWith.CreatedBy, testUserID)
+	}
+	if ns.createCalledWith.AudienceType != "global" {
+		t.Fatalf("AudienceType = %q, want global", ns.createCalledWith.AudienceType)
+	}
+	var respBody DataResponse[types.Notification]
+	if err := json.Unmarshal(recorder.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+}
+
+// Test 18: updateNotification — happy path → 200; assert refetch triggered
+func TestUpdateNotificationHappyPath(t *testing.T) {
+	updated := types.Notification{ID: "notif-upd", Title: "Updated", Body: "New body", AudienceType: "global"}
+	ns := &fakeNotificationsStore{getItem: &updated}
+	recorder := httptest.NewRecorder()
+	body := `{"title":"Updated","body":"New body","audience_type":"global"}`
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, authenticatedJSONRequest(http.MethodPut, "/api/v1/admin/notifications/notif-upd", body))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", recorder.Code, recorder.Body.String())
+	}
+	if ns.updateCalledWith.ID != "notif-upd" {
+		t.Fatalf("update ID = %q, want notif-upd", ns.updateCalledWith.ID)
+	}
+	// GetNotification (refetch) should have been called
+	if ns.lastGetID != "notif-upd" {
+		t.Fatalf("refetch GetNotification ID = %q, want notif-upd", ns.lastGetID)
+	}
+	var respBody DataResponse[types.Notification]
+	if err := json.Unmarshal(recorder.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if respBody.Data.ID != "notif-upd" {
+		t.Fatalf("response data.id = %q, want notif-upd", respBody.Data.ID)
+	}
+}
+
+// Test 19: deleteNotification — pgx.ErrNoRows → 404 not_found "notification not found or already deleted"
+func TestDeleteNotificationNotFound(t *testing.T) {
+	ns := &fakeNotificationsStore{deleteErr: pgx.ErrNoRows}
+	recorder := httptest.NewRecorder()
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, adminRequest(http.MethodDelete, "/api/v1/admin/notifications/notif-gone"))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body = %s", recorder.Code, recorder.Body.String())
+	}
+	var errResp contract.ErrorEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp.Payload.Code != "not_found" {
+		t.Fatalf("error code = %q, want not_found", errResp.Payload.Code)
+	}
+	if !strings.Contains(errResp.Payload.Message, "notification not found or already deleted") {
+		t.Fatalf("error message = %q", errResp.Payload.Message)
+	}
+}
+
+// Test 20: deleteNotification — happy path → 200 with {data: {"deleted": true}}
+// Asserts SoftDeleteNotification was called with the correct ID.
+func TestDeleteNotificationHappyPath(t *testing.T) {
+	ns := &fakeNotificationsStore{}
+	recorder := httptest.NewRecorder()
+	testRouter(adminNotificationsServer(ns)).ServeHTTP(recorder, adminRequest(http.MethodDelete, "/api/v1/admin/notifications/notif-del"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", recorder.Code, recorder.Body.String())
+	}
+	if ns.deleteCalledWith != "notif-del" {
+		t.Fatalf("SoftDeleteNotification called with %q, want notif-del", ns.deleteCalledWith)
+	}
+	var respBody DataResponse[DeleteNotificationResponseData]
+	if err := json.Unmarshal(recorder.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !respBody.Data.Deleted {
+		t.Fatal("response data.deleted = false, want true")
 	}
 }
