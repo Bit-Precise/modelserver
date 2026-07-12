@@ -28,6 +28,13 @@ And these migrated write / public operations (Batch 2):
 - `POST /api/v1/auth/oauth/{provider}`
 - `GET /api/v1/auth/oauth/{provider}/redirect`
 
+And these migrated superadmin write operations (Batch 3):
+
+- `PUT /api/v1/users/{userID}`
+- `POST /api/v1/plans`
+- `PUT /api/v1/plans/{planID}`
+- `DELETE /api/v1/plans/{planID}`
+
 All other management routes remain on their legacy Chi handlers until they are
 individually migrated. A route must not be registered by both implementations.
 
