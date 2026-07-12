@@ -78,7 +78,22 @@ type notificationsStore interface {
 	GetProjectByID(id string) (*types.Project, error)
 	GetUserByID(id string) (*types.User, error)
 }
-type extraUsageStore interface{}    // G — Extra usage user + admin
+// G — Extra usage user + admin
+type extraUsageStore interface {
+	GetExtraUsageSettings(projectID string) (*types.ExtraUsageSettings, error)
+	UpsertExtraUsageSettings(projectID string, enabled bool, monthlyLimit int64) (*types.ExtraUsageSettings, error)
+	GetMonthlyExtraSpendCredits(projectID string, monthStart time.Time) (int64, error)
+	ListExtraUsageTransactions(projectID string, p types.PaginationParams, typeFilter string) ([]types.ExtraUsageTransaction, int, error)
+	SumDailyExtraUsageTopupCredits(projectID string, dayStart time.Time) (int64, error)
+	CreateOrder(*types.Order) error
+	UpdateOrderStatus(orderID, status string) error
+	UpdateOrderPayment(orderID, paymentRef, paymentURL, status string) error
+	GetOrderByID(id string) (*types.Order, error)
+	TopUpExtraUsage(req store.TopUpExtraUsageReq) (int64, error)
+	ListExtraUsageSettings() ([]types.ExtraUsageSettings, error)
+	SumRecentExtraUsageSpendCredits(projectID string, days int) (int64, error)
+	SetExtraUsageBypass(projectID string, bypass bool) (*types.ExtraUsageSettings, error)
+}
 type projectsStore interface{}      // H — Projects CRUD
 type membersStore interface{}       // I — Project members
 type keysStore interface{}          // J — API Keys
