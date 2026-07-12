@@ -34,6 +34,7 @@ type Server struct {
 	Store     managementStore
 	Users     userReadStore
 	Plans     plansStore
+	Models    modelsStore
 	Tokens    tokenValidator
 	Auth      authStore
 	JWT       *auth.JWTManager

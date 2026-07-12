@@ -35,6 +35,15 @@ And these migrated superadmin write operations (Batch 3):
 - `PUT /api/v1/plans/{planID}`
 - `DELETE /api/v1/plans/{planID}`
 
+And these migrated model-catalog operations (Batch 4):
+
+- `GET /api/v1/models`
+- `GET /api/v1/models/{name}`
+- `POST /api/v1/models`
+- `PATCH /api/v1/models/{name}`
+- `PUT /api/v1/models/{name}`
+- `DELETE /api/v1/models/{name}`
+
 All other management routes remain on their legacy Chi handlers until they are
 individually migrated. A route must not be registered by both implementations.
 

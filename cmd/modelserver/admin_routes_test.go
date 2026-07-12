@@ -44,6 +44,17 @@ func (store *routeTestStore) GetPlanByID(string) (*types.Plan, error) { return s
 func (*routeTestStore) CreatePlan(*types.Plan) error                  { return nil }
 func (*routeTestStore) UpdatePlan(string, map[string]any) error       { return nil }
 func (*routeTestStore) DeletePlan(string) error                       { return nil }
+func (*routeTestStore) ListModels() ([]types.Model, error)            { return []types.Model{}, nil }
+func (*routeTestStore) ListModelsByStatus(string) ([]types.Model, error) {
+	return []types.Model{}, nil
+}
+func (*routeTestStore) GetModelByName(string) (*types.Model, error) { return nil, nil }
+func (*routeTestStore) CreateModel(*types.Model) error               { return nil }
+func (*routeTestStore) UpdateModel(string, map[string]any) error     { return nil }
+func (*routeTestStore) DeleteModel(string) error                     { return nil }
+func (*routeTestStore) ModelReferenceCountsFor(string) (storepkg.ModelReferenceCounts, error) {
+	return storepkg.ModelReferenceCounts{}, nil
+}
 
 type routeTestTokens struct{}
 

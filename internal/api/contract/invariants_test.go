@@ -207,3 +207,30 @@ func TestBatch03NoLegacyChiOverlap(t *testing.T) {
 		}
 	}
 }
+
+func TestBatch04NoLegacyChiOverlap(t *testing.T) {
+	t.Parallel()
+
+	migrated := []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/models"},
+		{http.MethodGet, "/api/v1/models/"},
+		{http.MethodPost, "/api/v1/models"},
+		{http.MethodPost, "/api/v1/models/"},
+		{http.MethodGet, "/api/v1/models/{name}"},
+		{http.MethodGet, "/api/v1/models/{name}/"},
+		{http.MethodPatch, "/api/v1/models/{name}"},
+		{http.MethodPatch, "/api/v1/models/{name}/"},
+		{http.MethodPut, "/api/v1/models/{name}"},
+		{http.MethodPut, "/api/v1/models/{name}/"},
+		{http.MethodDelete, "/api/v1/models/{name}"},
+		{http.MethodDelete, "/api/v1/models/{name}/"},
+	}
+	router := chi.NewRouter()
+	admin.MountRoutes(router, nil, &config.Config{}, nil, nil, nil, nil, nil)
+	for _, route := range migrated {
+		ctx := chi.NewRouteContext()
+		if router.Match(ctx, route.method, route.path) {
+			t.Errorf("legacy admin still registers %s %s", route.method, route.path)
+		}
+	}
+}

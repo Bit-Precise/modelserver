@@ -53,10 +53,12 @@ func (s *fakePlansStore) DeletePlan(id string) error {
 // fakeCatalog implements modelcatalog.Catalog for plan write tests.
 // By default NormalizeNames returns names verbatim; set normalizeUnknown
 // to simulate an UnknownModelsError, or normalizeErr for a generic error.
+// swappedModels records the last slice passed to Swap, for models write tests.
 type fakeCatalog struct {
 	normalizeErr     error
 	normalizeUnknown []string
 	lastNames        []string
+	swappedModels    []types.Model
 }
 
 func (c *fakeCatalog) NormalizeNames(names []string) ([]string, error) {
@@ -75,7 +77,7 @@ func (c *fakeCatalog) NormalizeNames(names []string) ([]string, error) {
 func (c *fakeCatalog) Lookup(string) (*types.Model, bool) { return nil, false }
 func (c *fakeCatalog) Get(string) (*types.Model, bool)    { return nil, false }
 func (c *fakeCatalog) Snapshot() []types.Model            { return nil }
-func (c *fakeCatalog) Swap([]types.Model)                 {}
+func (c *fakeCatalog) Swap(models []types.Model)          { c.swappedModels = append([]types.Model(nil), models...) }
 func (c *fakeCatalog) Stats() modelcatalog.Stats          { return modelcatalog.Stats{} }
 
 // newPlansServer returns a Server wired for createPlan tests.

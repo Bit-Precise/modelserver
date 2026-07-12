@@ -1,6 +1,7 @@
 package adminv1
 
 import (
+	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
 )
 
@@ -38,7 +39,17 @@ type plansStore interface {
 	UpdatePlan(id string, updates map[string]any) error
 	DeletePlan(id string) error
 }
-type modelsStore interface{}        // D — Models catalog
+// D — Models catalog: READ and WRITE operations for the model catalog.
+// Consumed by Server.Models; both read and write handlers.
+type modelsStore interface {
+	ListModels() ([]types.Model, error)
+	ListModelsByStatus(status string) ([]types.Model, error)
+	GetModelByName(name string) (*types.Model, error)
+	CreateModel(*types.Model) error
+	UpdateModel(name string, updates map[string]any) error
+	DeleteModel(name string) error
+	ModelReferenceCountsFor(name string) (store.ModelReferenceCounts, error)
+}
 type adminSuperStore interface{}    // E — Admin (superadmin)
 type notificationsStore interface{} // F — Notifications user + admin
 type extraUsageStore interface{}    // G — Extra usage user + admin
