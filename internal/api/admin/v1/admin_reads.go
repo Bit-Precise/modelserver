@@ -1,6 +1,7 @@
 package adminv1
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"net/http"
@@ -107,6 +108,66 @@ func registerAdminReadOperations(api huma.API, server *Server) {
 		Access:        projectsAccess,
 		Authorize:     server.authorizationMiddleware,
 	}, server.adminProjectsSubscriptionsOverview)
+
+	contract.Register(api, contract.Operation{
+		ID:            "getAdminHttpLog",
+		Method:        http.MethodGet,
+		Path:          "/api/v1/admin/requests/{requestID}/http-log",
+		Summary:       "Get HTTP log for a request",
+		Tags:          []string{"Admin"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusServiceUnavailable, http.StatusInternalServerError},
+		Access:        requestsAccess,
+		Authorize:     server.authorizationMiddleware,
+	}, server.getAdminHttpLog)
+}
+
+// GetAdminHttpLogInput represents the path parameters for
+// GET /api/v1/admin/requests/{requestID}/http-log.
+type GetAdminHttpLogInput struct {
+	RequestID string `path:"requestID" doc:"Request identifier."`
+}
+
+// GetAdminHttpLogOutput carries the raw http log bytes with an explicit
+// Content-Type override to application/json (instead of the default
+// application/octet-stream that contract.BytesResponse would otherwise emit).
+type GetAdminHttpLogOutput struct {
+	ContentType   string `header:"Content-Type"`
+	ContentLength int64  `header:"Content-Length,omitempty"`
+	Body          contract.BytesResponse
+}
+
+// getAdminHttpLog handles GET /api/v1/admin/requests/{requestID}/http-log.
+//
+// Project-membership check omitted intentionally: the legacy handleGetHttpLog
+// had a check (lines 30–37) that was gated on chi.URLParam(r, "projectID") != "".
+// The superadmin path (/admin/requests/{requestID}/http-log) never carries a
+// projectID segment, so the check was always inert on this variant. The
+// project-scoped variant (/projects/{projectID}/requests/{requestID}/http-log)
+// remains on chi until Batch 12.
+func (s *Server) getAdminHttpLog(ctx context.Context, input *GetAdminHttpLogInput) (*GetAdminHttpLogOutput, error) {
+	if s == nil || s.AdminSuper == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "admin store is not configured", nil)
+	}
+	if s.HTTPLog == nil {
+		return nil, contract.NewError(http.StatusServiceUnavailable, "unavailable", "http logging is not configured", nil)
+	}
+	req, err := s.AdminSuper.GetRequest(input.RequestID)
+	if err != nil || req == nil {
+		return nil, contract.NewError(http.StatusNotFound, "not_found", "request not found", nil)
+	}
+	if req.HttpLogPath == "" {
+		return nil, contract.NewError(http.StatusNotFound, "not_found", "no http log available for this request", nil)
+	}
+	data, err := s.HTTPLog.Retrieve(ctx, req.HttpLogPath)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to retrieve http log", nil)
+	}
+	return &GetAdminHttpLogOutput{
+		ContentType:   "application/json",
+		ContentLength: int64(len(data)),
+		Body:          contract.BytesResponse{Reader: bytes.NewReader(data)},
+	}, nil
 }
 
 // listAllProjects handles GET /api/v1/admin/projects with optional filters.

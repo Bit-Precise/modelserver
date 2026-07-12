@@ -7,9 +7,15 @@ import (
 	"time"
 
 	"github.com/modelserver/modelserver/internal/api/contract"
+	"github.com/modelserver/modelserver/internal/httplog"
 	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
 )
+
+// stubHTTPLog is a zero-value httplog.Logger used as a non-nil sentinel to
+// satisfy the Server.HTTPLog != nil check in unit tests where Retrieve is never
+// reached. It must not be called — doing so would panic on the nil s3 client.
+var stubHTTPLog httplog.Logger
 
 // fakeAdminSuperStore records ListAllProjects and ListAllRequests calls,
 // and supports stubbing for subscriptions-overview tests.
@@ -29,6 +35,10 @@ type fakeAdminSuperStore struct {
 	requests        []types.Request
 	requestsTotal   int
 	listRequestsErr error
+
+	// GetRequest stubs (used by getAdminHttpLog tests)
+	getRequestErr    error
+	getRequestReturn *types.Request
 
 	// subscriptions-overview stubs
 	activeSubsProjectIDs  []string
@@ -110,7 +120,76 @@ func (s *fakeAdminSuperStore) ListPlans(activeOnly bool) ([]types.Plan, error) {
 }
 
 func (s *fakeAdminSuperStore) GetRequest(id string) (*types.Request, error) {
-	return nil, nil
+	if s.getRequestErr != nil {
+		return nil, s.getRequestErr
+	}
+	return s.getRequestReturn, nil
+}
+
+// --- GetAdminHttpLog Tests (3 unit + 1 HTTP integration) ---
+
+// Test 1: HTTPLog nil → 503 unavailable
+func TestGetAdminHttpLogHTTPLogNil(t *testing.T) {
+	t.Parallel()
+	st := &fakeAdminSuperStore{}
+	server := &Server{AdminSuper: st} // HTTPLog intentionally nil
+
+	input := &GetAdminHttpLogInput{RequestID: "req-1"}
+	_, err := server.getAdminHttpLog(context.Background(), input)
+
+	assertStatusError(t, err, 503, "unavailable")
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "http logging is not configured" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "http logging is not configured")
+	}
+}
+
+// Test 2: GetRequest returns error → 404 not_found
+func TestGetAdminHttpLogRequestNotFound(t *testing.T) {
+	t.Parallel()
+	st := &fakeAdminSuperStore{
+		getRequestErr: errors.New("db: no rows"),
+	}
+	// HTTPLog must be non-nil to get past the nil check — use a non-nil pointer
+	// to an uninitialised Logger value. The handler checks HTTPLog == nil before
+	// calling GetRequest, so a zero-value *httplog.Logger is fine here.
+	server := &Server{AdminSuper: st, HTTPLog: &stubHTTPLog}
+
+	input := &GetAdminHttpLogInput{RequestID: "req-missing"}
+	_, err := server.getAdminHttpLog(context.Background(), input)
+
+	assertStatusError(t, err, 404, "not_found")
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "request not found" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "request not found")
+	}
+}
+
+// Test 3: GetRequest returns req with empty HttpLogPath → 404 not_found
+func TestGetAdminHttpLogNoHttpLogPath(t *testing.T) {
+	t.Parallel()
+	st := &fakeAdminSuperStore{
+		getRequestReturn: &types.Request{ID: "req-1", HttpLogPath: ""},
+	}
+	server := &Server{AdminSuper: st, HTTPLog: &stubHTTPLog}
+
+	input := &GetAdminHttpLogInput{RequestID: "req-1"}
+	_, err := server.getAdminHttpLog(context.Background(), input)
+
+	assertStatusError(t, err, 404, "not_found")
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "no http log available for this request" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "no http log available for this request")
+	}
 }
 
 // --- ListAllProjects Tests (5) ---
