@@ -144,6 +144,17 @@ func (s *Store) CancelOrder(id string) (bool, error) {
 	return res.RowsAffected() > 0, nil
 }
 
+// CancelOrderForProject cancels an order only when it belongs to projectID.
+func (s *Store) CancelOrderForProject(projectID, id string) (bool, error) {
+	res, err := s.pool.Exec(context.Background(), `
+		UPDATE orders SET status = 'cancelled', updated_at = NOW()
+		WHERE id = $1 AND project_id = $2 AND status IN ('pending', 'paying')`, id, projectID)
+	if err != nil {
+		return false, err
+	}
+	return res.RowsAffected() > 0, nil
+}
+
 // UpdateOrderStatus updates the status of an order.
 func (s *Store) UpdateOrderStatus(id, status string) error {
 	_, err := s.pool.Exec(context.Background(), `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`, status, id)
@@ -157,4 +168,3 @@ func (s *Store) UpdateOrderPayment(id, paymentRef, paymentURL, status string) er
 		WHERE id = $4`, paymentRef, paymentURL, status, id)
 	return err
 }
-

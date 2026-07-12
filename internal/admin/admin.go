@@ -89,8 +89,12 @@ func RequireSuperadmin(next http.Handler) http.Handler {
 func requireRole(w http.ResponseWriter, r *http.Request, roles ...string) bool {
 	member := MemberFromContext(r.Context())
 	if member == nil {
-		// No member = superadmin (bypassed projectAccessMiddleware)
-		return true
+		user := UserFromContext(r.Context())
+		if user != nil && user.IsSuperadmin {
+			return true
+		}
+		writeError(w, http.StatusForbidden, "forbidden", "insufficient permissions")
+		return false
 	}
 	for _, role := range roles {
 		if member.Role == role {

@@ -228,6 +228,14 @@ type ImagesConfig struct {
 	MaxBodySize int64 `yaml:"max_body_size" mapstructure:"max_body_size"`
 }
 
+// MinJWTSecretLength is the minimum number of bytes accepted for the HMAC
+// secret used to sign admin access and refresh tokens. HS256 accepts shorter
+// keys, but allowing an empty or trivially short deployment secret makes token
+// forgery practical when configuration is missing or guessed.
+const MinJWTSecretLength = 32
+
+const insecureExampleJWTSecret = "change-me-to-a-long-random-secret"
+
 // setDefaults registers all default values with the viper instance.
 // Keys without meaningful defaults are bound via BindEnv so they can
 // still be populated from MODELSERVER_* environment variables.
@@ -309,11 +317,11 @@ func setDefaults(v *viper.Viper) {
 	// guard becomes a no-op until an operator flips this to true in config.
 	v.SetDefault("extra_usage.enabled", false)
 	v.SetDefault("extra_usage.credit_price_cny_fen", 5438)
-	v.SetDefault("extra_usage.credit_price_usd_cents", 907)   // ≈ 5438/6 (1USD ≈ 6CNY)
-	v.SetDefault("extra_usage.min_topup_cny_fen", 1000)        // ¥10
-	v.SetDefault("extra_usage.max_topup_cny_fen", 200000)      // ¥2000
-	v.SetDefault("extra_usage.min_topup_usd_cents", 167)       // $1.67 ≈ ¥10
-	v.SetDefault("extra_usage.max_topup_usd_cents", 33333)     // $333.33 ≈ ¥2000
+	v.SetDefault("extra_usage.credit_price_usd_cents", 907) // ≈ 5438/6 (1USD ≈ 6CNY)
+	v.SetDefault("extra_usage.min_topup_cny_fen", 1000)     // ¥10
+	v.SetDefault("extra_usage.max_topup_cny_fen", 200000)   // ¥2000
+	v.SetDefault("extra_usage.min_topup_usd_cents", 167)    // $1.67 ≈ ¥10
+	v.SetDefault("extra_usage.max_topup_usd_cents", 33333)  // $333.33 ≈ ¥2000
 	// Historical default daily cap was 500_000 fen (¥5000). Convert to credits
 	// using the same default credit_price_cny_fen=5438:
 	//   500_000 × 1_000_000 / 5438 ≈ 91,945,500 credits → round to 91_945_000.
@@ -368,6 +376,13 @@ func unmarshal(v *viper.Viper) (*Config, error) {
 		),
 	)); err != nil {
 		return nil, err
+	}
+	jwtSecret := strings.TrimSpace(cfg.Auth.JWTSecret)
+	if len(jwtSecret) < MinJWTSecretLength {
+		return nil, fmt.Errorf("auth.jwt_secret must be at least %d bytes", MinJWTSecretLength)
+	}
+	if jwtSecret == insecureExampleJWTSecret {
+		return nil, fmt.Errorf("auth.jwt_secret must not use the public example placeholder")
 	}
 	if cfg.ExtraUsage.CreditPriceCNYFen <= 0 {
 		return nil, fmt.Errorf("extra_usage.credit_price_cny_fen must be > 0, got %d", cfg.ExtraUsage.CreditPriceCNYFen)

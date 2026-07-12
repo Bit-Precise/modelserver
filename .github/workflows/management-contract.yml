@@ -1,0 +1,60 @@
+name: Management API Contract
+
+on:
+  pull_request:
+    paths:
+      - "api/openapi/**"
+      - "cmd/**"
+      - "internal/**"
+      - "dashboard/package.json"
+      - "dashboard/pnpm-lock.yaml"
+      - "dashboard/src/api/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/management-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "api/openapi/**"
+      - "cmd/**"
+      - "internal/**"
+      - "dashboard/package.json"
+      - "dashboard/pnpm-lock.yaml"
+      - "dashboard/src/api/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/management-contract.yml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test Go contracts and runtime routes
+        run: go test ./...
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dashboard/pnpm-lock.yaml
+
+      - name: Install Dashboard dependencies
+        working-directory: dashboard
+        run: pnpm install --frozen-lockfile
+
+      - name: Check generated TypeScript contract
+        working-directory: dashboard
+        run: |
+          pnpm api:check
+          pnpm exec tsc --noEmit

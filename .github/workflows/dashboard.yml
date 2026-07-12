@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "dashboard/**"
+      - "api/openapi/admin.openapi.json"
       - ".github/workflows/dashboard.yml"
 
 jobs:
@@ -15,7 +16,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10.32.0
 
       - uses: actions/setup-node@v4
         with:
@@ -31,7 +32,9 @@ jobs:
         working-directory: dashboard
         env:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
-        run: pnpm build
+        run: |
+          pnpm api:check
+          pnpm build
 
       - name: Configure COS
         env:

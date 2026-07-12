@@ -142,6 +142,19 @@ func (s *Store) UpdateSubscriptionStatus(id, status string) error {
 	return err
 }
 
+// UpdateSubscriptionStatusForProject updates a subscription only within the
+// supplied project. Direct subscription writes are additionally restricted to
+// superadmins by the admin handler.
+func (s *Store) UpdateSubscriptionStatusForProject(projectID, id, status string) (bool, error) {
+	res, err := s.pool.Exec(context.Background(), `
+		UPDATE subscriptions SET status = $1, updated_at = NOW()
+		WHERE id = $2 AND project_id = $3`, status, id, projectID)
+	if err != nil {
+		return false, err
+	}
+	return res.RowsAffected() > 0, nil
+}
+
 // ExpireAndFallbackToFree marks expired paid subscriptions as expired and
 // creates a new free-tier subscription for each affected project.
 func (s *Store) ExpireAndFallbackToFree() (int64, error) {

@@ -2,12 +2,21 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
 
+const validConfigTestJWTSecret = "config-test-jwt-secret-at-least-32-bytes"
+
+func setValidJWTSecret(t *testing.T) {
+	t.Helper()
+	t.Setenv("MODELSERVER_AUTH_JWT_SECRET", validConfigTestJWTSecret)
+}
+
 // TestLoadDefaults verifies that an empty config yields all defaults.
 func TestLoadDefaults(t *testing.T) {
+	setValidJWTSecret(t)
 	cfg, err := Load(nil)
 	if err != nil {
 		t.Fatalf("Load nil: %v", err)
@@ -76,7 +85,7 @@ server:
 db:
   url: "postgres://user:pass@localhost/mydb"
 auth:
-  jwt_secret: "supersecret"
+  jwt_secret: "custom-jwt-secret-at-least-32-bytes"
   access_token_ttl: 5m
   refresh_token_ttl: 24h
   oauth:
@@ -135,7 +144,7 @@ images:
 	if cfg.DB.URL != "postgres://user:pass@localhost/mydb" {
 		t.Errorf("DB.URL = %q", cfg.DB.URL)
 	}
-	if cfg.Auth.JWTSecret != "supersecret" {
+	if cfg.Auth.JWTSecret != "custom-jwt-secret-at-least-32-bytes" {
 		t.Errorf("Auth.JWTSecret = %q", cfg.Auth.JWTSecret)
 	}
 	if cfg.Auth.AccessTokenTTL != 5*time.Minute {
@@ -197,6 +206,7 @@ images:
 
 // TestLoadFile verifies LoadFile reads and parses a YAML file correctly.
 func TestLoadFile(t *testing.T) {
+	setValidJWTSecret(t)
 	content := `
 server:
   proxy_addr: ":7070"
@@ -248,7 +258,7 @@ func TestEnvOverrides(t *testing.T) {
 	t.Setenv("MODELSERVER_SERVER_PROXY_ADDR", ":5050")
 	t.Setenv("MODELSERVER_SERVER_ADMIN_ADDR", ":5051")
 	t.Setenv("MODELSERVER_DB_URL", "postgres://env-override/db")
-	t.Setenv("MODELSERVER_AUTH_JWT_SECRET", "env-jwt-secret")
+	t.Setenv("MODELSERVER_AUTH_JWT_SECRET", "environment-jwt-secret-at-least-32-bytes")
 	t.Setenv("MODELSERVER_ENCRYPTION_KEY", "env-enc-key")
 
 	cfg, err := Load(nil)
@@ -265,8 +275,8 @@ func TestEnvOverrides(t *testing.T) {
 	if cfg.DB.URL != "postgres://env-override/db" {
 		t.Errorf("DB.URL = %q", cfg.DB.URL)
 	}
-	if cfg.Auth.JWTSecret != "env-jwt-secret" {
-		t.Errorf("Auth.JWTSecret = %q, want %q", cfg.Auth.JWTSecret, "env-jwt-secret")
+	if cfg.Auth.JWTSecret != "environment-jwt-secret-at-least-32-bytes" {
+		t.Errorf("Auth.JWTSecret = %q, want %q", cfg.Auth.JWTSecret, "environment-jwt-secret-at-least-32-bytes")
 	}
 	if cfg.Encryption.Key != "env-enc-key" {
 		t.Errorf("Encryption.Key = %q, want %q", cfg.Encryption.Key, "env-enc-key")
@@ -279,7 +289,7 @@ func TestEnvOverridesPartial(t *testing.T) {
 server:
   proxy_addr: ":6060"
 auth:
-  jwt_secret: "yaml-secret"
+  jwt_secret: "yaml-jwt-secret-at-least-32-bytes"
 `)
 
 	// Only set one env var; the others should remain as loaded from YAML.
@@ -299,13 +309,50 @@ auth:
 		t.Errorf("Server.ProxyAddr = %q, want %q", cfg.Server.ProxyAddr, ":6060")
 	}
 	// Was set by YAML and not overridden.
-	if cfg.Auth.JWTSecret != "yaml-secret" {
-		t.Errorf("Auth.JWTSecret = %q, want %q", cfg.Auth.JWTSecret, "yaml-secret")
+	if cfg.Auth.JWTSecret != "yaml-jwt-secret-at-least-32-bytes" {
+		t.Errorf("Auth.JWTSecret = %q, want %q", cfg.Auth.JWTSecret, "yaml-jwt-secret-at-least-32-bytes")
+	}
+}
+
+func TestJWTSecretRequired(t *testing.T) {
+	t.Setenv("MODELSERVER_AUTH_JWT_SECRET", "")
+
+	_, err := Load(nil)
+	if err == nil {
+		t.Fatal("Load accepted an empty auth.jwt_secret")
+	}
+	if !strings.Contains(err.Error(), "auth.jwt_secret") {
+		t.Fatalf("error = %q, want auth.jwt_secret context", err)
+	}
+}
+
+func TestJWTSecretMinimumLength(t *testing.T) {
+	t.Setenv("MODELSERVER_AUTH_JWT_SECRET", "too-short")
+
+	_, err := Load(nil)
+	if err == nil {
+		t.Fatal("Load accepted a short auth.jwt_secret")
+	}
+	if !strings.Contains(err.Error(), "at least 32 bytes") {
+		t.Fatalf("error = %q, want minimum-length guidance", err)
+	}
+}
+
+func TestJWTSecretRejectsPublicExamplePlaceholder(t *testing.T) {
+	t.Setenv("MODELSERVER_AUTH_JWT_SECRET", insecureExampleJWTSecret)
+
+	_, err := Load(nil)
+	if err == nil {
+		t.Fatal("Load accepted the public example JWT secret")
+	}
+	if !strings.Contains(err.Error(), "example placeholder") {
+		t.Fatalf("error = %q, want example-placeholder guidance", err)
 	}
 }
 
 // TestEnvOIDC verifies that OIDC settings can be provided via the short-form env vars.
 func TestEnvOIDC(t *testing.T) {
+	setValidJWTSecret(t)
 	t.Setenv("MODELSERVER_AUTH_OIDC_ISSUER_URL", "https://idp.example.com")
 	t.Setenv("MODELSERVER_AUTH_OIDC_CLIENT_ID", "my-client")
 	t.Setenv("MODELSERVER_AUTH_OIDC_CLIENT_SECRET", "my-secret")
@@ -328,6 +375,7 @@ func TestEnvOIDC(t *testing.T) {
 
 // TestTraceConfigDefaults verifies that new TraceConfig fields have correct defaults.
 func TestTraceConfigDefaults(t *testing.T) {
+	setValidJWTSecret(t)
 	cfg, err := Load(nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -352,6 +400,7 @@ func TestTraceConfigDefaults(t *testing.T) {
 
 // TestTraceConfigYAML verifies that TraceConfig fields are populated from YAML.
 func TestTraceConfigYAML(t *testing.T) {
+	setValidJWTSecret(t)
 	yaml := []byte(`
 trace:
   trace_header: "X-Custom-Trace"
@@ -398,6 +447,7 @@ trace:
 
 // TestTraceConfigEnv verifies TraceConfig fields can be set via environment variables.
 func TestTraceConfigEnv(t *testing.T) {
+	setValidJWTSecret(t)
 	t.Setenv("MODELSERVER_TRACE_EXTRA_TRACE_HEADERS", "X-Req-Id,X-Corr-Id")
 	t.Setenv("MODELSERVER_TRACE_EXTRA_TRACE_BODY_FIELDS", "meta.trace_id")
 	t.Setenv("MODELSERVER_TRACE_CLAUDE_CODE_TRACE_ENABLED", "true")
@@ -423,6 +473,7 @@ func TestTraceConfigEnv(t *testing.T) {
 }
 
 func TestDeviceFlowConfigDefaults(t *testing.T) {
+	setValidJWTSecret(t)
 	cfg, err := Load(nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -436,6 +487,7 @@ func TestDeviceFlowConfigDefaults(t *testing.T) {
 }
 
 func TestDeviceFlowConfigYAML(t *testing.T) {
+	setValidJWTSecret(t)
 	yaml := []byte(`
 auth:
   oauth:
@@ -470,6 +522,7 @@ auth:
 }
 
 func TestDeviceFlowConfigEnv(t *testing.T) {
+	setValidJWTSecret(t)
 	t.Setenv("HYDRA_PUBLIC_URL", "http://hydra-env:4444")
 	t.Setenv("MODELSERVER_AUTH_OAUTH_HYDRA_DEVICE_FLOW_CLIENT_ID", "env-client")
 	t.Setenv("MODELSERVER_AUTH_OAUTH_HYDRA_DEVICE_FLOW_CLIENT_SECRET", "env-secret")
@@ -490,6 +543,7 @@ func TestDeviceFlowConfigEnv(t *testing.T) {
 }
 
 func TestExtraUsageConfig_NewDefaults(t *testing.T) {
+	setValidJWTSecret(t)
 	cfg, err := Load([]byte(""))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -518,6 +572,7 @@ func TestExtraUsageConfig_NewDefaults(t *testing.T) {
 }
 
 func TestExtraUsageConfig_ZeroUSDPriceRejected(t *testing.T) {
+	setValidJWTSecret(t)
 	yaml := []byte(`extra_usage:
   credit_price_usd_cents: 0`)
 	_, err := Load(yaml)
@@ -527,6 +582,7 @@ func TestExtraUsageConfig_ZeroUSDPriceRejected(t *testing.T) {
 }
 
 func TestExtraUsageConfig_InvertedMinMaxRejected(t *testing.T) {
+	setValidJWTSecret(t)
 	yaml := []byte(`extra_usage:
   min_topup_cny_fen: 5000
   max_topup_cny_fen: 1000`)
@@ -588,9 +644,4 @@ func equalStringSlice(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-// setValidJWTSecret sets a valid JWT secret via environment variable to satisfy Load's requirements.
-func setValidJWTSecret(t *testing.T) {
-	t.Setenv("MODELSERVER_AUTH_JWT_SECRET", "test-jwt-secret-key")
 }

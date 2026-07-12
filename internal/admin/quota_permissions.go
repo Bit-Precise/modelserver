@@ -13,17 +13,21 @@ import (
 // quota permissions (the calling route's requireRole already enforces this,
 // but the helper also returns 403 for any unexpected caller role).
 //
-// caller == nil means the request is from a superadmin (MemberFromContext
-// returns nil in that case); superadmin bypasses all checks.
+// callerIsSuperadmin is explicit because a missing member context must never be
+// treated as proof of system-level privilege. Superadmins bypass all checks;
+// other callers must have a recognized project role.
 //
 // On rejection, the returned (status, code, msg) match writeError's signature
 // so callers can forward them verbatim.
-func canSetMemberQuota(caller *types.ProjectMember, targetRole string, isSelf bool) (ok bool, status int, code, msg string) {
+func canSetMemberQuota(caller *types.ProjectMember, callerIsSuperadmin bool, targetRole string, isSelf bool) (ok bool, status int, code, msg string) {
 	_ = isSelf // self-checks are intentionally absent; kept in signature so the
 	// rule's domain is explicit at call sites and future tightening is local.
 
-	if caller == nil {
+	if callerIsSuperadmin {
 		return true, 0, "", ""
+	}
+	if caller == nil {
+		return false, http.StatusForbidden, "forbidden", "insufficient permissions"
 	}
 	switch caller.Role {
 	case types.RoleOwner:

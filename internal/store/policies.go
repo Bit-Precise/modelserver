@@ -110,10 +110,33 @@ func (s *Store) UpdatePolicy(id string, updates map[string]interface{}) error {
 	return err
 }
 
+// UpdatePolicyForProject updates a policy only when it belongs to projectID.
+func (s *Store) UpdatePolicyForProject(projectID, id string, updates map[string]interface{}) (bool, error) {
+	updates["updated_at"] = time.Now()
+	query, args := buildUpdateQuery("rate_limit_policies", "id", id, updates)
+	args = append(args, projectID)
+	query += fmt.Sprintf(" AND project_id = $%d", len(args))
+	res, err := s.pool.Exec(context.Background(), query, args...)
+	if err != nil {
+		return false, err
+	}
+	return res.RowsAffected() > 0, nil
+}
+
 // DeletePolicy deletes a policy.
 func (s *Store) DeletePolicy(id string) error {
 	_, err := s.pool.Exec(context.Background(), "DELETE FROM rate_limit_policies WHERE id = $1", id)
 	return err
+}
+
+// DeletePolicyForProject deletes a policy only within projectID.
+func (s *Store) DeletePolicyForProject(projectID, id string) (bool, error) {
+	res, err := s.pool.Exec(context.Background(),
+		"DELETE FROM rate_limit_policies WHERE id = $1 AND project_id = $2", id, projectID)
+	if err != nil {
+		return false, err
+	}
+	return res.RowsAffected() > 0, nil
 }
 
 func unmarshalPolicyJSON(p *types.RateLimitPolicy, creditRules, rates, classic []byte) error {

@@ -13,38 +13,40 @@ func TestCanSetMemberQuota(t *testing.T) {
 	dev := &types.ProjectMember{UserID: "u-dev", Role: types.RoleDeveloper}
 
 	cases := []struct {
-		name       string
-		caller     *types.ProjectMember
-		targetRole string
-		isSelf     bool
-		wantOK     bool
-		wantStatus int
+		name               string
+		caller             *types.ProjectMember
+		callerIsSuperadmin bool
+		targetRole         string
+		isSelf             bool
+		wantOK             bool
+		wantStatus         int
 	}{
-		// Superadmin (nil caller) — always allowed.
-		{"superadmin_on_owner", nil, types.RoleOwner, false, true, 0},
-		{"superadmin_on_self_owner", nil, types.RoleOwner, true, true, 0},
+		// Superadmin privilege is explicit; a nil member alone is denied.
+		{"superadmin_on_owner", nil, true, types.RoleOwner, false, true, 0},
+		{"superadmin_on_self_owner", nil, true, types.RoleOwner, true, true, 0},
+		{"missing_member_without_superadmin", nil, false, types.RoleDeveloper, false, false, http.StatusForbidden},
 
 		// Owner caller — can set quota on anyone, including self and other owners.
-		{"owner_on_owner", owner, types.RoleOwner, false, true, 0},
-		{"owner_on_self", owner, types.RoleOwner, true, true, 0},
-		{"owner_on_maintainer", owner, types.RoleMaintainer, false, true, 0},
-		{"owner_on_developer", owner, types.RoleDeveloper, false, true, 0},
+		{"owner_on_owner", owner, false, types.RoleOwner, false, true, 0},
+		{"owner_on_self", owner, false, types.RoleOwner, true, true, 0},
+		{"owner_on_maintainer", owner, false, types.RoleMaintainer, false, true, 0},
+		{"owner_on_developer", owner, false, types.RoleDeveloper, false, true, 0},
 
 		// Maintainer caller — can set on non-owners, including self and other maintainers.
-		{"maintainer_on_owner", maint, types.RoleOwner, false, false, http.StatusForbidden},
-		{"maintainer_on_self", maint, types.RoleMaintainer, true, true, 0},
-		{"maintainer_on_other_maintainer", maint, types.RoleMaintainer, false, true, 0},
-		{"maintainer_on_developer", maint, types.RoleDeveloper, false, true, 0},
+		{"maintainer_on_owner", maint, false, types.RoleOwner, false, false, http.StatusForbidden},
+		{"maintainer_on_self", maint, false, types.RoleMaintainer, true, true, 0},
+		{"maintainer_on_other_maintainer", maint, false, types.RoleMaintainer, false, true, 0},
+		{"maintainer_on_developer", maint, false, types.RoleDeveloper, false, true, 0},
 
 		// Developer caller — never has quota permissions (route-level requireRole
 		// already blocks them; helper still returns 403 for defence in depth).
-		{"developer_on_developer", dev, types.RoleDeveloper, false, false, http.StatusForbidden},
-		{"developer_on_self", dev, types.RoleDeveloper, true, false, http.StatusForbidden},
+		{"developer_on_developer", dev, false, types.RoleDeveloper, false, false, http.StatusForbidden},
+		{"developer_on_self", dev, false, types.RoleDeveloper, true, false, http.StatusForbidden},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ok, status, code, msg := canSetMemberQuota(c.caller, c.targetRole, c.isSelf)
+			ok, status, code, msg := canSetMemberQuota(c.caller, c.callerIsSuperadmin, c.targetRole, c.isSelf)
 			if ok != c.wantOK {
 				t.Fatalf("ok=%v, want %v (status=%d code=%q msg=%q)", ok, c.wantOK, status, code, msg)
 			}

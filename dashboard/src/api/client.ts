@@ -63,21 +63,25 @@ async function tryRefresh(): Promise<boolean> {
   }
 }
 
-async function request<T>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const headers = new Headers(options.headers);
-  if (!headers.has("Content-Type") && options.body) {
-    headers.set("Content-Type", "application/json");
-  }
+/**
+ * Fetch transport shared by the legacy request helpers and the generated
+ * OpenAPI client. It owns the dashboard's bearer token and single-flight
+ * refresh behavior so both clients have identical authentication semantics.
+ */
+export async function authenticatedFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const originalRequest = new Request(input, init);
+  const headers = new Headers(originalRequest.headers);
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
-  let res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  // Keep an untouched request available for a single replay after refresh.
+  let request = new Request(originalRequest, { headers });
+  let res = await fetch(request.clone());
 
-  // On 401, attempt token refresh once
   if (res.status === 401 && getStoredRefreshToken()) {
     if (!refreshPromise) {
       refreshPromise = tryRefresh().finally(() => {
@@ -86,24 +90,66 @@ async function request<T>(
     }
     const refreshed = await refreshPromise;
     if (refreshed) {
-      headers.set("Authorization", `Bearer ${accessToken}`);
-      res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+      const retryHeaders = new Headers(request.headers);
+      retryHeaders.set("Authorization", `Bearer ${accessToken}`);
+      request = new Request(request, { headers: retryHeaders });
+      res = await fetch(request);
     }
   }
 
+  return res;
+}
+
+function isErrorResponse(value: unknown): value is ErrorResponse {
+  if (!value || typeof value !== "object" || !("error" in value)) {
+    return false;
+  }
+  const error = value.error;
+  return (
+    !!error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    "message" in error &&
+    typeof error.message === "string"
+  );
+}
+
+/** Convert a management API error envelope into the dashboard's public error type. */
+export function toAPIError(
+  response: Response,
+  body: unknown,
+): APIError {
+  const errBody = isErrorResponse(body) ? body : undefined;
+  return new APIError(
+    response.status,
+    errBody?.error.code ?? "unknown",
+    errBody?.error.message ?? response.statusText,
+    errBody?.error.details,
+  );
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const headers = new Headers(options.headers);
+  if (!headers.has("Content-Type") && options.body) {
+    headers.set("Content-Type", "application/json");
+  }
+  const res = await authenticatedFetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+  });
+
   if (!res.ok) {
-    let errBody: ErrorResponse | undefined;
+    let errBody: unknown;
     try {
       errBody = await res.json();
     } catch {
       // ignore parse errors
     }
-    throw new APIError(
-      res.status,
-      errBody?.error.code ?? "unknown",
-      errBody?.error.message ?? res.statusText,
-      errBody?.error.details,
-    );
+    throw toAPIError(res, errBody);
   }
 
   if (res.status === 204 || res.status === 201) {

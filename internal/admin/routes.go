@@ -67,7 +67,6 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth endpoints.
-		r.Get("/auth/config", handleAuthConfig(cfg))
 		r.Post("/auth/refresh", handleRefresh(st, jwtMgr))
 
 		// OAuth callbacks (public).
@@ -93,25 +92,17 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 		r.Group(func(r chi.Router) {
 			r.Use(JWTAuthMiddleware(jwtMgr, st))
 
-			// Current user.
-			r.Get("/me", handleGetMe())
-
 			// Users (superadmin only).
 			r.Route("/users", func(r chi.Router) {
 				r.Use(RequireSuperadmin)
-				r.Get("/", handleListUsers(st))
-				r.Get("/compact", handleListUsersCompact(st))
-				r.Get("/{userID}", handleGetUser(st))
 				r.Put("/{userID}", handleUpdateUser(st))
 			})
 
 			// Plans (superadmin only).
 			r.Route("/plans", func(r chi.Router) {
 				r.Use(RequireSuperadmin)
-				r.Get("/", handleListPlans(st))
 				r.Post("/", handleCreatePlan(st, catalog))
 				r.Route("/{planID}", func(r chi.Router) {
-					r.Get("/", handleGetPlan(st))
 					r.Put("/", handleUpdatePlan(st, catalog))
 					r.Delete("/", handleDeletePlan(st))
 				})
@@ -174,11 +165,9 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 
 			// Projects.
 			r.Route("/projects", func(r chi.Router) {
-				r.Get("/", handleListProjects(st))
 				r.Post("/", handleCreateProject(st))
 				r.Route("/{projectID}", func(r chi.Router) {
 					r.Use(projectAccessMiddleware(st))
-					r.Get("/", handleGetProject(st))
 					r.Put("/", handleUpdateProject(st))
 					r.Post("/archive", handleArchiveProject(st))
 					r.Post("/unarchive", handleUnarchiveProject(st))
