@@ -39,6 +39,18 @@ func registerExtraUsageOperations(api huma.API, server *Server) {
 		Access:        write,
 		Authorize:     server.authorizationMiddleware,
 	}, server.updateExtraUsage)
+
+	contract.Register(api, contract.Operation{
+		ID:            "listExtraUsageTransactions",
+		Method:        http.MethodGet,
+		Path:          "/api/v1/projects/{projectID}/extra-usage/transactions",
+		Summary:       "List extra-usage ledger transactions",
+		Tags:          []string{"Extra Usage"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        read,
+		Authorize:     server.authorizationMiddleware,
+	}, server.listExtraUsageTransactions)
 }
 
 // CreditUnitPrices holds the per-million-credit price in each supported
@@ -207,6 +219,57 @@ func (s *Server) updateExtraUsage(ctx context.Context, input *UpdateExtraUsageIn
 	return &UpdateExtraUsageOutput{
 		Body: DataResponse[types.ExtraUsageSettings]{
 			Data: *out,
+		},
+	}, nil
+}
+
+type ListExtraUsageTransactionsInput struct {
+	ProjectID string `path:"projectID" format:"uuid" doc:"Project identifier."`
+	Page      int    `query:"page" default:"1" minimum:"1"`
+	PerPage   int    `query:"per_page" default:"20" minimum:"1" maximum:"100"`
+	Sort      string `query:"sort" default:"created_at"`
+	Order     string `query:"order" default:"desc" enum:"asc,desc"`
+	Type      string `query:"type,omitempty" doc:"Filter by transaction type (topup, deduction, refund, adjust)."`
+}
+
+func (input *ListExtraUsageTransactionsInput) pagination() types.PaginationParams {
+	return types.PaginationParams{
+		Page:    input.Page,
+		PerPage: input.PerPage,
+		Sort:    input.Sort,
+		Order:   input.Order,
+	}
+}
+
+type ListExtraUsageTransactionsOutput struct {
+	Body ListResponse[types.ExtraUsageTransaction]
+}
+
+// listExtraUsageTransactions handles GET /api/v1/projects/{projectID}/extra-usage/transactions.
+// Returns a paginated ledger of extra-usage transactions with optional type filter.
+//
+// Behavior (matches legacy handleListExtraUsageTransactions):
+//  1. ListExtraUsageTransactions(projectID, pagination, typeFilter) → 500 "failed to list transactions"
+//  2. Return 200 with {data: transactions, meta: paginationMeta}
+func (s *Server) listExtraUsageTransactions(ctx context.Context, input *ListExtraUsageTransactionsInput) (*ListExtraUsageTransactionsOutput, error) {
+	if s == nil || s.ExtraUsage == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "extra usage store is not configured", nil)
+	}
+
+	pagination := input.pagination()
+	txs, total, err := s.ExtraUsage.ListExtraUsageTransactions(input.ProjectID, pagination, input.Type)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to list transactions", nil)
+	}
+
+	if txs == nil {
+		txs = []types.ExtraUsageTransaction{}
+	}
+
+	return &ListExtraUsageTransactionsOutput{
+		Body: ListResponse[types.ExtraUsageTransaction]{
+			Data: txs,
+			Meta: paginationMeta(total, pagination),
 		},
 	}, nil
 }

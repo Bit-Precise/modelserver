@@ -24,12 +24,22 @@ type fakeExtraUsageStore struct {
 	upsertSettings *types.ExtraUsageSettings
 	upsertErr      error
 
+	transactions       []types.ExtraUsageTransaction
+	transactionsTotal  int
+	transactionsErr    error
+
 	getSettingsCalls []string // projectID
 	upsertCalls      []struct {
 		projectID       string
 		enabled         bool
 		monthlyLimitStr string
 	} // monthlyLimit is stringified to avoid pointer comparison issues
+	listTransactionsCalls []struct {
+		projectID  string
+		pageNum    int
+		perPage    int
+		typeFilter string
+	}
 }
 
 func (s *fakeExtraUsageStore) GetExtraUsageSettings(projectID string) (*types.ExtraUsageSettings, error) {
@@ -60,7 +70,16 @@ func (s *fakeExtraUsageStore) UpsertExtraUsageSettings(projectID string, enabled
 }
 
 func (s *fakeExtraUsageStore) ListExtraUsageTransactions(projectID string, p types.PaginationParams, typeFilter string) ([]types.ExtraUsageTransaction, int, error) {
-	return nil, 0, nil
+	s.listTransactionsCalls = append(s.listTransactionsCalls, struct {
+		projectID  string
+		pageNum    int
+		perPage    int
+		typeFilter string
+	}{projectID, p.Page, p.Limit(), typeFilter})
+	if s.transactionsErr != nil {
+		return nil, 0, s.transactionsErr
+	}
+	return s.transactions, s.transactionsTotal, nil
 }
 
 func (s *fakeExtraUsageStore) SumDailyExtraUsageTopupCredits(projectID string, dayStart time.Time) (int64, error) {
@@ -374,6 +393,135 @@ func TestUpdateExtraUsagePreserveExisting(t *testing.T) {
 	}
 	if call.monthlyLimitStr != "20000" {
 		t.Errorf("monthlyLimit = %q, want 20000", call.monthlyLimitStr)
+	}
+}
+
+// --- G6 (listExtraUsageTransactions) Tests ---
+
+// Test 8: ListExtraUsageTransactions error → 500 internal
+func TestListExtraUsageTransactionsStoreError(t *testing.T) {
+	t.Parallel()
+	store := &fakeExtraUsageStore{
+		transactionsErr: errors.New("database error"),
+	}
+	s := newExtraUsageServer(store)
+	input := &ListExtraUsageTransactionsInput{ProjectID: "proj-123"}
+
+	_, err := s.listExtraUsageTransactions(context.Background(), input)
+	assertStatusError(t, err, 500, "internal")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "failed to list transactions" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "failed to list transactions")
+	}
+}
+
+// Test 9: Type filter passthrough → captured in fake
+func TestListExtraUsageTransactionsFilterPassthrough(t *testing.T) {
+	t.Parallel()
+	store := &fakeExtraUsageStore{
+		transactions:      []types.ExtraUsageTransaction{},
+		transactionsTotal: 0,
+	}
+	s := newExtraUsageServer(store)
+	input := &ListExtraUsageTransactionsInput{
+		ProjectID: "proj-123",
+		Page:      1,
+		PerPage:   20,
+		Type:      "topup",
+	}
+
+	output, err := s.listExtraUsageTransactions(context.Background(), input)
+	if err != nil {
+		t.Fatalf("listExtraUsageTransactions() error = %v", err)
+	}
+
+	// Verify the response
+	if len(output.Body.Data) != 0 {
+		t.Errorf("data length = %d, want 0", len(output.Body.Data))
+	}
+
+	// Verify that filter was passed through
+	if len(store.listTransactionsCalls) != 1 {
+		t.Errorf("listTransactions called %d times, want 1", len(store.listTransactionsCalls))
+	}
+	call := store.listTransactionsCalls[0]
+	if call.projectID != "proj-123" {
+		t.Errorf("projectID = %q, want proj-123", call.projectID)
+	}
+	if call.typeFilter != "topup" {
+		t.Errorf("typeFilter = %q, want topup", call.typeFilter)
+	}
+}
+
+// Test 10: Happy path with paginated results
+func TestListExtraUsageTransactionsHappyPath(t *testing.T) {
+	t.Parallel()
+	createdAt := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	transactions := []types.ExtraUsageTransaction{
+		{
+			ID:                  "tx-001",
+			ProjectID:           "proj-123",
+			Type:                "topup",
+			AmountCredits:       5000,
+			BalanceAfterCredits: 5000,
+			OrderID:             "order-001",
+			Reason:              "user_topup",
+			CreatedAt:           createdAt,
+		},
+		{
+			ID:                  "tx-002",
+			ProjectID:           "proj-123",
+			Type:                "deduction",
+			AmountCredits:       -1000,
+			BalanceAfterCredits: 4000,
+			RequestID:           "req-001",
+			Reason:              "rate_limited",
+			CreatedAt:           createdAt.Add(1 * time.Hour),
+		},
+	}
+	store := &fakeExtraUsageStore{
+		transactions:      transactions,
+		transactionsTotal: 2,
+	}
+	s := newExtraUsageServer(store)
+	input := &ListExtraUsageTransactionsInput{
+		ProjectID: "proj-123",
+		Page:      1,
+		PerPage:   20,
+	}
+
+	output, err := s.listExtraUsageTransactions(context.Background(), input)
+	if err != nil {
+		t.Fatalf("listExtraUsageTransactions() error = %v", err)
+	}
+
+	// Verify response data
+	if len(output.Body.Data) != 2 {
+		t.Errorf("data length = %d, want 2", len(output.Body.Data))
+	}
+	if output.Body.Data[0].ID != "tx-001" {
+		t.Errorf("first transaction ID = %q, want tx-001", output.Body.Data[0].ID)
+	}
+	if output.Body.Data[1].ID != "tx-002" {
+		t.Errorf("second transaction ID = %q, want tx-002", output.Body.Data[1].ID)
+	}
+
+	// Verify pagination meta
+	if output.Body.Meta.Total != 2 {
+		t.Errorf("meta.total = %d, want 2", output.Body.Meta.Total)
+	}
+	if output.Body.Meta.Page != 1 {
+		t.Errorf("meta.page = %d, want 1", output.Body.Meta.Page)
+	}
+	if output.Body.Meta.PerPage != 20 {
+		t.Errorf("meta.per_page = %d, want 20", output.Body.Meta.PerPage)
+	}
+	if output.Body.Meta.TotalPages != 1 {
+		t.Errorf("meta.total_pages = %d, want 1", output.Body.Meta.TotalPages)
 	}
 }
 

@@ -609,6 +609,53 @@
         ],
         "type": "object"
       },
+      "ExtraUsageTransaction": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "balance_after_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "type",
+          "amount_credits",
+          "balance_after_credits",
+          "created_at"
+        ],
+        "type": "object"
+      },
       "GlobalCapabilities": {
         "additionalProperties": false,
         "properties": {
@@ -716,6 +763,25 @@
           "image_input_rate",
           "image_cached_input_rate",
           "image_output_rate"
+        ],
+        "type": "object"
+      },
+      "ListResponseExtraUsageTransaction": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ExtraUsageTransaction"
+            },
+            "type": "array"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
         ],
         "type": "object"
       },
@@ -5379,6 +5445,147 @@
           "mode": "rbac",
           "scope": "project",
           "permission": "project.extra_usage.write",
+          "projectIdPathParam": "projectID",
+          "superadmin": "bypass"
+        }
+      }
+    },
+    "/api/v1/projects/{projectID}/extra-usage/transactions": {
+      "get": {
+        "operationId": "listExtraUsageTransactions",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "description": "Project identifier.",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 1,
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "per_page",
+            "schema": {
+              "default": 20,
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "default": "created_at",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by transaction type (topup, deduction, refund, adjust).",
+            "explode": false,
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "description": "Filter by transaction type (topup, deduction, refund, adjust).",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponseExtraUsageTransaction"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "List extra-usage ledger transactions",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.read",
           "projectIdPathParam": "projectID",
           "superadmin": "bypass"
         }
