@@ -306,7 +306,7 @@ func handleCreateProject(st *store.Store) http.HandlerFunc {
 			return
 		}
 
-		assignFreePlan(st, project.ID)
+		AssignFreePlan(st, project.ID)
 
 		writeData(w, http.StatusCreated, project)
 	}
@@ -956,8 +956,8 @@ func handleMembersUsage(st *store.Store) http.HandlerFunc {
 	}
 }
 
-// assignFreePlan attaches a perpetual free-tier subscription to a project.
-func assignFreePlan(st *store.Store, projectID string) {
+// AssignFreePlan attaches a perpetual free-tier subscription to a project.
+func AssignFreePlan(st *store.Store, projectID string) {
 	freePlan, err := st.GetPlanBySlug("free")
 	if err != nil || freePlan == nil || !freePlan.IsActive {
 		return

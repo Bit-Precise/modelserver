@@ -66,19 +66,6 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Public auth endpoints.
-		r.Post("/auth/refresh", handleRefresh(st, jwtMgr))
-
-		// OAuth callbacks (public).
-		r.Post("/auth/oauth/github", handleOAuthCallback(st, jwtMgr, cfg, encKey, "github"))
-		r.Post("/auth/oauth/google", handleOAuthCallback(st, jwtMgr, cfg, encKey, "google"))
-		r.Post("/auth/oauth/oidc", handleOAuthCallback(st, jwtMgr, cfg, encKey, "oidc"))
-
-		// OAuth redirects — send user to provider's authorization page.
-		r.Get("/auth/oauth/github/redirect", handleOAuthRedirect(cfg, "github"))
-		r.Get("/auth/oauth/google/redirect", handleOAuthRedirect(cfg, "google"))
-		r.Get("/auth/oauth/oidc/redirect", handleOAuthRedirect(cfg, "oidc"))
-
 		// Billing webhook (HMAC auth, not JWT).
 		if cfg.Billing.WebhookSecret != "" {
 			r.Route("/billing/webhook", func(r chi.Router) {

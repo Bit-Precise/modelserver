@@ -34,9 +34,18 @@ type Server struct {
 	Users     userReadStore
 	Plans     planReadStore
 	Tokens    tokenValidator
-	Config    *config.Config
-	Resolvers map[string]authz.ResourceResolver
-	Policies  map[authz.PolicyID]authz.Policy
+	Auth      authStore
+	JWT       *auth.JWTManager
+	EncKey    []byte
+	// AssignFreePlan is a wiring shim invoked from cmd/modelserver so the
+	// typed auth handler can trigger the legacy assignFreePlan helper on
+	// new-user creation without importing internal/admin. Batch 7's
+	// projects-CRUD migration will replace both callers with a shared
+	// typed helper.
+	AssignFreePlan func(projectID string)
+	Config         *config.Config
+	Resolvers      map[string]authz.ResourceResolver
+	Policies       map[authz.PolicyID]authz.Policy
 }
 
 // effectivePolicies returns the caller-supplied policies map when set,

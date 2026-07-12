@@ -1,5 +1,9 @@
 package adminv1
 
+import (
+	"github.com/modelserver/modelserver/internal/types"
+)
+
 // Per-subsystem store interfaces. Each subsystem migration in Batches
 // 2..14 grows its own interface with the exact methods it needs. Keep
 // the interfaces empty until the corresponding batch starts so unused
@@ -9,7 +13,18 @@ package adminv1
 // docs/superpowers/specs/2026-07-11-huma-admin-api-and-rbac-design.md,
 // section §2.
 
-type authStore interface{}          // A — Auth (public)
+// A — Auth (public): user lookup / creation and OAuth-connection persistence
+// used by POST /auth/refresh and POST /auth/oauth/{provider}.
+type authStore interface {
+	GetUserByID(id string) (*types.User, error)
+	GetUserByEmail(email string) (*types.User, error)
+	GetUserByOAuth(provider, providerID string) (*types.User, error)
+	CreateUser(user *types.User) error
+	UpdateUser(id string, updates map[string]any) error
+	CreateOAuthConnection(userID, provider, providerID string) error
+	UserExists() (bool, error)
+	CreateProject(project *types.Project) error
+}
 type usersWriteStore interface{}    // B — Users writes
 type plansWriteStore interface{}    // C — Plans writes
 type modelsStore interface{}        // D — Models catalog

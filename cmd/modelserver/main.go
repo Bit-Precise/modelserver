@@ -288,7 +288,13 @@ func main() {
 		Users:  st,
 		Plans:  st,
 		Tokens: jwtMgr,
+		Auth:   st,
+		JWT:    jwtMgr,
+		EncKey: encryptionKey,
 		Config: cfg,
+		AssignFreePlan: func(projectID string) {
+			admin.AssignFreePlan(st, projectID)
+		},
 	})
 
 	// Wire admin → proxy denylist-cache invalidation. PATCH /members/{id}

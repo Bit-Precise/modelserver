@@ -171,7 +171,7 @@ func handleOAuthCallback(st *store.Store, jwtMgr *auth.JWTManager, cfg *config.C
 				if err := st.CreateProject(project); err != nil {
 					log.Printf("WARN: failed to create default project for OAuth user %s: %v", user.ID, err)
 				} else {
-					assignFreePlan(st, project.ID)
+					AssignFreePlan(st, project.ID)
 				}
 			}
 			_ = st.CreateOAuthConnection(user.ID, info.Provider, info.ProviderID)
