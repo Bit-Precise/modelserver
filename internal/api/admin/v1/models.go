@@ -7,10 +7,85 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/modelserver/modelserver/internal/api/contract"
+	"github.com/modelserver/modelserver/internal/authz"
 	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
 )
+
+func registerModelOperations(api huma.API, server *Server) {
+	read := authz.System(authz.PermissionSystemModelsRead)
+	write := authz.System(authz.PermissionSystemModelsManage)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "listModels",
+		Method:        http.MethodGet,
+		Path:          "/api/v1/models",
+		Summary:       "List models",
+		Tags:          []string{"Models"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        read,
+		Authorize:     server.authorizationMiddleware,
+	}, server.listModels)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "getModel",
+		Method:        http.MethodGet,
+		Path:          "/api/v1/models/{name}",
+		Summary:       "Get model",
+		Tags:          []string{"Models"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+		Access:        read,
+		Authorize:     server.authorizationMiddleware,
+	}, server.getModel)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "createModel",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/models",
+		Summary:       "Create model",
+		Tags:          []string{"Models"},
+		DefaultStatus: http.StatusCreated,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusInternalServerError},
+		Access:        write,
+		Authorize:     server.authorizationMiddleware,
+	}, server.createModel)
+
+	// Legacy exposes both PATCH and PUT on the same handler. Register both —
+	// Huma treats them as distinct operations but they share the handler.
+	for _, method := range []string{http.MethodPatch, http.MethodPut} {
+		opID := "updateModel"
+		if method == http.MethodPut {
+			opID = "updateModelPut"
+		}
+		contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+			ID:            opID,
+			Method:        method,
+			Path:          "/api/v1/models/{name}",
+			Summary:       "Update model",
+			Tags:          []string{"Models"},
+			DefaultStatus: http.StatusOK,
+			Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+			Access:        write,
+			Authorize:     server.authorizationMiddleware,
+		}, server.updateModel)
+	}
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "deleteModel",
+		Method:        http.MethodDelete,
+		Path:          "/api/v1/models/{name}",
+		Summary:       "Delete model",
+		Tags:          []string{"Models"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError},
+		Access:        write,
+		Authorize:     server.authorizationMiddleware,
+	}, server.deleteModel)
+}
 
 // ModelListRow wraps types.Model with per-row reference counts, matching the
 // legacy modelListResponseRow. Embedded types.Model preserves the same JSON

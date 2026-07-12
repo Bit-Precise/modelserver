@@ -79,19 +79,6 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 		r.Group(func(r chi.Router) {
 			r.Use(JWTAuthMiddleware(jwtMgr, st))
 
-			// Model catalog (superadmin only).
-			r.Route("/models", func(r chi.Router) {
-				r.Use(RequireSuperadmin)
-				r.Get("/", handleListModels(st))
-				r.Post("/", handleCreateModel(st, catalog))
-				r.Route("/{name}", func(r chi.Router) {
-					r.Get("/", handleGetModel(st))
-					r.Patch("/", handleUpdateModel(st, catalog))
-					r.Put("/", handleUpdateModel(st, catalog))
-					r.Delete("/", handleDeleteModel(st, catalog))
-				})
-			})
-
 			// Admin: all projects (superadmin only).
 			r.Route("/admin/projects", func(r chi.Router) {
 				r.Use(RequireSuperadmin)

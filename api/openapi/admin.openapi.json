@@ -71,6 +71,54 @@
         ],
         "type": "object"
       },
+      "CreateModelInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "default_credit_rate": {
+            "$ref": "#/components/schemas/CreditRate"
+          },
+          "default_image_credit_rate": {
+            "$ref": "#/components/schemas/ImageCreditRate"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "publisher"
+        ],
+        "type": "object"
+      },
       "CreatePlanInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -210,6 +258,36 @@
         "properties": {
           "data": {
             "$ref": "#/components/schemas/GlobalCapabilities"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "DataResponseListModelListRow": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ModelListRow"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "DataResponseModel": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Model"
           }
         },
         "required": [
@@ -366,6 +444,44 @@
         ],
         "type": "object"
       },
+      "ImageCreditRate": {
+        "additionalProperties": false,
+        "properties": {
+          "image_cached_input_rate": {
+            "format": "double",
+            "type": "number"
+          },
+          "image_input_rate": {
+            "format": "double",
+            "type": "number"
+          },
+          "image_output_rate": {
+            "format": "double",
+            "type": "number"
+          },
+          "text_cached_input_rate": {
+            "format": "double",
+            "type": "number"
+          },
+          "text_input_rate": {
+            "format": "double",
+            "type": "number"
+          },
+          "text_output_rate": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "text_input_rate",
+          "text_cached_input_rate",
+          "text_output_rate",
+          "image_input_rate",
+          "image_cached_input_rate",
+          "image_output_rate"
+        ],
+        "type": "object"
+      },
       "ListResponsePlan": {
         "additionalProperties": false,
         "properties": {
@@ -471,6 +587,191 @@
           "page",
           "per_page",
           "total_pages"
+        ],
+        "type": "object"
+      },
+      "Model": {
+        "additionalProperties": false,
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "default_credit_rate": {
+            "$ref": "#/components/schemas/CreditRate"
+          },
+          "default_image_credit_rate": {
+            "$ref": "#/components/schemas/ImageCreditRate"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "name": {
+            "type": "string"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "display_name",
+          "aliases",
+          "status",
+          "publisher",
+          "metadata",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ModelListRow": {
+        "additionalProperties": false,
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "default_credit_rate": {
+            "$ref": "#/components/schemas/CreditRate"
+          },
+          "default_image_credit_rate": {
+            "$ref": "#/components/schemas/ImageCreditRate"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ModelMetadata"
+          },
+          "name": {
+            "type": "string"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "reference_counts": {
+            "$ref": "#/components/schemas/ModelReferenceCounts"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference_counts",
+          "name",
+          "display_name",
+          "aliases",
+          "status",
+          "publisher",
+          "metadata",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ModelMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "context_window": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "extra_usage_only": {
+            "type": "boolean"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "provider_hint": {
+            "type": "string"
+          },
+          "replaced_by": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ModelReferenceCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "api_keys": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "plans": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "policies": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "routes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "upstreams": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "upstreams",
+          "routes",
+          "plans",
+          "policies",
+          "api_keys"
         ],
         "type": "object"
       },
@@ -733,6 +1034,40 @@
         "required": [
           "refresh_token"
         ],
+        "type": "object"
+      },
+      "UpdateModelInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default_credit_rate": {},
+          "default_image_credit_rate": {},
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "metadata": {},
+          "name": {
+            "type": "string"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "UpdatePlanInputBody": {
@@ -1376,6 +1711,613 @@
           "mode": "authenticated",
           "scope": "none",
           "superadmin": "none"
+        }
+      }
+    },
+    "/api/v1/models": {
+      "get": {
+        "operationId": "listModels",
+        "parameters": [
+          {
+            "description": "Optional status filter (active|disabled).",
+            "explode": false,
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "description": "Optional status filter (active|disabled).",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseListModelListRow"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "List models",
+        "tags": [
+          "Models"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.models.read",
+          "superadmin": "required"
+        }
+      },
+      "post": {
+        "operationId": "createModel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateModelInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseModel"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Create model",
+        "tags": [
+          "Models"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.models.manage",
+          "superadmin": "required"
+        }
+      }
+    },
+    "/api/v1/models/{name}": {
+      "delete": {
+        "operationId": "deleteModel",
+        "parameters": [
+          {
+            "description": "Canonical model name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Canonical model name.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Delete model",
+        "tags": [
+          "Models"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.models.manage",
+          "superadmin": "required"
+        }
+      },
+      "get": {
+        "operationId": "getModel",
+        "parameters": [
+          {
+            "description": "Canonical model name (lowercase; letters/digits/dot/underscore/dash).",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Canonical model name (lowercase; letters/digits/dot/underscore/dash).",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseModel"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Get model",
+        "tags": [
+          "Models"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.models.read",
+          "superadmin": "required"
+        }
+      },
+      "patch": {
+        "operationId": "updateModel",
+        "parameters": [
+          {
+            "description": "Canonical model name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Canonical model name.",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateModelInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseModel"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Update model",
+        "tags": [
+          "Models"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.models.manage",
+          "superadmin": "required"
+        }
+      },
+      "put": {
+        "operationId": "updateModelPut",
+        "parameters": [
+          {
+            "description": "Canonical model name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Canonical model name.",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateModelInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseModel"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Update model",
+        "tags": [
+          "Models"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.models.manage",
+          "superadmin": "required"
         }
       }
     },

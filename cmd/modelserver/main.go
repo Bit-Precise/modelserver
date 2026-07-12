@@ -287,6 +287,7 @@ func main() {
 		Store:   st,
 		Users:   st,
 		Plans:   st,
+		Models:  st,
 		Catalog: catalog,
 		Tokens:  jwtMgr,
 		Auth:    st,
