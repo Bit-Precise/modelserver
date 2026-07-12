@@ -80,6 +80,18 @@ func (store *fakeManagementStore) GetPlanByID(id string) (*types.Plan, error) {
 	return nil, nil
 }
 
+func (store *fakeManagementStore) CreatePlan(*types.Plan) error {
+	return nil
+}
+
+func (store *fakeManagementStore) UpdatePlan(id string, updates map[string]any) error {
+	return nil
+}
+
+func (store *fakeManagementStore) DeletePlan(id string) error {
+	return nil
+}
+
 type fakeTokenValidator struct {
 	claims *auth.Claims
 }

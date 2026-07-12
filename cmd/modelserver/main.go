@@ -284,14 +284,15 @@ func main() {
 	admin.MountRoutes(adminRouter, st, cfg, encryptionKey, jwtMgr, catalog, httpLogger, router)
 	adminAPI := contract.NewAdminAPI(adminRouter, contract.APIOptions{ServeDocs: true})
 	adminv1.Register(adminAPI, &adminv1.Server{
-		Store:  st,
-		Users:  st,
-		Plans:  st,
-		Tokens: jwtMgr,
-		Auth:   st,
-		JWT:    jwtMgr,
-		EncKey: encryptionKey,
-		Config: cfg,
+		Store:   st,
+		Users:   st,
+		Plans:   st,
+		Catalog: catalog,
+		Tokens:  jwtMgr,
+		Auth:    st,
+		JWT:     jwtMgr,
+		EncKey:  encryptionKey,
+		Config:  cfg,
 		AssignFreePlan: func(projectID string) {
 			admin.AssignFreePlan(st, projectID)
 		},

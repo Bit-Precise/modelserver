@@ -125,7 +125,8 @@ export interface paths {
         /** List plans */
         get: operations["listPlans"];
         put?: never;
-        post?: never;
+        /** Create plan */
+        post: operations["createPlan"];
         delete?: never;
         options?: never;
         head?: never;
@@ -141,9 +142,11 @@ export interface paths {
         };
         /** Get plan */
         get: operations["getPlan"];
-        put?: never;
+        /** Update plan */
+        put: operations["updatePlan"];
         post?: never;
-        delete?: never;
+        /** Delete plan */
+        delete: operations["deletePlan"];
         options?: never;
         head?: never;
         patch?: never;
@@ -252,7 +255,8 @@ export interface paths {
         };
         /** Get user */
         get: operations["getUser"];
-        put?: never;
+        /** Update user */
+        put: operations["updateUser"];
         post?: never;
         delete?: never;
         options?: never;
@@ -285,6 +289,26 @@ export interface components {
             limit: number;
             metric: string;
             per_model: boolean;
+        };
+        CreatePlanInputBody: {
+            classic_rules: components["schemas"]["ClassicRule"][] | null;
+            credit_rules: components["schemas"]["CreditRule"][] | null;
+            description: string;
+            display_name: string;
+            group_tag: string;
+            model_credit_rates: {
+                [key: string]: components["schemas"]["CreditRate"];
+            };
+            name: string;
+            /** Format: int64 */
+            period_months: number;
+            /** Format: int64 */
+            price_cny_fen: number;
+            /** Format: int64 */
+            price_usd_cents: number;
+            slug: string;
+            /** Format: int64 */
+            tier_level: number;
         };
         CreditRate: {
             /** Format: double */
@@ -430,6 +454,38 @@ export interface components {
         RefreshInputBody: {
             /** @description Refresh token issued by a prior login. */
             refresh_token: string;
+        };
+        UpdatePlanInputBody: {
+            classic_rules?: unknown;
+            client_model_credit_rates?: {
+                [key: string]: unknown;
+            };
+            credit_rules?: unknown;
+            description?: string;
+            display_name?: string;
+            group_tag?: string;
+            is_active?: boolean;
+            model_credit_rates?: {
+                [key: string]: unknown;
+            };
+            name?: string;
+            /** Format: int64 */
+            period_months?: number;
+            /** Format: int64 */
+            price_cny_fen?: number;
+            /** Format: int64 */
+            price_usd_cents?: number;
+            slug?: string;
+            /** Format: int64 */
+            tier_level?: number;
+        };
+        UpdateUserInputBody: {
+            is_superadmin?: boolean;
+            /** Format: int64 */
+            max_projects?: number;
+            nickname?: string;
+            /** @enum {string} */
+            status?: "active" | "disabled";
         };
         User: {
             /** Format: date-time */
@@ -863,6 +919,75 @@ export interface operations {
             };
         };
     };
+    createPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePlanInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponsePlan"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getPlan: {
         parameters: {
             query?: never;
@@ -904,6 +1029,144 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updatePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plan identifier. */
+                planID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePlanInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponsePlan"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deletePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plan identifier. */
+                planID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1285,6 +1548,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description User identifier. */
+                userID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponseUser"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

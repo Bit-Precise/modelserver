@@ -179,7 +179,9 @@ func Register(api huma.API, server *Server) {
 	}, server.getProjectCapabilities)
 
 	registerUserReadOperations(api, server)
+	registerUserWriteOperations(api, server)
 	registerPlanReadOperations(api, server)
+	registerPlanWriteOperations(api, server)
 }
 
 
