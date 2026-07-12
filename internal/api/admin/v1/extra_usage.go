@@ -1,0 +1,212 @@
+package adminv1
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/modelserver/modelserver/internal/api/contract"
+	"github.com/modelserver/modelserver/internal/authz"
+	"github.com/modelserver/modelserver/internal/store"
+	"github.com/modelserver/modelserver/internal/types"
+)
+
+func registerExtraUsageOperations(api huma.API, server *Server) {
+	read := authz.Project(authz.PermissionProjectExtraUsageRead, projectIDPathParam)
+	write := authz.Project(authz.PermissionProjectExtraUsageWrite, projectIDPathParam)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "getExtraUsage",
+		Method:        http.MethodGet,
+		Path:          "/api/v1/projects/{projectID}/extra-usage",
+		Summary:       "Get extra-usage settings",
+		Tags:          []string{"Projects", "Extra Usage"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+		Access:        read,
+		Authorize:     server.authorizationMiddleware,
+	}, server.getExtraUsage)
+
+	contract.RegisterWithLegacyTrailingSlash(api, contract.Operation{
+		ID:            "updateExtraUsage",
+		Method:        http.MethodPut,
+		Path:          "/api/v1/projects/{projectID}/extra-usage",
+		Summary:       "Update extra-usage settings",
+		Tags:          []string{"Projects", "Extra Usage"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+		Access:        write,
+		Authorize:     server.authorizationMiddleware,
+	}, server.updateExtraUsage)
+}
+
+// CreditUnitPrices holds the per-million-credit price in each supported
+// currency and the implicit exchange rate (for informational display only).
+type CreditUnitPrices struct {
+	CNYFenPerMillion   int64   `json:"cny_fen_per_million"`
+	USDCentsPerMillion int64   `json:"usd_cents_per_million"`
+	ImplicitUSDToCNY   float64 `json:"implicit_usd_to_cny_rate"`
+}
+
+// TopupAmounts holds the topup bound (min or max) in each supported currency.
+type TopupAmounts struct {
+	CNYFen   int64 `json:"cny_fen"`
+	USDCents int64 `json:"usd_cents"`
+}
+
+// ExtraUsageGetResponse packs settings + derived counters for the dashboard.
+type ExtraUsageGetResponse struct {
+	Enabled             bool             `json:"enabled"`
+	BalanceCredits      int64            `json:"balance_credits"`
+	MonthlyLimitCredits int64            `json:"monthly_limit_credits"`
+	MonthlySpentCredits int64            `json:"monthly_spent_credits"`
+	MonthlyWindowStart  string           `json:"monthly_window_start"`
+	BypassBalanceCheck  bool             `json:"bypass_balance_check"`
+	UpdatedAt           time.Time        `json:"updated_at,omitempty"`
+	CreditUnitPrices    CreditUnitPrices `json:"credit_unit_prices"`
+	MinTopup            TopupAmounts     `json:"min_topup"`
+	MaxTopup            TopupAmounts     `json:"max_topup"`
+	DailyTopupLimit     int64            `json:"daily_topup_limit_credits"`
+}
+
+type GetExtraUsageInput struct {
+	ProjectID string `path:"projectID" format:"uuid" doc:"Project identifier."`
+}
+
+type GetExtraUsageOutput struct {
+	Body DataResponse[ExtraUsageGetResponse]
+}
+
+type UpdateExtraUsageInput struct {
+	ProjectID string `path:"projectID" format:"uuid" doc:"Project identifier."`
+	Body struct {
+		Enabled             *bool  `json:"enabled,omitempty" doc:"Enable or disable extra usage for this project."`
+		MonthlyLimitCredits *int64 `json:"monthly_limit_credits,omitempty" doc:"Monthly credit limit. Must be >= 0."`
+	}
+}
+
+type UpdateExtraUsageOutput struct {
+	Body DataResponse[types.ExtraUsageSettings]
+}
+
+// getExtraUsage handles GET /api/v1/projects/{projectID}/extra-usage.
+// Returns the project's extra-usage state + policy knobs the dashboard needs.
+//
+// Behavior (matches legacy handleGetExtraUsage):
+//  1. GetExtraUsageSettings(projectID) → 500 "failed to load extra usage settings"
+//  2. store.MonthWindowStart() to get the month window start
+//  3. GetMonthlyExtraSpendCredits(projectID, monthStart) → 500 "failed to sum monthly spend"
+//  4. Calculate implicit USD to CNY rate from pricing config
+//  5. Build response with all pricing knobs from ExtraUsageCfg
+//  6. If settings != nil, populate Enabled, BalanceCredits, MonthlyLimitCredits, BypassBalanceCheck, UpdatedAt
+//  7. Populate MonthlySpentCredits from step 3
+//  8. Return 200 with {data: response}
+func (s *Server) getExtraUsage(ctx context.Context, input *GetExtraUsageInput) (*GetExtraUsageOutput, error) {
+	if s == nil || s.ExtraUsage == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "extra usage store is not configured", nil)
+	}
+
+	settings, err := s.ExtraUsage.GetExtraUsageSettings(input.ProjectID)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to load extra usage settings", nil)
+	}
+
+	monthStart := store.MonthWindowStart()
+	spent, err := s.ExtraUsage.GetMonthlyExtraSpendCredits(input.ProjectID, monthStart)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to sum monthly spend", nil)
+	}
+
+	implicitUSDToCNY := 0.0
+	if s.ExtraUsageCfg.CreditPriceUSDCents > 0 {
+		implicitUSDToCNY = float64(s.ExtraUsageCfg.CreditPriceCNYFen) / float64(s.ExtraUsageCfg.CreditPriceUSDCents)
+	}
+
+	resp := ExtraUsageGetResponse{
+		MonthlyWindowStart: monthStart.Format(time.RFC3339),
+		CreditUnitPrices: CreditUnitPrices{
+			CNYFenPerMillion:   s.ExtraUsageCfg.CreditPriceCNYFen,
+			USDCentsPerMillion: s.ExtraUsageCfg.CreditPriceUSDCents,
+			ImplicitUSDToCNY:   implicitUSDToCNY,
+		},
+		MinTopup: TopupAmounts{
+			CNYFen:   s.ExtraUsageCfg.MinTopupCNYFen,
+			USDCents: s.ExtraUsageCfg.MinTopupUSDCents,
+		},
+		MaxTopup: TopupAmounts{
+			CNYFen:   s.ExtraUsageCfg.MaxTopupCNYFen,
+			USDCents: s.ExtraUsageCfg.MaxTopupUSDCents,
+		},
+		DailyTopupLimit: s.ExtraUsageCfg.DailyTopupLimitCredits,
+	}
+
+	if settings != nil {
+		resp.Enabled = settings.Enabled
+		resp.BalanceCredits = settings.BalanceCredits
+		resp.MonthlyLimitCredits = settings.MonthlyLimitCredits
+		resp.BypassBalanceCheck = settings.BypassBalanceCheck
+		resp.UpdatedAt = settings.UpdatedAt
+	}
+
+	resp.MonthlySpentCredits = spent
+
+	return &GetExtraUsageOutput{
+		Body: DataResponse[ExtraUsageGetResponse]{
+			Data: resp,
+		},
+	}, nil
+}
+
+// updateExtraUsage handles PUT /api/v1/projects/{projectID}/extra-usage.
+// Partial update pattern: preserves unspecified fields.
+//
+// Behavior (matches legacy handleUpdateExtraUsage):
+//  1. GetExtraUsageSettings(projectID) → 500 "failed to load settings"
+//  2. Initialize enabled := false, monthlyLimit := 0
+//  3. If existing != nil: enabled = existing.Enabled, monthlyLimit = existing.MonthlyLimitCredits
+//  4. If body.Enabled != nil: override enabled
+//  5. If body.MonthlyLimitCredits != nil:
+//     - If *value < 0 → 400 bad_request "monthly_limit_credits must be >= 0"
+//     - Override monthlyLimit
+//  6. UpsertExtraUsageSettings(projectID, enabled, monthlyLimit) → 500 "failed to save settings"
+//  7. Return 200 with {data: settings}
+func (s *Server) updateExtraUsage(ctx context.Context, input *UpdateExtraUsageInput) (*UpdateExtraUsageOutput, error) {
+	if s == nil || s.ExtraUsage == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "extra usage store is not configured", nil)
+	}
+
+	existing, err := s.ExtraUsage.GetExtraUsageSettings(input.ProjectID)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to load settings", nil)
+	}
+
+	enabled := false
+	var monthlyLimit int64
+	if existing != nil {
+		enabled = existing.Enabled
+		monthlyLimit = existing.MonthlyLimitCredits
+	}
+
+	if input.Body.Enabled != nil {
+		enabled = *input.Body.Enabled
+	}
+
+	if input.Body.MonthlyLimitCredits != nil {
+		if *input.Body.MonthlyLimitCredits < 0 {
+			return nil, contract.NewError(http.StatusBadRequest, "bad_request", "monthly_limit_credits must be >= 0", nil)
+		}
+		monthlyLimit = *input.Body.MonthlyLimitCredits
+	}
+
+	out, err := s.ExtraUsage.UpsertExtraUsageSettings(input.ProjectID, enabled, monthlyLimit)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to save settings", nil)
+	}
+
+	return &UpdateExtraUsageOutput{
+		Body: DataResponse[types.ExtraUsageSettings]{
+			Data: *out,
+		},
+	}, nil
+}

@@ -291,6 +291,29 @@
         ],
         "type": "object"
       },
+      "CreditUnitPrices": {
+        "additionalProperties": false,
+        "properties": {
+          "cny_fen_per_million": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "implicit_usd_to_cny_rate": {
+            "format": "double",
+            "type": "number"
+          },
+          "usd_cents_per_million": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cny_fen_per_million",
+          "usd_cents_per_million",
+          "implicit_usd_to_cny_rate"
+        ],
+        "type": "object"
+      },
       "CreditWindowStatus": {
         "additionalProperties": false,
         "properties": {
@@ -316,6 +339,30 @@
         "properties": {
           "data": {
             "$ref": "#/components/schemas/DeleteNotificationResponseData"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "DataResponseExtraUsageGetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ExtraUsageGetResponse"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "DataResponseExtraUsageSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ExtraUsageSettings"
           }
         },
         "required": [
@@ -463,6 +510,102 @@
         },
         "required": [
           "error"
+        ],
+        "type": "object"
+      },
+      "ExtraUsageGetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "bypass_balance_check": {
+            "type": "boolean"
+          },
+          "credit_unit_prices": {
+            "$ref": "#/components/schemas/CreditUnitPrices"
+          },
+          "daily_topup_limit_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_topup": {
+            "$ref": "#/components/schemas/TopupAmounts"
+          },
+          "min_topup": {
+            "$ref": "#/components/schemas/TopupAmounts"
+          },
+          "monthly_limit_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "monthly_spent_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "monthly_window_start": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "balance_credits",
+          "monthly_limit_credits",
+          "monthly_spent_credits",
+          "monthly_window_start",
+          "bypass_balance_check",
+          "credit_unit_prices",
+          "min_topup",
+          "max_topup",
+          "daily_topup_limit_credits"
+        ],
+        "type": "object"
+      },
+      "ExtraUsageSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "bypass_balance_check": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "monthly_limit_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "enabled",
+          "balance_credits",
+          "monthly_limit_credits",
+          "bypass_balance_check",
+          "created_at",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -1468,6 +1611,24 @@
         ],
         "type": "object"
       },
+      "TopupAmounts": {
+        "additionalProperties": false,
+        "properties": {
+          "cny_fen": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "usd_cents": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cny_fen",
+          "usd_cents"
+        ],
+        "type": "object"
+      },
       "UnreadCountBody": {
         "additionalProperties": false,
         "properties": {
@@ -1491,6 +1652,21 @@
         "required": [
           "count"
         ],
+        "type": "object"
+      },
+      "UpdateExtraUsageInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Enable or disable extra usage for this project.",
+            "type": "boolean"
+          },
+          "monthly_limit_credits": {
+            "description": "Monthly credit limit. Must be \u003e= 0.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
         "type": "object"
       },
       "UpdateModelInputBody": {
@@ -4991,6 +5167,218 @@
           "mode": "rbac",
           "scope": "project",
           "permission": "project.read",
+          "projectIdPathParam": "projectID",
+          "superadmin": "bypass"
+        }
+      }
+    },
+    "/api/v1/projects/{projectID}/extra-usage": {
+      "get": {
+        "operationId": "getExtraUsage",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "description": "Project identifier.",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseExtraUsageGetResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Get extra-usage settings",
+        "tags": [
+          "Projects",
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.read",
+          "projectIdPathParam": "projectID",
+          "superadmin": "bypass"
+        }
+      },
+      "put": {
+        "operationId": "updateExtraUsage",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "description": "Project identifier.",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateExtraUsageInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseExtraUsageSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Update extra-usage settings",
+        "tags": [
+          "Projects",
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.write",
           "projectIdPathParam": "projectID",
           "superadmin": "bypass"
         }

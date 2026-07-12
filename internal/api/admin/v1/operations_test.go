@@ -152,6 +152,7 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 		"/api/v1/projects",
 		"/api/v1/projects/{projectID}",
 		"/api/v1/projects/{projectID}/capabilities",
+		"/api/v1/projects/{projectID}/extra-usage",
 		"/api/v1/users",
 		"/api/v1/users/compact",
 		"/api/v1/users/{userID}",
