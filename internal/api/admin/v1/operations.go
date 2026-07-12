@@ -79,6 +79,28 @@ func Register(api huma.API, server *Server) {
 	}, server.getAuthConfig)
 
 	contract.Register(api, contract.Operation{
+		ID:            "refreshTokens",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/auth/refresh",
+		Summary:       "Refresh access token",
+		Tags:          []string{"Authentication"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusInternalServerError},
+		Access:        authz.Public(),
+	}, server.refresh)
+
+	contract.Register(api, contract.Operation{
+		ID:            "oauthCallback",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/auth/oauth/{provider}",
+		Summary:       "Complete an OAuth login",
+		Tags:          []string{"Authentication"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotImplemented, http.StatusInternalServerError},
+		Access:        authz.Public(),
+	}, server.oauthCallback)
+
+	contract.Register(api, contract.Operation{
 		ID:            "oauthRedirect",
 		Method:        http.MethodGet,
 		Path:          "/api/v1/auth/oauth/{provider}/redirect",

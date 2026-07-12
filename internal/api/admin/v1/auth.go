@@ -22,10 +22,10 @@ type RefreshInput struct {
 }
 
 type authTokensBody struct {
-	AccessToken  string      `json:"access_token,omitempty"`
-	RefreshToken string      `json:"refresh_token,omitempty"`
-	User         *types.User `json:"user,omitempty"`
-	RedirectTo   string      `json:"redirect_to,omitempty"`
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	User         *User  `json:"user,omitempty"`
+	RedirectTo   string `json:"redirect_to,omitempty"`
 }
 
 type RefreshOutput struct {
@@ -99,10 +99,11 @@ func (s *Server) refresh(_ context.Context, input *RefreshInput) (*RefreshOutput
 		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to generate tokens", nil)
 	}
 
+	dto := userDTO(user)
 	return &RefreshOutput{Body: authTokensBody{
 		AccessToken:  access,
 		RefreshToken: refresh,
-		User:         user,
+		User:         &dto,
 	}}, nil
 }
 
@@ -162,10 +163,11 @@ func (s *Server) oauthCallback(ctx context.Context, input *OAuthCallbackInput) (
 	if err != nil {
 		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to generate tokens", nil)
 	}
+	dto := userDTO(user)
 	return &OAuthCallbackOutput{Body: authTokensBody{
 		AccessToken:  access,
 		RefreshToken: refresh,
-		User:         user,
+		User:         &dto,
 	}}, nil
 }
 

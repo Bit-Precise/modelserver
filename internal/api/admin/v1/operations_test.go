@@ -132,7 +132,7 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 	api := contract.NewAdminAPI(router, contract.APIOptions{})
 	Register(api, nil)
 
-	expectedPaths := []string{
+	expectedGetPaths := []string{
 		"/api/v1/auth/config",
 		"/api/v1/auth/oauth/{provider}/redirect",
 		"/api/v1/me",
@@ -146,12 +146,22 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 		"/api/v1/plans",
 		"/api/v1/plans/{planID}",
 	}
-	if len(api.OpenAPI().Paths) != len(expectedPaths) {
-		t.Fatalf("documented path count = %d, want %d", len(api.OpenAPI().Paths), len(expectedPaths))
+	expectedPostPaths := []string{
+		"/api/v1/auth/refresh",
+		"/api/v1/auth/oauth/{provider}",
 	}
-	for _, path := range expectedPaths {
+	wantPathCount := len(expectedGetPaths) + len(expectedPostPaths)
+	if len(api.OpenAPI().Paths) != wantPathCount {
+		t.Fatalf("documented path count = %d, want %d", len(api.OpenAPI().Paths), wantPathCount)
+	}
+	for _, path := range expectedGetPaths {
 		if api.OpenAPI().Paths[path] == nil || api.OpenAPI().Paths[path].Get == nil {
 			t.Errorf("missing documented GET %s", path)
+		}
+	}
+	for _, path := range expectedPostPaths {
+		if api.OpenAPI().Paths[path] == nil || api.OpenAPI().Paths[path].Post == nil {
+			t.Errorf("missing documented POST %s", path)
 		}
 	}
 

@@ -32,6 +32,24 @@
         ],
         "type": "object"
       },
+      "AuthTokensBody": {
+        "additionalProperties": false,
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "redirect_to": {
+            "type": "string"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        },
+        "type": "object"
+      },
       "ClassicRule": {
         "additionalProperties": false,
         "properties": {
@@ -381,6 +399,24 @@
         ],
         "type": "object"
       },
+      "OAuthCallbackInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "OAuth authorization code returned by the provider.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "state": {
+            "description": "OAuth state parameter. May carry a Hydra return_to encoded as \"\u003crandom\u003e|\u003curl\u003e\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
       "Plan": {
         "additionalProperties": false,
         "properties": {
@@ -610,6 +646,20 @@
         ],
         "type": "object"
       },
+      "RefreshInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "refresh_token": {
+            "description": "Refresh token issued by a prior login.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "type": "object"
+      },
       "User": {
         "additionalProperties": false,
         "properties": {
@@ -758,6 +808,121 @@
         }
       }
     },
+    "/api/v1/auth/oauth/{provider}": {
+      "post": {
+        "operationId": "oauthCallback",
+        "parameters": [
+          {
+            "description": "OAuth provider identifier.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "description": "OAuth provider identifier.",
+              "enum": [
+                "github",
+                "google",
+                "oidc"
+              ],
+              "title": "OAuthProvider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthCallbackInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokensBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Implemented"
+          }
+        },
+        "security": [],
+        "summary": "Complete an OAuth login",
+        "tags": [
+          "Authentication"
+        ],
+        "x-modelserver-authz": {
+          "mode": "public",
+          "scope": "none",
+          "superadmin": "none"
+        }
+      }
+    },
     "/api/v1/auth/oauth/{provider}/redirect": {
       "get": {
         "description": "Generates a state token and emits a 302 redirect to the provider's authorize URL.",
@@ -863,6 +1028,83 @@
         },
         "security": [],
         "summary": "Initiate OAuth provider redirect",
+        "tags": [
+          "Authentication"
+        ],
+        "x-modelserver-authz": {
+          "mode": "public",
+          "scope": "none",
+          "superadmin": "none"
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "refreshTokens",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokensBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [],
+        "summary": "Refresh access token",
         "tags": [
           "Authentication"
         ],
