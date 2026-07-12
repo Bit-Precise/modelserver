@@ -42,6 +42,17 @@ type CreateExtraUsageTopupOutput struct {
 	Body DataResponse[CreateExtraUsageTopupResponseData]
 }
 
+// GetExtraUsageTopupInput is the typed input for GET /api/v1/projects/{projectID}/extra-usage/topup/{orderID}.
+type GetExtraUsageTopupInput struct {
+	ProjectID string `path:"projectID" format:"uuid"`
+	OrderID   string `path:"orderID" doc:"Topup order identifier."`
+}
+
+// GetExtraUsageTopupOutput wraps the order in the standard data envelope.
+type GetExtraUsageTopupOutput struct {
+	Body DataResponse[types.Order]
+}
+
 func registerExtraUsageOperations(api huma.API, server *Server) {
 	read := authz.Project(authz.PermissionProjectExtraUsageRead, projectIDPathParam)
 	write := authz.Project(authz.PermissionProjectExtraUsageWrite, projectIDPathParam)
@@ -95,6 +106,22 @@ func registerExtraUsageOperations(api huma.API, server *Server) {
 		Access:        topup,
 		Authorize:     server.authorizationMiddleware,
 	}, server.createExtraUsageTopup)
+
+	contract.Register(api, contract.Operation{
+		ID:            "getExtraUsageTopup",
+		Method:        http.MethodGet,
+		Path:          "/api/v1/projects/{projectID}/extra-usage/topup/{orderID}",
+		Summary:       "Get extra-usage topup order status",
+		Tags:          []string{"Extra Usage"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+		Access: authz.Project(
+			authz.PermissionProjectExtraUsageRead,
+			projectIDPathParam,
+			authz.WithResource("extra-usage-topup", "orderID"),
+		),
+		Authorize: server.authorizationMiddleware,
+	}, server.getExtraUsageTopup)
 }
 
 // CreditUnitPrices holds the per-million-credit price in each supported
@@ -432,6 +459,29 @@ func (s *Server) createExtraUsageTopup(ctx context.Context, input *CreateExtraUs
 				PaymentRef: payResp.PaymentRef,
 			},
 		},
+	}, nil
+}
+
+// getExtraUsageTopup handles GET /api/v1/projects/{projectID}/extra-usage/topup/{orderID}.
+// The resolver already validated that the order exists, is a topup order, and
+// belongs to the requested project. The handler fetches and returns the order.
+//
+// Behavior (matches legacy handleGetExtraUsageTopup):
+//  1. Nil-guard: 500 "extra usage store is not configured"
+//  2. GetOrderByID(orderID) → any error or nil → 500 "failed to fetch order"
+//  3. Return 200 with {data: order}
+func (s *Server) getExtraUsageTopup(_ context.Context, input *GetExtraUsageTopupInput) (*GetExtraUsageTopupOutput, error) {
+	if s == nil || s.ExtraUsage == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "extra usage store is not configured", nil)
+	}
+
+	order, err := s.ExtraUsage.GetOrderByID(input.OrderID)
+	if err != nil || order == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to fetch order", nil)
+	}
+
+	return &GetExtraUsageTopupOutput{
+		Body: DataResponse[types.Order]{Data: *order},
 	}, nil
 }
 

@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/modelserver/modelserver/internal/api/admin/v1/resolvers"
 	"github.com/modelserver/modelserver/internal/api/contract"
+	"github.com/modelserver/modelserver/internal/auth"
 	"github.com/modelserver/modelserver/internal/authz"
 	"github.com/modelserver/modelserver/internal/billing"
 	"github.com/modelserver/modelserver/internal/config"
@@ -32,6 +36,9 @@ type fakeExtraUsageStore struct {
 	transactions       []types.ExtraUsageTransaction
 	transactionsTotal  int
 	transactionsErr    error
+
+	getOrderReturn *types.Order
+	getOrderErr    error
 
 	getSettingsCalls []string // projectID
 	upsertCalls      []struct {
@@ -104,7 +111,10 @@ func (s *fakeExtraUsageStore) UpdateOrderPayment(orderID, paymentRef, paymentURL
 }
 
 func (s *fakeExtraUsageStore) GetOrderByID(id string) (*types.Order, error) {
-	return nil, nil
+	if s.getOrderErr != nil {
+		return nil, s.getOrderErr
+	}
+	return s.getOrderReturn, nil
 }
 
 func (s *fakeExtraUsageStore) TopUpExtraUsage(req store.TopUpExtraUsageReq) (int64, error) {
@@ -911,6 +921,201 @@ func TestCreateTopupHappyPathStripe(t *testing.T) {
 	// Assert CreatePayment was called with correct currency
 	if payClient.createPaymentReq.Currency != "USD" {
 		t.Errorf("PaymentRequest.Currency = %q, want USD", payClient.createPaymentReq.Currency)
+	}
+}
+
+// --- G8 (getExtraUsageTopup) Tests ---
+
+const (
+	testTopupOrderID = "order-1111-1111-1111"
+)
+
+// newGetTopupServer builds a full HTTP router for G8 integration tests.
+// The resolver and handler both use fake as their store, so GetOrderByID
+// return values flow through both the resolver (for resource validation) and
+// the handler (for the response payload).
+func newGetTopupServer(fake *fakeExtraUsageStore) *chi.Mux {
+	managementStore := &fakeManagementStore{
+		user:   activeUser(false),
+		member: &types.ProjectMember{UserID: testUserID, ProjectID: testProjectID, Role: string(authz.RoleDeveloper)},
+	}
+	server := &Server{
+		Store: managementStore,
+		Tokens: fakeTokenValidator{claims: &auth.Claims{
+			UserID:    testUserID,
+			TokenType: "access",
+		}},
+		ExtraUsage:    fake,
+		ExtraUsageCfg: testExtraUsageConfig(),
+		Resolvers: map[string]authz.ResourceResolver{
+			"extra-usage-topup": resolvers.ExtraUsageTopupResolver{Store: fake},
+		},
+	}
+	return testRouter(server)
+}
+
+// Test G8-1: Resolver rejects non-topup order → 404
+func TestGetExtraUsageTopupResolverRejectsNonTopupOrder(t *testing.T) {
+	t.Parallel()
+	fake := &fakeExtraUsageStore{
+		getOrderReturn: &types.Order{
+			ID:        testTopupOrderID,
+			ProjectID: testProjectID,
+			OrderType: types.OrderTypeSubscription, // not a topup order
+		},
+	}
+	router := newGetTopupServer(fake)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, authenticatedRequest(http.MethodGet,
+		"/api/v1/projects/"+testProjectID+"/extra-usage/topup/"+testTopupOrderID))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// Test G8-2: Resolver rejects cross-project order → 404
+func TestGetExtraUsageTopupResolverRejectsCrossProjectOrder(t *testing.T) {
+	t.Parallel()
+	fake := &fakeExtraUsageStore{
+		getOrderReturn: &types.Order{
+			ID:        testTopupOrderID,
+			ProjectID: "other-project-id",           // different project
+			OrderType: types.OrderTypeExtraUsageTopup,
+		},
+	}
+	router := newGetTopupServer(fake)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, authenticatedRequest(http.MethodGet,
+		"/api/v1/projects/"+testProjectID+"/extra-usage/topup/"+testTopupOrderID))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// Test G8-3: Resolver returns error → 404
+func TestGetExtraUsageTopupResolverError(t *testing.T) {
+	t.Parallel()
+	fake := &fakeExtraUsageStore{
+		getOrderErr: errors.New("db down"),
+	}
+	router := newGetTopupServer(fake)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, authenticatedRequest(http.MethodGet,
+		"/api/v1/projects/"+testProjectID+"/extra-usage/topup/"+testTopupOrderID))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// Test G8-4: Happy path — order exists, is topup, is in correct project → 200 with {data: order}
+func TestGetExtraUsageTopupHappyPath(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.July, 1, 10, 0, 0, 0, time.UTC)
+	order := &types.Order{
+		ID:                      testTopupOrderID,
+		ProjectID:               testProjectID,
+		OrderType:               types.OrderTypeExtraUsageTopup,
+		Status:                  types.OrderStatusPaid,
+		Channel:                 "stripe",
+		Currency:                "USD",
+		Amount:                  5000,
+		ExtraUsageAmountCredits: 184113,
+		CreatedAt:               now,
+		UpdatedAt:               now,
+	}
+	fake := &fakeExtraUsageStore{
+		getOrderReturn: order,
+	}
+	router := newGetTopupServer(fake)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, authenticatedRequest(http.MethodGet,
+		"/api/v1/projects/"+testProjectID+"/extra-usage/topup/"+testTopupOrderID))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	var body DataResponse[types.Order]
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Data.ID != testTopupOrderID {
+		t.Errorf("data.id = %q, want %q", body.Data.ID, testTopupOrderID)
+	}
+	if body.Data.OrderType != types.OrderTypeExtraUsageTopup {
+		t.Errorf("data.order_type = %q, want %q", body.Data.OrderType, types.OrderTypeExtraUsageTopup)
+	}
+	if body.Data.Status != types.OrderStatusPaid {
+		t.Errorf("data.status = %q, want %q", body.Data.Status, types.OrderStatusPaid)
+	}
+	if body.Data.Currency != "USD" {
+		t.Errorf("data.currency = %q, want USD", body.Data.Currency)
+	}
+	if body.Data.Amount != 5000 {
+		t.Errorf("data.amount = %d, want 5000", body.Data.Amount)
+	}
+}
+
+// Test G8-5: Resolver returns nil order (nil, nil from store) → 404
+func TestGetExtraUsageTopupResolverNilOrder(t *testing.T) {
+	t.Parallel()
+	fake := &fakeExtraUsageStore{
+		getOrderReturn: nil, // nil order → resolver returns empty Resource
+	}
+	router := newGetTopupServer(fake)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, authenticatedRequest(http.MethodGet,
+		"/api/v1/projects/"+testProjectID+"/extra-usage/topup/"+testTopupOrderID))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// TestGetExtraUsageTopupPolicyHasWithResource guards that the operation uses
+// WithResource("extra-usage-topup", "orderID"), which is the invariant that
+// causes the resolver to run.
+func TestGetExtraUsageTopupPolicyHasWithResource(t *testing.T) {
+	t.Parallel()
+	router := chi.NewRouter()
+	api := contract.NewAdminAPI(router, contract.APIOptions{})
+	Register(api, nil)
+
+	item, ok := api.OpenAPI().Paths["/api/v1/projects/{projectID}/extra-usage/topup/{orderID}"]
+	if !ok || item.Get == nil {
+		t.Fatal("getExtraUsageTopup GET operation not found in OpenAPI paths")
+	}
+	raw, ok := item.Get.Extensions["x-modelserver-authz"]
+	if !ok {
+		t.Fatal("getExtraUsageTopup missing x-modelserver-authz extension")
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal authz extension: %v", err)
+	}
+	var access authz.AccessPolicy
+	if err := json.Unmarshal(encoded, &access); err != nil {
+		t.Fatalf("unmarshal authz extension: %v", err)
+	}
+	if access.Resource == nil {
+		t.Fatal("getExtraUsageTopup access.Resource is nil; WithResource was not applied")
+	}
+	if access.Resource.ResourceType != "extra-usage-topup" {
+		t.Errorf("resource type = %q, want %q", access.Resource.ResourceType, "extra-usage-topup")
+	}
+	if access.Resource.IDPathParam != "orderID" {
+		t.Errorf("resource ID path param = %q, want %q", access.Resource.IDPathParam, "orderID")
+	}
+	if access.Permission != authz.PermissionProjectExtraUsageRead {
+		t.Errorf("permission = %q, want %q", access.Permission, authz.PermissionProjectExtraUsageRead)
 	}
 }
 

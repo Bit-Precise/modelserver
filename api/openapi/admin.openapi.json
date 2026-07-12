@@ -497,6 +497,18 @@
         ],
         "type": "object"
       },
+      "DataResponseOrder": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Order"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
       "DataResponsePlan": {
         "additionalProperties": false,
         "properties": {
@@ -1309,6 +1321,81 @@
         },
         "required": [
           "code"
+        ],
+        "type": "object"
+      },
+      "Order": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "existing_subscription_id": {
+            "type": "string"
+          },
+          "extra_usage_amount_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "string"
+          },
+          "order_type": {
+            "type": "string"
+          },
+          "payment_ref": {
+            "type": "string"
+          },
+          "payment_url": {
+            "type": "string"
+          },
+          "periods": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "unit_price": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "periods",
+          "unit_price",
+          "amount",
+          "currency",
+          "status",
+          "order_type",
+          "created_at",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -5647,6 +5734,114 @@
           "permission": "project.extra_usage.topup",
           "projectIdPathParam": "projectID",
           "superadmin": "none"
+        }
+      }
+    },
+    "/api/v1/projects/{projectID}/extra-usage/topup/{orderID}": {
+      "get": {
+        "operationId": "getExtraUsageTopup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Topup order identifier.",
+            "in": "path",
+            "name": "orderID",
+            "required": true,
+            "schema": {
+              "description": "Topup order identifier.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseOrder"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Get extra-usage topup order status",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.read",
+          "projectIdPathParam": "projectID",
+          "resource": {
+            "type": "extra-usage-topup",
+            "idPathParam": "orderID"
+          },
+          "superadmin": "bypass"
         }
       }
     },
