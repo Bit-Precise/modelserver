@@ -22,6 +22,12 @@ migrated read operations:
 - `GET /api/v1/plans`
 - `GET /api/v1/plans/{planID}`
 
+And these migrated write / public operations (Batch 2):
+
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/oauth/{provider}`
+- `GET /api/v1/auth/oauth/{provider}/redirect`
+
 All other management routes remain on their legacy Chi handlers until they are
 individually migrated. A route must not be registered by both implementations.
 
