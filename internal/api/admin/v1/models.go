@@ -3,6 +3,7 @@ package adminv1
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/modelserver/modelserver/internal/api/contract"
@@ -127,6 +128,74 @@ func (s *Server) listModels(ctx context.Context, input *ListModelsInput) (*ListM
 			Data: rows,
 		},
 	}, nil
+}
+
+// createModel handles POST /api/v1/models.
+// Follows legacy handleCreateModel exactly:
+// - validateModelPayload (name, aliases, status, rates) → 400 bad_request on error
+// - validatePublisher → 400 bad_request on error
+// - Default DisplayName = Name if empty
+// - Construct types.Model and call s.Models.CreateModel
+//   - unique violation → 409 conflict; other error → 400 bad_request
+// - refreshCatalog after success
+// - Return 201 with {data: model}
+func (s *Server) createModel(ctx context.Context, input *CreateModelInput) (*CreateModelOutput, error) {
+	if s == nil || s.Models == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "model management store is not configured", nil)
+	}
+
+	body := &input.Body
+	if err := validateModelPayload(body.Name, body.Aliases, body.Status, body.DefaultCreditRate, body.DefaultImageCreditRate); err != nil {
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", err.Error(), nil)
+	}
+	if err := validatePublisher(body.Publisher); err != nil {
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", err.Error(), nil)
+	}
+	if body.DisplayName == "" {
+		body.DisplayName = body.Name
+	}
+
+	m := &types.Model{
+		Name:                   body.Name,
+		DisplayName:            body.DisplayName,
+		Description:            body.Description,
+		Aliases:                body.Aliases,
+		DefaultCreditRate:      body.DefaultCreditRate,
+		DefaultImageCreditRate: body.DefaultImageCreditRate,
+		Status:                 body.Status,
+		Publisher:              body.Publisher,
+		Metadata:               body.Metadata,
+	}
+	if err := s.Models.CreateModel(m); err != nil {
+		if isUniqueViolation(err) {
+			return nil, contract.NewError(http.StatusConflict, "conflict", err.Error(), nil)
+		}
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", err.Error(), nil)
+	}
+
+	s.refreshCatalog(ctx)
+
+	return &CreateModelOutput{
+		Body: DataResponse[types.Model]{
+			Data: *m,
+		},
+	}, nil
+}
+
+// refreshCatalog reloads the in-memory model catalog after a successful
+// model write. Matches the legacy handler's log-and-continue behavior:
+// on error, the in-memory view stays as-is until the periodic reload
+// tick recovers.
+func (s *Server) refreshCatalog(ctx context.Context) {
+	if s == nil || s.Models == nil || s.Catalog == nil {
+		return
+	}
+	models, err := s.Models.ListModels()
+	if err != nil {
+		slog.Default().ErrorContext(ctx, "admin: failed to refresh model catalog after write", "error", err)
+		return
+	}
+	s.Catalog.Swap(models)
 }
 
 // getModel handles GET /api/v1/models/{name}.
