@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -92,40 +91,55 @@ func bedrockURLPath(model string, streaming bool) string {
 	return fmt.Sprintf("/model/%s/%s", model, method)
 }
 
-// directorSetBedrockUpstream configures the reverse-proxy request for a Bedrock upstream.
-func directorSetBedrockUpstream(req *http.Request, baseURL, apiKey string, model string, streaming bool) {
-	req.URL.Scheme = "https"
-	var basePath string
-	if baseURL != "" {
-		if target, err := url.Parse(baseURL); err == nil {
-			req.URL.Scheme = target.Scheme
-			req.URL.Host = target.Host
-			basePath = target.Path
-		}
+// BuildBedrockInvokeURL constructs a Bedrock Runtime invoke URL while keeping
+// the model identifier as a single escaped path segment. This is required for
+// application inference profile ARNs, which contain a literal slash.
+func BuildBedrockInvokeURL(baseURL, model string, streaming bool) (*url.URL, error) {
+	target, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing Bedrock base URL: %w", err)
 	}
-	req.Host = req.URL.Host
+	if target.Scheme == "" || target.Host == "" {
+		return nil, fmt.Errorf("Bedrock base URL must include scheme and host")
+	}
 
-	bPath := bedrockURLPath(model, streaming)
-	if basePath != "" && basePath != "/" {
-		req.URL.Path = path.Join(basePath, bPath)
-	} else {
-		req.URL.Path = bPath
+	method := "invoke"
+	if streaming {
+		method = "invoke-with-response-stream"
 	}
-	rawSuffix := fmt.Sprintf("/model/%s/%s", url.PathEscape(model), func() string {
-		if streaming {
-			return "invoke-with-response-stream"
-		}
-		return "invoke"
-	}())
-	if basePath != "" && basePath != "/" {
-		req.URL.RawPath = path.Join(basePath, rawSuffix)
-	} else {
-		req.URL.RawPath = rawSuffix
+	rawPath := strings.TrimRight(target.EscapedPath(), "/") +
+		fmt.Sprintf("/model/%s/%s", url.PathEscape(model), method)
+	decodedPath, err := url.PathUnescape(rawPath)
+	if err != nil {
+		return nil, fmt.Errorf("building Bedrock invoke path: %w", err)
 	}
+	target.Path = decodedPath
+	target.RawPath = rawPath
+	target.RawQuery = ""
+	target.ForceQuery = false
+	target.Fragment = ""
+	return target, nil
+}
+
+// directorSetBedrockUpstream configures the reverse-proxy request for a Bedrock upstream.
+func directorSetBedrockUpstream(req *http.Request, baseURL, apiKey string, model string, streaming bool) error {
+	target, err := BuildBedrockInvokeURL(baseURL, model, streaming)
+	if err != nil {
+		return err
+	}
+	req.URL.Scheme = target.Scheme
+	req.URL.Host = target.Host
+	req.URL.Path = target.Path
+	req.URL.RawPath = target.RawPath
+	req.URL.RawQuery = ""
+	req.URL.ForceQuery = false
+	req.URL.Fragment = ""
+	req.Host = req.URL.Host
 
 	// Set all required headers from scratch — do not inherit from client.
 	req.Header.Del("x-api-key")
 	req.Header.Del("anthropic-version")
 	req.Header.Del("anthropic-beta")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	return nil
 }

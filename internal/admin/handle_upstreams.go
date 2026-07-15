@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -401,6 +402,7 @@ func handleTestUpstream(st *store.Store, encKey []byte, factories ...*proxy.Outb
 
 		var reqBody []byte
 		var endpoint string
+		var endpointErr error
 		switch u.Provider {
 		case types.ProviderOpenAI:
 			endpoint = baseURL + "/v1/responses"
@@ -410,7 +412,11 @@ func handleTestUpstream(st *store.Store, encKey []byte, factories ...*proxy.Outb
 				"input":            "Hi",
 			})
 		case types.ProviderBedrockAnthropic:
-			endpoint = baseURL + "/model/" + upstreamTestModel + "/invoke"
+			var target *url.URL
+			target, endpointErr = proxy.BuildBedrockInvokeURL(baseURL, upstreamTestModel, false)
+			if endpointErr == nil {
+				endpoint = target.String()
+			}
 			reqBody, _ = json.Marshal(map[string]interface{}{
 				"anthropic_version": "bedrock-2023-05-31",
 				"max_tokens":        10,
@@ -535,6 +541,14 @@ func handleTestUpstream(st *store.Store, encKey []byte, factories ...*proxy.Outb
 				"messages":   []map[string]string{{"role": "user", "content": "Hi"}},
 			})
 		}
+		if endpointErr != nil {
+			writeData(w, http.StatusOK, map[string]interface{}{
+				"success": false,
+				"model":   testModel,
+				"error":   fmt.Sprintf("failed to build upstream test URL: %v", endpointErr),
+			})
+			return
+		}
 
 		client, err := clients.ClientFor(u, 10*time.Second)
 		if err != nil {
@@ -646,7 +660,11 @@ func handleTestUpstream(st *store.Store, encKey []byte, factories ...*proxy.Outb
 		defer resp.Body.Close()
 		respBody, responseBodyTruncated, readErr := readUpstreamTestResponseBody(resp.Body)
 
-		success := resp.StatusCode >= 200 && resp.StatusCode < 300 && readErr == nil
+		bedrockErrorType := ""
+		if u.Provider == types.ProviderBedrockAnthropic || u.Provider == types.ProviderBedrockOpenAI {
+			bedrockErrorType = bedrockResponseErrorType(respBody)
+		}
+		success := resp.StatusCode >= 200 && resp.StatusCode < 300 && readErr == nil && bedrockErrorType == ""
 		result := map[string]interface{}{
 			"success":                 success,
 			"status_code":             resp.StatusCode,
@@ -658,11 +676,29 @@ func handleTestUpstream(st *store.Store, encKey []byte, factories ...*proxy.Outb
 		}
 		if readErr != nil {
 			result["error"] = fmt.Sprintf("failed to read upstream response body: %v", readErr)
+		} else if bedrockErrorType != "" {
+			result["error"] = fmt.Sprintf("upstream returned Bedrock error %s: %s", bedrockErrorType, string(respBody))
 		} else if !success {
 			result["error"] = fmt.Sprintf("upstream returned %d: %s", resp.StatusCode, string(respBody))
 		}
 		writeData(w, http.StatusOK, result)
 	}
+}
+
+func bedrockResponseErrorType(body []byte) string {
+	var envelope struct {
+		Type   string `json:"__type"`
+		Output struct {
+			Type string `json:"__type"`
+		} `json:"Output"`
+	}
+	if json.Unmarshal(body, &envelope) != nil {
+		return ""
+	}
+	if envelope.Output.Type != "" {
+		return envelope.Output.Type
+	}
+	return envelope.Type
 }
 
 const upstreamTestResponseBodyLimit = 64 << 10 // 64 KiB
