@@ -139,6 +139,8 @@ export interface UpstreamTestResult {
   latency_ms?: number;
   model?: string;
   proxy_mode?: "environment" | "direct" | "socks5";
+  response_body?: string;
+  response_body_truncated?: boolean;
   error?: string;
 }
 
