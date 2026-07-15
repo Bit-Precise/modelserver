@@ -40,26 +40,33 @@ type ClaudeCodeCredentials struct {
 
 // OAuthTokenManager manages OAuth tokens for Claude Code upstreams.
 type OAuthTokenManager struct {
-	mu            sync.RWMutex
-	credentials   map[string]*ClaudeCodeCredentials // upstreamID → credentials
-	store         *store.Store
-	encryptionKey []byte
-	logger        *slog.Logger
-	sfGroup       singleflight.Group
-	httpClient    *http.Client
-	tokenURL      string
+	mu              sync.RWMutex
+	credentials     map[string]*ClaudeCodeCredentials // upstreamID → credentials
+	store           *store.Store
+	encryptionKey   []byte
+	logger          *slog.Logger
+	sfGroup         singleflight.Group
+	httpClient      *http.Client
+	outboundClients *OutboundClientFactory
+	upstreams       map[string]*types.Upstream
+	tokenURL        string
 }
 
 // NewOAuthTokenManager creates a new OAuth token manager.
-func NewOAuthTokenManager(st *store.Store, encKey []byte, logger *slog.Logger) *OAuthTokenManager {
-	return &OAuthTokenManager{
+func NewOAuthTokenManager(st *store.Store, encKey []byte, logger *slog.Logger, clients ...*OutboundClientFactory) *OAuthTokenManager {
+	m := &OAuthTokenManager{
 		credentials:   make(map[string]*ClaudeCodeCredentials),
+		upstreams:     make(map[string]*types.Upstream),
 		store:         st,
 		encryptionKey: encKey,
 		logger:        logger,
 		httpClient:    &http.Client{Timeout: 15 * time.Second},
 		tokenURL:      ClaudeCodeTokenURL,
 	}
+	if len(clients) > 0 {
+		m.outboundClients = clients[0]
+	}
+	return m
 }
 
 // ParseClaudeCodeAccessToken extracts the access_token from a raw Claude Code
@@ -95,6 +102,8 @@ func (m *OAuthTokenManager) LoadCredentials(upstreams []types.Upstream, decrypte
 			continue
 		}
 		m.credentials[u.ID] = &creds
+		uCopy := u
+		m.upstreams[u.ID] = &uCopy
 	}
 }
 
@@ -102,6 +111,7 @@ func (m *OAuthTokenManager) LoadCredentials(upstreams []types.Upstream, decrypte
 // may not yet be persisted to the database.
 func (m *OAuthTokenManager) Reload(upstreams []types.Upstream, decryptedKeys map[string]string) {
 	newCreds := make(map[string]*ClaudeCodeCredentials)
+	newUpstreams := make(map[string]*types.Upstream)
 
 	for _, u := range upstreams {
 		if u.Provider != types.ProviderClaudeCode {
@@ -119,6 +129,8 @@ func (m *OAuthTokenManager) Reload(upstreams []types.Upstream, decryptedKeys map
 			continue
 		}
 		newCreds[u.ID] = &creds
+		uCopy := u
+		newUpstreams[u.ID] = &uCopy
 	}
 
 	m.mu.Lock()
@@ -133,6 +145,7 @@ func (m *OAuthTokenManager) Reload(upstreams []types.Upstream, decryptedKeys map
 		}
 	}
 	m.credentials = newCreds
+	m.upstreams = newUpstreams
 }
 
 // GetAccessToken returns a valid access token for the given upstream,
@@ -198,6 +211,7 @@ func (m *OAuthTokenManager) refreshToken(upstreamID string) error {
 	}
 	refreshToken := creds.RefreshToken
 	clientID := creds.ClientID
+	upstream := m.upstreams[upstreamID]
 	m.mu.RUnlock()
 
 	if clientID == "" {
@@ -211,7 +225,18 @@ func (m *OAuthTokenManager) refreshToken(upstreamID string) error {
 		"scope":         ClaudeCodeScopes,
 	})
 
-	resp, err := m.httpClient.Post(m.tokenURL, "application/json", bytes.NewReader(reqBody))
+	client := m.httpClient
+	if m.outboundClients != nil {
+		if upstream == nil {
+			return fmt.Errorf("no upstream proxy configuration for %s", upstreamID)
+		}
+		var err error
+		client, err = m.outboundClients.ClientFor(upstream, 15*time.Second)
+		if err != nil {
+			return fmt.Errorf("resolve upstream outbound proxy: %w", err)
+		}
+	}
+	resp, err := client.Post(m.tokenURL, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return fmt.Errorf("oauth token request failed: %w", err)
 	}

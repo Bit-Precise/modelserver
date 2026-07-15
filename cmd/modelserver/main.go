@@ -152,9 +152,11 @@ func main() {
 	}
 	catalog := modelcatalog.New(initialModels)
 
-	oauthMgr := proxy.NewOAuthTokenManager(st, encryptionKey, logger)
-	codexOAuthMgr := proxy.NewCodexOAuthTokenManager(st, encryptionKey, logger)
-	router := proxy.NewRouter(upstreams, groups, routingRoutes, encryptionKey, logger, cfg.Trace.SessionTTL, oauthMgr, codexOAuthMgr, catalog)
+	outboundClients := proxy.NewOutboundClientFactory(encryptionKey)
+	defer outboundClients.CloseIdleConnections()
+	oauthMgr := proxy.NewOAuthTokenManager(st, encryptionKey, logger, outboundClients)
+	codexOAuthMgr := proxy.NewCodexOAuthTokenManager(st, encryptionKey, logger, outboundClients)
+	router := proxy.NewRouter(upstreams, groups, routingRoutes, encryptionKey, logger, cfg.Trace.SessionTTL, oauthMgr, codexOAuthMgr, catalog, outboundClients)
 	router.StartSessionCleanup(10 * time.Minute)
 
 	// Periodically reload routing configuration and the catalog together.
@@ -203,7 +205,7 @@ func main() {
 	// Initialize rate limiter.
 	rateLimiter := ratelimit.NewCompositeRateLimiter(st, logger)
 
-	executor := proxy.NewExecutor(router, st, coll, rateLimiter, catalog, logger, cfg.Server.MaxRequestBody, cfg.Images.MaxBodySize, cfg.ExtraUsage, cfg.Server.StreamIdleTimeout, cfg.Server.SSEKeepaliveInterval, httpLogger, cfg.HttpLog)
+	executor := proxy.NewExecutor(router, outboundClients, st, coll, rateLimiter, catalog, logger, cfg.Server.MaxRequestBody, cfg.Images.MaxBodySize, cfg.ExtraUsage, cfg.Server.StreamIdleTimeout, cfg.Server.SSEKeepaliveInterval, httpLogger, cfg.HttpLog)
 	if cfg.Server.SSEKeepaliveInterval > 0 && cfg.Server.StreamIdleTimeout > 0 && cfg.Server.SSEKeepaliveInterval >= cfg.Server.StreamIdleTimeout {
 		logger.Warn("server.sse_keepalive_interval >= server.stream_idle_timeout — keepalive may not prevent idle-timeout trips",
 			"keepalive", cfg.Server.SSEKeepaliveInterval,
@@ -281,7 +283,7 @@ func main() {
 	jwtMgr := auth.NewJWTManager(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL, cfg.Auth.RefreshTokenTTL)
 
 	// Mount admin API routes.
-	admin.MountRoutes(adminRouter, st, cfg, encryptionKey, jwtMgr, catalog, httpLogger, router)
+	admin.MountRoutes(adminRouter, st, cfg, encryptionKey, jwtMgr, catalog, httpLogger, router, outboundClients)
 	adminAPI := contract.NewAdminAPI(adminRouter, contract.APIOptions{ServeDocs: true})
 	adminv1.Register(adminAPI, &adminv1.Server{
 		Store:      st,

@@ -45,27 +45,34 @@ type CodexCredentials struct {
 
 // CodexOAuthTokenManager manages OAuth tokens for codex upstreams.
 type CodexOAuthTokenManager struct {
-	mu            sync.RWMutex
-	credentials   map[string]*CodexCredentials // upstreamID → credentials
-	store         *store.Store
-	encryptionKey []byte
-	logger        *slog.Logger
-	sfGroup       singleflight.Group
-	httpClient    *http.Client
-	tokenURL      string
+	mu              sync.RWMutex
+	credentials     map[string]*CodexCredentials // upstreamID → credentials
+	store           *store.Store
+	encryptionKey   []byte
+	logger          *slog.Logger
+	sfGroup         singleflight.Group
+	httpClient      *http.Client
+	outboundClients *OutboundClientFactory
+	upstreams       map[string]*types.Upstream
+	tokenURL        string
 }
 
 // NewCodexOAuthTokenManager constructs a manager. Pass nil store / nil key
 // in tests that don't exercise the persistence path.
-func NewCodexOAuthTokenManager(st *store.Store, encKey []byte, logger *slog.Logger) *CodexOAuthTokenManager {
-	return &CodexOAuthTokenManager{
+func NewCodexOAuthTokenManager(st *store.Store, encKey []byte, logger *slog.Logger, clients ...*OutboundClientFactory) *CodexOAuthTokenManager {
+	m := &CodexOAuthTokenManager{
 		credentials:   make(map[string]*CodexCredentials),
+		upstreams:     make(map[string]*types.Upstream),
 		store:         st,
 		encryptionKey: encKey,
 		logger:        logger,
 		httpClient:    &http.Client{Timeout: 15 * time.Second},
 		tokenURL:      CodexTokenURL,
 	}
+	if len(clients) > 0 {
+		m.outboundClients = clients[0]
+	}
+	return m
 }
 
 // ParseCodexAccessTokenAndAccount parses raw into an access token and account
@@ -149,6 +156,8 @@ func (m *CodexOAuthTokenManager) LoadCredentials(upstreams []types.Upstream, dec
 			continue
 		}
 		m.credentials[u.ID] = &creds
+		uCopy := u
+		m.upstreams[u.ID] = &uCopy
 	}
 }
 
@@ -228,6 +237,7 @@ func (m *CodexOAuthTokenManager) refreshToken(upstreamID string) error {
 	}
 	refreshToken := creds.RefreshToken
 	clientID := creds.ClientID
+	upstream := m.upstreams[upstreamID]
 	m.mu.RUnlock()
 
 	if clientID == "" {
@@ -246,7 +256,17 @@ func (m *CodexOAuthTokenManager) refreshToken(upstreamID string) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Originator", codexOriginator)
 	req.Header.Set("User-Agent", CodexUserAgent)
-	resp, err := m.httpClient.Do(req)
+	client := m.httpClient
+	if m.outboundClients != nil {
+		if upstream == nil {
+			return fmt.Errorf("no upstream proxy configuration for %s", upstreamID)
+		}
+		client, err = m.outboundClients.ClientFor(upstream, 15*time.Second)
+		if err != nil {
+			return fmt.Errorf("resolve upstream outbound proxy: %w", err)
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("oauth token request failed: %w", err)
 	}
@@ -314,6 +334,7 @@ func (m *CodexOAuthTokenManager) refreshToken(upstreamID string) error {
 // freshly refreshed tokens that may not yet be persisted).
 func (m *CodexOAuthTokenManager) Reload(upstreams []types.Upstream, decryptedKeys map[string]string) {
 	newCreds := make(map[string]*CodexCredentials)
+	newUpstreams := make(map[string]*types.Upstream)
 	for _, u := range upstreams {
 		if u.Provider != types.ProviderCodex {
 			continue
@@ -330,6 +351,8 @@ func (m *CodexOAuthTokenManager) Reload(upstreams []types.Upstream, decryptedKey
 			continue
 		}
 		newCreds[u.ID] = &creds
+		uCopy := u
+		newUpstreams[u.ID] = &uCopy
 	}
 
 	m.mu.Lock()
@@ -340,4 +363,5 @@ func (m *CodexOAuthTokenManager) Reload(upstreams []types.Upstream, decryptedKey
 		}
 	}
 	m.credentials = newCreds
+	m.upstreams = newUpstreams
 }

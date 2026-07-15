@@ -30,12 +30,14 @@ func (s *Store) CreateUpstream(u *types.Upstream) error {
 	}
 	return s.pool.QueryRow(context.Background(), `
 		INSERT INTO upstreams (provider, name, base_url, api_key_encrypted, supported_models, model_map,
-			weight, status, max_concurrent, test_model, read_timeout)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			weight, status, max_concurrent, test_model, read_timeout, proxy_mode,
+			socks_proxy_url, socks_proxy_username, socks_proxy_password_encrypted)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id, created_at, updated_at`,
 		u.Provider, u.Name, u.BaseURL, u.APIKeyEncrypted,
 		u.SupportedModels, modelMapJSON, u.Weight, u.Status, u.MaxConcurrent, u.TestModel,
-		durationToInterval(u.ReadTimeout),
+		durationToInterval(u.ReadTimeout), u.EffectiveProxyMode(), u.SocksProxyURL,
+		u.SocksProxyUsername, nullableBytes(u.SocksProxyPasswordEncrypted),
 	).Scan(&u.ID, &u.CreatedAt, &u.UpdatedAt)
 }
 
@@ -46,12 +48,14 @@ func (s *Store) GetUpstreamByID(id string) (*types.Upstream, error) {
 	var readTimeout *time.Duration
 	err := s.pool.QueryRow(context.Background(), `
 		SELECT id, provider, name, base_url, api_key_encrypted, supported_models, model_map,
-			weight, status, max_concurrent, test_model, read_timeout,
+			weight, status, max_concurrent, test_model, read_timeout, proxy_mode,
+			socks_proxy_url, socks_proxy_username, socks_proxy_password_encrypted,
 			created_at, updated_at
 		FROM upstreams WHERE id = $1`, id,
 	).Scan(&u.ID, &u.Provider, &u.Name, &u.BaseURL, &u.APIKeyEncrypted,
 		&u.SupportedModels, &modelMapRaw, &u.Weight, &u.Status,
-		&u.MaxConcurrent, &u.TestModel, &readTimeout,
+		&u.MaxConcurrent, &u.TestModel, &readTimeout, &u.ProxyMode,
+		&u.SocksProxyURL, &u.SocksProxyUsername, &u.SocksProxyPasswordEncrypted,
 		&u.CreatedAt, &u.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -60,6 +64,7 @@ func (s *Store) GetUpstreamByID(id string) (*types.Upstream, error) {
 		return nil, fmt.Errorf("get upstream: %w", err)
 	}
 	u.ModelMap = unmarshalModelMap(modelMapRaw)
+	u.SocksProxyPasswordSet = len(u.SocksProxyPasswordEncrypted) > 0
 	if readTimeout != nil {
 		u.ReadTimeout = *readTimeout
 	}
@@ -70,7 +75,8 @@ func (s *Store) GetUpstreamByID(id string) (*types.Upstream, error) {
 func (s *Store) ListUpstreams() ([]types.Upstream, error) {
 	rows, err := s.pool.Query(context.Background(), `
 		SELECT id, provider, name, base_url, api_key_encrypted, supported_models, model_map,
-			weight, status, max_concurrent, test_model, read_timeout,
+			weight, status, max_concurrent, test_model, read_timeout, proxy_mode,
+			socks_proxy_url, socks_proxy_username, socks_proxy_password_encrypted,
 			created_at, updated_at
 		FROM upstreams ORDER BY name ASC`)
 	if err != nil {
@@ -102,7 +108,8 @@ func (s *Store) ListUpstreamsPaginated(p types.PaginationParams) ([]types.Upstre
 
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, provider, name, base_url, api_key_encrypted, supported_models, model_map,
-			weight, status, max_concurrent, test_model, read_timeout,
+			weight, status, max_concurrent, test_model, read_timeout, proxy_mode,
+			socks_proxy_url, socks_proxy_username, socks_proxy_password_encrypted,
 			created_at, updated_at
 		FROM upstreams ORDER BY %s %s LIMIT $1 OFFSET $2`,
 		sanitizeSort(p.Sort, "name"), sanitizeOrder(p.Order)),
@@ -132,7 +139,8 @@ func (s *Store) ListUpstreamsPaginated(p types.PaginationParams) ([]types.Upstre
 func (s *Store) ListActiveUpstreamsForModel(model string) ([]types.Upstream, error) {
 	rows, err := s.pool.Query(context.Background(), `
 		SELECT id, provider, name, base_url, api_key_encrypted, supported_models, model_map,
-			weight, status, max_concurrent, test_model, read_timeout,
+			weight, status, max_concurrent, test_model, read_timeout, proxy_mode,
+			socks_proxy_url, socks_proxy_username, socks_proxy_password_encrypted,
 			created_at, updated_at
 		FROM upstreams
 		WHERE status = 'active' AND $1 = ANY(supported_models)
@@ -177,15 +185,24 @@ func scanUpstream(rows pgx.Rows) (*types.Upstream, error) {
 	var readTimeout *time.Duration
 	if err := rows.Scan(&u.ID, &u.Provider, &u.Name, &u.BaseURL, &u.APIKeyEncrypted,
 		&u.SupportedModels, &modelMapRaw, &u.Weight, &u.Status,
-		&u.MaxConcurrent, &u.TestModel, &readTimeout,
+		&u.MaxConcurrent, &u.TestModel, &readTimeout, &u.ProxyMode,
+		&u.SocksProxyURL, &u.SocksProxyUsername, &u.SocksProxyPasswordEncrypted,
 		&u.CreatedAt, &u.UpdatedAt); err != nil {
 		return nil, err
 	}
 	u.ModelMap = unmarshalModelMap(modelMapRaw)
+	u.SocksProxyPasswordSet = len(u.SocksProxyPasswordEncrypted) > 0
 	if readTimeout != nil {
 		u.ReadTimeout = *readTimeout
 	}
 	return u, nil
+}
+
+func nullableBytes(b []byte) interface{} {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
 }
 
 // durationToInterval converts a time.Duration to a value suitable for PostgreSQL INTERVAL columns.

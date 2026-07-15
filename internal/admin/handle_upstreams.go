@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/modelserver/modelserver/internal/proxy"
 	"github.com/modelserver/modelserver/internal/store"
 	"github.com/modelserver/modelserver/internal/types"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
 
@@ -58,16 +60,20 @@ func handleListUpstreams(st *store.Store, _ []byte) http.HandlerFunc {
 func handleCreateUpstream(st *store.Store, encKey []byte, catalog modelcatalog.Catalog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Provider        string                   `json:"provider"`
-			Name            string                   `json:"name"`
-			BaseURL         string                   `json:"base_url"`
-			APIKey          string                   `json:"api_key"`
-			SupportedModels []string                 `json:"supported_models"`
-			ModelMap        map[string]string         `json:"model_map"`
-			Weight          int                       `json:"weight"`
-			MaxConcurrent   int                       `json:"max_concurrent"`
-			TestModel       string                    `json:"test_model"`
-			ReadTimeout     time.Duration             `json:"read_timeout"`
+			Provider           string            `json:"provider"`
+			Name               string            `json:"name"`
+			BaseURL            string            `json:"base_url"`
+			APIKey             string            `json:"api_key"`
+			ProxyMode          string            `json:"proxy_mode"`
+			SocksProxyURL      string            `json:"socks_proxy_url"`
+			SocksProxyUsername string            `json:"socks_proxy_username"`
+			SocksProxyPassword string            `json:"socks_proxy_password"`
+			SupportedModels    []string          `json:"supported_models"`
+			ModelMap           map[string]string `json:"model_map"`
+			Weight             int               `json:"weight"`
+			MaxConcurrent      int               `json:"max_concurrent"`
+			TestModel          string            `json:"test_model"`
+			ReadTimeout        time.Duration     `json:"read_timeout"`
 		}
 		if err := decodeBody(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
@@ -79,6 +85,16 @@ func handleCreateUpstream(st *store.Store, encKey []byte, catalog modelcatalog.C
 		}
 		if !types.IsValidProvider(body.Provider) {
 			writeError(w, http.StatusBadRequest, "bad_request", "unknown provider: "+body.Provider)
+			return
+		}
+		proxyCfg := proxy.OutboundProxyConfig{
+			Mode:     proxy.NormalizeProxyMode(body.ProxyMode),
+			URL:      body.SocksProxyURL,
+			Username: body.SocksProxyUsername,
+			Password: body.SocksProxyPassword,
+		}
+		if err := proxy.ValidateOutboundProxyConfig(proxyCfg); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
 
@@ -98,6 +114,14 @@ func handleCreateUpstream(st *store.Store, encKey []byte, catalog modelcatalog.C
 			writeError(w, http.StatusInternalServerError, "internal", "failed to encrypt API key")
 			return
 		}
+		var encryptedProxyPassword []byte
+		if proxyCfg.Password != "" {
+			encryptedProxyPassword, err = crypto.Encrypt(encKey, []byte(proxyCfg.Password))
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "internal", "failed to encrypt SOCKS proxy password")
+				return
+			}
+		}
 
 		weight := body.Weight
 		if weight <= 0 {
@@ -105,17 +129,22 @@ func handleCreateUpstream(st *store.Store, encKey []byte, catalog modelcatalog.C
 		}
 
 		u := &types.Upstream{
-			Provider:        body.Provider,
-			Name:            body.Name,
-			BaseURL:         body.BaseURL,
-			APIKeyEncrypted: encrypted,
-			SupportedModels: supported,
-			ModelMap:        modelMap,
-			Weight:          weight,
-			MaxConcurrent:   body.MaxConcurrent,
-			TestModel:       body.TestModel,
-			ReadTimeout:     body.ReadTimeout,
-			Status:          types.UpstreamStatusActive,
+			Provider:                    body.Provider,
+			Name:                        body.Name,
+			BaseURL:                     body.BaseURL,
+			APIKeyEncrypted:             encrypted,
+			ProxyMode:                   proxyCfg.Mode,
+			SocksProxyURL:               proxyCfg.URL,
+			SocksProxyUsername:          proxyCfg.Username,
+			SocksProxyPasswordEncrypted: encryptedProxyPassword,
+			SocksProxyPasswordSet:       len(encryptedProxyPassword) > 0,
+			SupportedModels:             supported,
+			ModelMap:                    modelMap,
+			Weight:                      weight,
+			MaxConcurrent:               body.MaxConcurrent,
+			TestModel:                   body.TestModel,
+			ReadTimeout:                 body.ReadTimeout,
+			Status:                      types.UpstreamStatusActive,
 		}
 
 		if err := st.CreateUpstream(u); err != nil {
@@ -140,6 +169,15 @@ func handleGetUpstream(st *store.Store) http.HandlerFunc {
 func handleUpdateUpstream(st *store.Store, encKey []byte, catalog modelcatalog.Catalog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		upstreamID := chi.URLParam(r, "upstreamID")
+		existing, err := st.GetUpstreamByID(upstreamID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "failed to load upstream")
+			return
+		}
+		if existing == nil {
+			writeError(w, http.StatusNotFound, "not_found", "upstream not found")
+			return
+		}
 		var body map[string]interface{}
 		if err := decodeBody(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
@@ -219,6 +257,78 @@ func handleUpdateUpstream(st *store.Store, encKey []byte, catalog modelcatalog.C
 			updates[field] = v
 		}
 
+		// Validate proxy fields against the effective post-update state. The
+		// password is write-only: omitted preserves it, while an explicitly
+		// supplied empty string clears it.
+		proxyCfg := proxy.OutboundProxyConfig{
+			Mode:     existing.EffectiveProxyMode(),
+			URL:      existing.SocksProxyURL,
+			Username: existing.SocksProxyUsername,
+		}
+		proxyTouched := false
+		if v, ok := body["proxy_mode"]; ok {
+			s, ok := v.(string)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "bad_request", "proxy_mode must be a string")
+				return
+			}
+			proxyCfg.Mode = proxy.NormalizeProxyMode(s)
+			updates["proxy_mode"] = proxyCfg.Mode
+			proxyTouched = true
+		}
+		if v, ok := body["socks_proxy_url"]; ok {
+			s, ok := v.(string)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "bad_request", "socks_proxy_url must be a string")
+				return
+			}
+			proxyCfg.URL = s
+			updates["socks_proxy_url"] = s
+			proxyTouched = true
+		}
+		if v, ok := body["socks_proxy_username"]; ok {
+			s, ok := v.(string)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "bad_request", "socks_proxy_username must be a string")
+				return
+			}
+			proxyCfg.Username = s
+			updates["socks_proxy_username"] = s
+			proxyTouched = true
+		}
+		if v, ok := body["socks_proxy_password"]; ok {
+			s, ok := v.(string)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "bad_request", "socks_proxy_password must be a string")
+				return
+			}
+			proxyCfg.Password = s
+			if s == "" {
+				updates["socks_proxy_password_encrypted"] = nil
+			} else {
+				encrypted, err := crypto.Encrypt(encKey, []byte(s))
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "internal", "failed to encrypt SOCKS proxy password")
+					return
+				}
+				updates["socks_proxy_password_encrypted"] = encrypted
+			}
+			proxyTouched = true
+		} else if proxyTouched && proxyCfg.Mode == types.ProxyModeSOCKS5 && len(existing.SocksProxyPasswordEncrypted) > 0 {
+			plaintext, err := crypto.Decrypt(encKey, existing.SocksProxyPasswordEncrypted)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "internal", "failed to decrypt existing SOCKS proxy password")
+				return
+			}
+			proxyCfg.Password = string(plaintext)
+		}
+		if proxyTouched {
+			if err := proxy.ValidateOutboundProxyConfig(proxyCfg); err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+				return
+			}
+		}
+
 		// Handle API key re-encryption if provided.
 		if rawKey, ok := body["api_key"].(string); ok && rawKey != "" {
 			encrypted, err := crypto.Encrypt(encKey, []byte(rawKey))
@@ -254,7 +364,11 @@ func handleDeleteUpstream(st *store.Store) http.HandlerFunc {
 	}
 }
 
-func handleTestUpstream(st *store.Store, encKey []byte) http.HandlerFunc {
+func handleTestUpstream(st *store.Store, encKey []byte, factories ...*proxy.OutboundClientFactory) http.HandlerFunc {
+	clients := proxy.NewOutboundClientFactory(encKey)
+	if len(factories) > 0 && factories[0] != nil {
+		clients = factories[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, err := st.GetUpstreamByID(chi.URLParam(r, "upstreamID"))
 		if err != nil || u == nil {
@@ -422,7 +536,14 @@ func handleTestUpstream(st *store.Store, encKey []byte) http.HandlerFunc {
 			})
 		}
 
-		client := &http.Client{Timeout: 10 * time.Second}
+		client, err := clients.ClientFor(u, 10*time.Second)
+		if err != nil {
+			writeData(w, http.StatusOK, map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("invalid outbound proxy configuration: %v", err),
+			})
+			return
+		}
 		req, err := http.NewRequest("POST", endpoint, bytes.NewReader(reqBody))
 		if err != nil {
 			writeData(w, http.StatusOK, map[string]interface{}{
@@ -466,7 +587,7 @@ func handleTestUpstream(st *store.Store, encKey []byte) http.HandlerFunc {
 				})
 				return
 			}
-			codexCreds = refreshCodexCredentialsIfNeeded(r.Context(), st, encKey, chi.URLParam(r, "upstreamID"), codexCreds)
+			codexCreds = refreshCodexCredentialsIfNeeded(r.Context(), st, encKey, chi.URLParam(r, "upstreamID"), codexCreds, u, clients)
 			req.Header.Set("Authorization", "Bearer "+codexCreds.AccessToken)
 			if codexCreds.ChatGPTAccountID != "" {
 				req.Header.Set("ChatGPT-Account-ID", codexCreds.ChatGPTAccountID)
@@ -485,7 +606,8 @@ func handleTestUpstream(st *store.Store, encKey []byte) http.HandlerFunc {
 			req.Header.Set("session-id", testCodexUUID())
 			req.Header.Set("thread-id", testCodexUUID())
 		case types.ProviderVertexAnthropic, types.ProviderVertexGoogle, types.ProviderVertexOpenAI:
-			creds, err := google.CredentialsFromJSON(r.Context(), apiKey, "https://www.googleapis.com/auth/cloud-platform")
+			oauthCtx := context.WithValue(r.Context(), oauth2.HTTPClient, client)
+			creds, err := google.CredentialsFromJSON(oauthCtx, apiKey, "https://www.googleapis.com/auth/cloud-platform")
 			if err != nil {
 				writeData(w, http.StatusOK, map[string]interface{}{
 					"success": false,
@@ -516,6 +638,7 @@ func handleTestUpstream(st *store.Store, encKey []byte) http.HandlerFunc {
 				"success":    false,
 				"latency_ms": latency,
 				"model":      testModel,
+				"proxy_mode": u.EffectiveProxyMode(),
 				"error":      fmt.Sprintf("request failed: %v", err),
 			})
 			return
@@ -529,6 +652,7 @@ func handleTestUpstream(st *store.Store, encKey []byte) http.HandlerFunc {
 			"status_code": resp.StatusCode,
 			"latency_ms":  latency,
 			"model":       testModel,
+			"proxy_mode":  u.EffectiveProxyMode(),
 		}
 		if !success {
 			result["error"] = fmt.Sprintf("upstream returned %d: %s", resp.StatusCode, string(respBody))

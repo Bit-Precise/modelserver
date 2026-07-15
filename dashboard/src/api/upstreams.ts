@@ -80,9 +80,14 @@ export function useClaudeCodeOAuthExchange() {
   return useMutation({
     mutationFn: (body: {
       callback_url: string;
+      upstream_id?: string;
       code_verifier: string;
       state: string;
       redirect_uri: string;
+      proxy_mode?: "environment" | "direct" | "socks5";
+      socks_proxy_url?: string;
+      socks_proxy_username?: string;
+      socks_proxy_password?: string;
     }) =>
       api.post<DataResponse<{
         access_token: string;
@@ -135,9 +140,14 @@ export function useCodexOAuthExchange() {
   return useMutation({
     mutationFn: (body: {
       callback_url: string;
+      upstream_id?: string;
       code_verifier: string;
       state: string;
       redirect_uri: string;
+      proxy_mode?: "environment" | "direct" | "socks5";
+      socks_proxy_url?: string;
+      socks_proxy_username?: string;
+      socks_proxy_password?: string;
     }) =>
       api.post<DataResponse<{
         id_token?: string;
@@ -365,4 +375,3 @@ export function useRoutingRoute(id: string | null) {
     enabled: !!id,
   });
 }
-
