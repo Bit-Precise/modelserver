@@ -57,8 +57,7 @@ func (t *BedrockTransformer) SetUpstream(r *http.Request, upstream *types.Upstre
 	// Extract Bedrock params from context. These are set by the Executor
 	// before calling SetUpstream.
 	params, _ := r.Context().Value(bedrockContextKey{}).(bedrockParams)
-	directorSetBedrockUpstream(r, upstream.BaseURL, apiKey, params.Model, params.IsStream)
-	return nil
+	return directorSetBedrockUpstream(r, upstream.BaseURL, apiKey, params.Model, params.IsStream)
 }
 
 // WrapStream wraps the response body with the Bedrock stream adapter (which

@@ -170,13 +170,42 @@ func TestBedrockURLPath(t *testing.T) {
 	}
 }
 
+func TestBuildBedrockInvokeURL_EscapesApplicationInferenceProfileARN(t *testing.T) {
+	model := "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/profile-id"
+	target, err := BuildBedrockInvokeURL("https://bedrock-runtime.us-east-1.amazonaws.com/", model, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := "/model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile%2Fprofile-id/invoke"
+	if got := target.EscapedPath(); got != wantPath {
+		t.Fatalf("escaped path = %q, want %q", got, wantPath)
+	}
+	if got := target.String(); got != "https://bedrock-runtime.us-east-1.amazonaws.com"+wantPath {
+		t.Fatalf("URL = %q", got)
+	}
+}
+
+func TestBuildBedrockInvokeURL_PreservesEscapedBasePath(t *testing.T) {
+	model := "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/profile-id"
+	target, err := BuildBedrockInvokeURL("https://proxy.example.com/tenant%2Fbedrock/", model, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := "/tenant%2Fbedrock/model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile%2Fprofile-id/invoke-with-response-stream"
+	if got := target.EscapedPath(); got != wantPath {
+		t.Fatalf("escaped path = %q, want %q", got, wantPath)
+	}
+}
+
 func TestDirectorSetBedrockUpstream(t *testing.T) {
 	req := mustNewRequest(t, "POST", "http://localhost/v1/messages", nil)
 	req.Header.Set("x-api-key", "user-key")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("anthropic-beta", "some-beta")
 
-	directorSetBedrockUpstream(req, "https://bedrock-runtime.us-west-2.amazonaws.com", "test-token", "anthropic.claude-3-sonnet-20240229-v1:0", true)
+	if err := directorSetBedrockUpstream(req, "https://bedrock-runtime.us-west-2.amazonaws.com", "test-token", "anthropic.claude-3-sonnet-20240229-v1:0", true); err != nil {
+		t.Fatal(err)
+	}
 
 	if req.URL.Scheme != "https" {
 		t.Errorf("scheme = %s, want https", req.URL.Scheme)
@@ -316,7 +345,9 @@ func TestDirectorSetOpenAIUpstream_PlainBaseURL(t *testing.T) {
 
 func TestDirectorSetBedrockUpstream_BaseURLWithPath(t *testing.T) {
 	req := mustNewRequest(t, "POST", "http://localhost/v1/messages", nil)
-	directorSetBedrockUpstream(req, "https://custom-proxy.example.com/bedrock", "token", "anthropic.claude-3-sonnet-20240229-v1:0", false)
+	if err := directorSetBedrockUpstream(req, "https://custom-proxy.example.com/bedrock", "token", "anthropic.claude-3-sonnet-20240229-v1:0", false); err != nil {
+		t.Fatal(err)
+	}
 
 	if req.URL.Host != "custom-proxy.example.com" {
 		t.Errorf("host = %s, want custom-proxy.example.com", req.URL.Host)

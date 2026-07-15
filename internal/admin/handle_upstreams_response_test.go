@@ -45,6 +45,40 @@ func TestReadUpstreamTestResponseBody(t *testing.T) {
 	})
 }
 
+func TestBedrockResponseErrorType(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "coral output envelope",
+			body: `{"Output":{"__type":"com.amazon.coral.service#UnknownOperationException"},"Version":"1.0"}`,
+			want: "com.amazon.coral.service#UnknownOperationException",
+		},
+		{
+			name: "top-level AWS error",
+			body: `{"__type":"ValidationException","message":"bad model"}`,
+			want: "ValidationException",
+		},
+		{
+			name: "normal Anthropic response",
+			body: `{"type":"message","content":[]}`,
+		},
+		{
+			name: "non-JSON response",
+			body: `not-json`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := bedrockResponseErrorType([]byte(tt.body)); got != tt.want {
+				t.Fatalf("bedrockResponseErrorType() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 type errorReader struct {
 	err error
 }
