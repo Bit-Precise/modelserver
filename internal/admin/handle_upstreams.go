@@ -644,21 +644,35 @@ func handleTestUpstream(st *store.Store, encKey []byte, factories ...*proxy.Outb
 			return
 		}
 		defer resp.Body.Close()
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		respBody, responseBodyTruncated, readErr := readUpstreamTestResponseBody(resp.Body)
 
-		success := resp.StatusCode >= 200 && resp.StatusCode < 300
+		success := resp.StatusCode >= 200 && resp.StatusCode < 300 && readErr == nil
 		result := map[string]interface{}{
-			"success":     success,
-			"status_code": resp.StatusCode,
-			"latency_ms":  latency,
-			"model":       testModel,
-			"proxy_mode":  u.EffectiveProxyMode(),
+			"success":                 success,
+			"status_code":             resp.StatusCode,
+			"latency_ms":              latency,
+			"model":                   testModel,
+			"proxy_mode":              u.EffectiveProxyMode(),
+			"response_body":           string(respBody),
+			"response_body_truncated": responseBodyTruncated,
 		}
-		if !success {
+		if readErr != nil {
+			result["error"] = fmt.Sprintf("failed to read upstream response body: %v", readErr)
+		} else if !success {
 			result["error"] = fmt.Sprintf("upstream returned %d: %s", resp.StatusCode, string(respBody))
 		}
 		writeData(w, http.StatusOK, result)
 	}
+}
+
+const upstreamTestResponseBodyLimit = 64 << 10 // 64 KiB
+
+func readUpstreamTestResponseBody(r io.Reader) ([]byte, bool, error) {
+	body, err := io.ReadAll(io.LimitReader(r, upstreamTestResponseBodyLimit+1))
+	if len(body) <= upstreamTestResponseBodyLimit {
+		return body, false, err
+	}
+	return body[:upstreamTestResponseBodyLimit], true, err
 }
 
 func handleUpstreamUsage(st *store.Store) http.HandlerFunc {
