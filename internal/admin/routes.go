@@ -19,7 +19,11 @@ import (
 // is the in-memory model catalog; admin mutations to /models refresh it in
 // place, and write paths to /upstreams, /routing/routes, /keys, /plans,
 // /policies use it to reject unknown model names.
-func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byte, jwtMgr *auth.JWTManager, catalog modelcatalog.Catalog, httpLogger *httplog.Logger, router *proxy.Router) {
+func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byte, jwtMgr *auth.JWTManager, catalog modelcatalog.Catalog, httpLogger *httplog.Logger, router *proxy.Router, outboundFactories ...*proxy.OutboundClientFactory) {
+	outboundClients := proxy.NewOutboundClientFactory(encKey)
+	if len(outboundFactories) > 0 && outboundFactories[0] != nil {
+		outboundClients = outboundFactories[0]
+	}
 	// Construct payment client if configured.
 	var payClient billing.PaymentClient
 	if cfg.Billing.PaymentAPIURL != "" {
@@ -175,20 +179,20 @@ func MountRoutes(r chi.Router, st *store.Store, cfg *config.Config, encKey []byt
 				r.Post("/", handleCreateUpstream(st, encKey, catalog))
 				r.Get("/usage", handleUpstreamUsage(st))
 				r.Post("/claudecode/oauth/start", handleClaudeCodeOAuthStart())
-				r.Post("/claudecode/oauth/exchange", handleClaudeCodeOAuthExchange())
+				r.Post("/claudecode/oauth/exchange", handleClaudeCodeOAuthExchange(oauthExchangeDependencies{store: st, clients: outboundClients}))
 				r.Post("/codex/oauth/start", handleCodexOAuthStart())
-				r.Post("/codex/oauth/exchange", handleCodexOAuthExchange())
+				r.Post("/codex/oauth/exchange", handleCodexOAuthExchange(oauthExchangeDependencies{store: st, clients: outboundClients}))
 				r.Route("/{upstreamID}", func(r chi.Router) {
 					r.Get("/", handleGetUpstream(st))
 					r.Put("/", handleUpdateUpstream(st, encKey, catalog))
 					r.Delete("/", handleDeleteUpstream(st))
-					r.Post("/test", handleTestUpstream(st, encKey))
+					r.Post("/test", handleTestUpstream(st, encKey, outboundClients))
 					r.Get("/oauth/status", handleClaudeCodeTokenStatus(st, encKey))
-					r.Post("/oauth/refresh", handleClaudeCodeTokenRefresh(st, encKey))
-					r.Get("/utilization", handleClaudeCodeUtilization(st, encKey))
+					r.Post("/oauth/refresh", handleClaudeCodeTokenRefresh(st, encKey, outboundClients))
+					r.Get("/utilization", handleClaudeCodeUtilization(st, encKey, outboundClients))
 					r.Get("/codex/oauth/status", handleCodexTokenStatus(st, encKey))
-					r.Post("/codex/oauth/refresh", handleCodexTokenRefresh(st, encKey))
-					r.Get("/codex/utilization", handleCodexUtilization(st, encKey))
+					r.Post("/codex/oauth/refresh", handleCodexTokenRefresh(st, encKey, outboundClients))
+					r.Get("/codex/utilization", handleCodexUtilization(st, encKey, outboundClients))
 					r.Get("/utilization-snapshots", handleListUtilizationSnapshots(st))
 					r.Get("/utilization-analysis", handleUtilizationAnalysis(st))
 				})

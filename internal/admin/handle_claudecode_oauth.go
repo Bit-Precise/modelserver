@@ -83,14 +83,23 @@ func handleClaudeCodeOAuthStart() http.HandlerFunc {
 	}
 }
 
-func handleClaudeCodeOAuthExchange() http.HandlerFunc {
+func handleClaudeCodeOAuthExchange(dependencies ...oauthExchangeDependencies) http.HandlerFunc {
+	deps := oauthExchangeDependencies{clients: proxy.NewOutboundClientFactory(nil)}
+	if len(dependencies) > 0 {
+		deps = dependencies[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Code         string `json:"code"`
-			CallbackURL  string `json:"callback_url"`
-			State        string `json:"state"`
-			CodeVerifier string `json:"code_verifier"`
-			RedirectURI  string `json:"redirect_uri"`
+			Code               string `json:"code"`
+			CallbackURL        string `json:"callback_url"`
+			State              string `json:"state"`
+			CodeVerifier       string `json:"code_verifier"`
+			RedirectURI        string `json:"redirect_uri"`
+			UpstreamID         string `json:"upstream_id"`
+			ProxyMode          string `json:"proxy_mode"`
+			SocksProxyURL      string `json:"socks_proxy_url"`
+			SocksProxyUsername string `json:"socks_proxy_username"`
+			SocksProxyPassword string `json:"socks_proxy_password"`
 		}
 		if err := decodeBody(r, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "invalid request body")
@@ -127,7 +136,14 @@ func handleClaudeCodeOAuthExchange() http.HandlerFunc {
 			"state":         body.State,
 		})
 
-		client := &http.Client{Timeout: 15 * time.Second}
+		client, err := oauthExchangeClient(deps, body.UpstreamID, proxy.OutboundProxyConfig{
+			Mode: body.ProxyMode, URL: body.SocksProxyURL,
+			Username: body.SocksProxyUsername, Password: body.SocksProxyPassword,
+		}, 15*time.Second)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
 		resp, err := client.Post(proxy.ClaudeCodeTokenURL, "application/json", bytes.NewReader(tokenReqBody))
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "upstream_error", fmt.Sprintf("token exchange failed: %v", err))
@@ -196,7 +212,11 @@ func handleClaudeCodeTokenStatus(st *store.Store, encKey []byte) http.HandlerFun
 	}
 }
 
-func handleClaudeCodeUtilization(st *store.Store, encKey []byte) http.HandlerFunc {
+func handleClaudeCodeUtilization(st *store.Store, encKey []byte, factories ...*proxy.OutboundClientFactory) http.HandlerFunc {
+	clients := proxy.NewOutboundClientFactory(encKey)
+	if len(factories) > 0 && factories[0] != nil {
+		clients = factories[0]
+	}
 	var cache sync.Map // upstreamID → *utilizationCacheEntry
 	const cacheTTL = 60 * time.Second
 
@@ -237,7 +257,11 @@ func handleClaudeCodeUtilization(st *store.Store, encKey []byte) http.HandlerFun
 				"refresh_token": creds.RefreshToken,
 				"scope":         proxy.ClaudeCodeScopes,
 			})
-			refreshClient := &http.Client{Timeout: 15 * time.Second}
+			refreshClient, clientErr := clients.ClientFor(u, 15*time.Second)
+			if clientErr != nil {
+				writeError(w, http.StatusBadGateway, "upstream_error", fmt.Sprintf("invalid outbound proxy configuration: %v", clientErr))
+				return
+			}
 			refreshResp, err := refreshClient.Post(proxy.ClaudeCodeTokenURL, "application/json", bytes.NewReader(refreshBody))
 			if err == nil {
 				defer refreshResp.Body.Close()
@@ -287,7 +311,11 @@ func handleClaudeCodeUtilization(st *store.Store, encKey []byte) http.HandlerFun
 		req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 		req.Header.Set("User-Agent", "claude-cli/2.1.76 (external, cli)")
 
-		client := &http.Client{Timeout: 10 * time.Second}
+		client, err := clients.ClientFor(u, 10*time.Second)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "upstream_error", fmt.Sprintf("invalid outbound proxy configuration: %v", err))
+			return
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			slog.Error("claudecode utilization fetch failed", "upstream_id", upstreamID, "error", err)
@@ -382,7 +410,11 @@ func handleClaudeCodeUtilization(st *store.Store, encKey []byte) http.HandlerFun
 	}
 }
 
-func handleClaudeCodeTokenRefresh(st *store.Store, encKey []byte) http.HandlerFunc {
+func handleClaudeCodeTokenRefresh(st *store.Store, encKey []byte, factories ...*proxy.OutboundClientFactory) http.HandlerFunc {
+	clients := proxy.NewOutboundClientFactory(encKey)
+	if len(factories) > 0 && factories[0] != nil {
+		clients = factories[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		upstreamID := chi.URLParam(r, "upstreamID")
 		u, err := st.GetUpstreamByID(upstreamID)
@@ -424,7 +456,11 @@ func handleClaudeCodeTokenRefresh(st *store.Store, encKey []byte) http.HandlerFu
 			"scope":         proxy.ClaudeCodeScopes,
 		})
 
-		client := &http.Client{Timeout: 15 * time.Second}
+		client, err := clients.ClientFor(u, 15*time.Second)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "upstream_error", fmt.Sprintf("invalid outbound proxy configuration: %v", err))
+			return
+		}
 		resp, err := client.Post(proxy.ClaudeCodeTokenURL, "application/json", bytes.NewReader(reqBody))
 		if err != nil {
 			slog.Error("claudecode manual token refresh: request failed", "upstream_id", upstreamID, "error", err)

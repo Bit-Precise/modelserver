@@ -150,7 +150,7 @@ const (
 // that supports cross-upstream retry with per-provider body transformations.
 type Executor struct {
 	router            *Router
-	httpClient        *http.Client
+	outboundClients   *OutboundClientFactory
 	store             *store.Store
 	collector         *collector.Collector
 	rateLimiter       ratelimit.RateLimiter
@@ -174,6 +174,7 @@ type Executor struct {
 // NewExecutor creates a new Executor wired to the given Router and dependencies.
 func NewExecutor(
 	router *Router,
+	outboundClients *OutboundClientFactory,
 	st *store.Store,
 	coll *collector.Collector,
 	limiter ratelimit.RateLimiter,
@@ -187,22 +188,14 @@ func NewExecutor(
 	bl *httplog.Logger,
 	blCfg config.HttpLogConfig,
 ) *Executor {
+	if outboundClients == nil {
+		outboundClients = NewOutboundClientFactory(nil)
+	}
 	return &Executor{
-		router:        router,
-		catalog:       catalog,
-		extraUsageCfg: extraUsageCfg,
-		httpClient: &http.Client{
-			// No timeout here; streaming responses can be long-lived.
-			// Per-upstream timeouts are applied via request context.
-			Transport: &http.Transport{
-				Proxy:               http.ProxyFromEnvironment,
-				MaxIdleConnsPerHost: 100,
-				IdleConnTimeout:     90 * time.Second,
-				// DisableCompression so we control Accept-Encoding ourselves
-				// (same behavior as the existing ReverseProxy setup).
-				DisableCompression: true,
-			},
-		},
+		router:               router,
+		catalog:              catalog,
+		extraUsageCfg:        extraUsageCfg,
+		outboundClients:      outboundClients,
 		store:                st,
 		collector:            coll,
 		rateLimiter:          limiter,
@@ -534,6 +527,14 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 
 		// 6e. Track the connection. Placed AFTER SetUpstream so that a failed
 		// SetUpstream doesn't leave the counter incremented (connection leak).
+		client, err := e.outboundClients.ClientFor(upstream, 0)
+		if err != nil {
+			logger.Error("resolve upstream outbound proxy failed",
+				"proxy_mode", upstream.EffectiveProxyMode(), "error", err)
+			e.router.CircuitBreaker().RecordFailure(upstream.ID)
+			e.router.Metrics().RecordError(upstream.ID)
+			continue
+		}
 		e.router.ConnTracker().Acquire(upstream.ID)
 
 		// 6f. Apply per-upstream timeout via request context.
@@ -546,7 +547,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 
 		// 6g. Execute the request.
 		attemptStart := time.Now()
-		resp, doErr := e.httpClient.Do(outReq)
+		resp, doErr := client.Do(outReq)
 
 		if cancelFn != nil && doErr != nil {
 			// On error, cancel immediately – there is no body to read.
@@ -635,7 +636,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			}
 			retryReq = retryReq.WithContext(retryCtx)
 
-			resp, doErr = e.httpClient.Do(retryReq)
+			resp, doErr = client.Do(retryReq)
 			if retryCancelFn != nil && doErr != nil {
 				retryCancelFn()
 			}
@@ -692,7 +693,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			}
 			retryReq = retryReq.WithContext(retryCtx)
 
-			resp, doErr = e.httpClient.Do(retryReq)
+			resp, doErr = client.Do(retryReq)
 			if retryCancelFn != nil && doErr != nil {
 				retryCancelFn()
 			}
@@ -744,7 +745,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 					}
 					retryReq = retryReq.WithContext(retryCtx)
 
-					resp, doErr = e.httpClient.Do(retryReq)
+					resp, doErr = client.Do(retryReq)
 					if retryCancelFn != nil && doErr != nil {
 						retryCancelFn()
 					}

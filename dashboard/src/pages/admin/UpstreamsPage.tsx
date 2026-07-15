@@ -362,6 +362,12 @@ export function UpstreamsPage() {
     provider: "anthropic",
     name: "",
     base_url: "",
+    proxy_mode: "environment" as Upstream["proxy_mode"],
+    socks_proxy_url: "",
+    socks_proxy_username: "",
+    socks_proxy_password: "",
+    socks_proxy_password_set: false,
+    clear_socks_proxy_password: false,
     api_key: "",
     supported_models: [] as string[],
     model_map: [] as { from: string; to: string }[],
@@ -396,6 +402,12 @@ export function UpstreamsPage() {
       provider: "anthropic",
       name: "",
       base_url: "",
+      proxy_mode: "environment",
+      socks_proxy_url: "",
+      socks_proxy_username: "",
+      socks_proxy_password: "",
+      socks_proxy_password_set: false,
+      clear_socks_proxy_password: false,
       api_key: "",
       supported_models: [],
       model_map: [],
@@ -418,6 +430,12 @@ export function UpstreamsPage() {
       provider: u.provider,
       name: u.name,
       base_url: u.base_url,
+      proxy_mode: u.proxy_mode ?? "environment",
+      socks_proxy_url: u.socks_proxy_url ?? "",
+      socks_proxy_username: u.socks_proxy_username ?? "",
+      socks_proxy_password: "",
+      socks_proxy_password_set: u.socks_proxy_password_set,
+      clear_socks_proxy_password: false,
       api_key: "",
       supported_models: [...(u.supported_models ?? [])],
       model_map: modelMapEntries,
@@ -447,6 +465,9 @@ export function UpstreamsPage() {
           name: form.name,
           provider: form.provider,
           base_url: form.base_url,
+          proxy_mode: form.proxy_mode,
+          socks_proxy_url: form.socks_proxy_url,
+          socks_proxy_username: form.socks_proxy_username,
           supported_models: models,
           model_map: modelMap,
           weight: Number(form.weight) || 1,
@@ -456,6 +477,9 @@ export function UpstreamsPage() {
           status: form.status,
         };
         if (form.api_key) body.api_key = form.api_key;
+        if (form.socks_proxy_password || form.clear_socks_proxy_password) {
+          body.socks_proxy_password = form.clear_socks_proxy_password ? "" : form.socks_proxy_password;
+        }
         await updateUpstream.mutateAsync(body as Parameters<typeof updateUpstream.mutateAsync>[0]);
         toast.success("Upstream updated");
       } else {
@@ -463,6 +487,10 @@ export function UpstreamsPage() {
           provider: form.provider as Upstream["provider"],
           name: form.name,
           base_url: form.base_url,
+          proxy_mode: form.proxy_mode,
+          socks_proxy_url: form.socks_proxy_url,
+          socks_proxy_username: form.socks_proxy_username,
+          socks_proxy_password: form.socks_proxy_password,
           api_key: form.api_key,
           supported_models: models,
           model_map: modelMap,
@@ -508,18 +536,27 @@ export function UpstreamsPage() {
   async function handleOAuthExchange() {
     if (!oauthData || !callbackUrl) return;
     try {
+      const proxyConfig = {
+        upstream_id: editingId ?? undefined,
+        proxy_mode: form.proxy_mode,
+        socks_proxy_url: form.socks_proxy_url || undefined,
+        socks_proxy_username: form.socks_proxy_username || undefined,
+        socks_proxy_password: form.socks_proxy_password || undefined,
+      };
       const res = form.provider === "codex"
         ? await codexOAuthExchange.mutateAsync({
             callback_url: callbackUrl,
             code_verifier: oauthData.code_verifier,
             state: oauthData.state,
             redirect_uri: oauthData.redirect_uri,
+            ...proxyConfig,
           })
         : await oauthExchange.mutateAsync({
             callback_url: callbackUrl,
             code_verifier: oauthData.code_verifier,
             state: oauthData.state,
             redirect_uri: oauthData.redirect_uri,
+            ...proxyConfig,
           });
       const credsJson = JSON.stringify(res.data);
       setOauthStep("complete");
@@ -554,6 +591,18 @@ export function UpstreamsPage() {
     },
     { header: "Name", accessor: "name" },
     { header: "Provider", accessor: "provider" },
+    {
+      header: "Proxy",
+      accessor: (u) => {
+        const mode = u.proxy_mode ?? "environment";
+        if (mode !== "socks5") {
+          return <span className="text-xs text-muted-foreground">{mode}</span>;
+        }
+        let host = u.socks_proxy_url ?? "SOCKS5";
+        try { host = new URL(host).host; } catch { /* render the stored value */ }
+        return <span className="text-xs" title={u.socks_proxy_url}>SOCKS5 · {host}</span>;
+      },
+    },
     {
       header: "Status",
       accessor: (u) => <StatusBadge status={u.status} />,
@@ -825,6 +874,83 @@ export function UpstreamsPage() {
                   : "https://api.anthropic.com"}
               />
             </div>
+            <div className="space-y-2">
+              <Label>Outbound Proxy</Label>
+              <Select
+                value={form.proxy_mode}
+                onValueChange={(v) => setForm((p) => ({
+                  ...p,
+                  proxy_mode: (v ?? "environment") as Upstream["proxy_mode"],
+                }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="environment">Service environment</SelectItem>
+                  <SelectItem value="direct">Direct connection</SelectItem>
+                  <SelectItem value="socks5">SOCKS5</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Environment preserves HTTPS_PROXY/NO_PROXY behavior; direct bypasses it.
+              </p>
+            </div>
+            {form.proxy_mode === "socks5" && (
+              <div className="space-y-3 rounded-md border p-3">
+                <div className="space-y-2">
+                  <Label>SOCKS Proxy URL</Label>
+                  <Input
+                    value={form.socks_proxy_url}
+                    onChange={(e) => setForm((p) => ({ ...p, socks_proxy_url: e.target.value }))}
+                    placeholder="socks5h://proxy.internal:1080"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Use socks5h to make the proxy resolve upstream hostnames.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label>SOCKS Username</Label>
+                  <Input
+                    value={form.socks_proxy_username}
+                    onChange={(e) => setForm((p) => ({ ...p, socks_proxy_username: e.target.value }))}
+                    placeholder="Optional"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>SOCKS Password</Label>
+                  <Input
+                    type="password"
+                    value={form.socks_proxy_password}
+                    onChange={(e) => setForm((p) => ({
+                      ...p,
+                      socks_proxy_password: e.target.value,
+                      clear_socks_proxy_password: false,
+                    }))}
+                    placeholder={editingId && form.socks_proxy_password_set ? "Leave blank to keep existing password" : "Optional"}
+                  />
+                  {editingId && form.socks_proxy_password_set && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {form.clear_socks_proxy_password ? "Saved password will be cleared." : "A password is currently saved."}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setForm((p) => ({
+                          ...p,
+                          socks_proxy_password: "",
+                          clear_socks_proxy_password: !p.clear_socks_proxy_password,
+                        }))}
+                      >
+                        {form.clear_socks_proxy_password ? "Keep password" : "Clear password"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             {(form.provider === "claudecode" || form.provider === "codex") ? (
               <div className="space-y-3">
                 <Label>OAuth Authorization</Label>
@@ -1062,6 +1188,7 @@ export function UpstreamsPage() {
               disabled={
                 !form.name ||
                 !form.base_url ||
+                (form.proxy_mode === "socks5" && !form.socks_proxy_url) ||
                 (!editingId && !form.api_key && form.provider !== "claudecode" && form.provider !== "codex") ||
                 (!editingId && form.provider === "claudecode" && oauthStep !== "complete") ||
                 (!editingId && form.provider === "codex" && oauthStep !== "complete") ||

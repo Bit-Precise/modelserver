@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+
+	"github.com/modelserver/modelserver/internal/types"
 )
 
 const vertexOAuthScope = "https://www.googleapis.com/auth/cloud-platform"
@@ -14,8 +17,9 @@ const vertexOAuthScope = "https://www.googleapis.com/auth/cloud-platform"
 // VertexTokenManager manages OAuth2 access tokens for Vertex AI upstreams.
 // Each upstream has its own service account and independently cached token.
 type VertexTokenManager struct {
-	mu     sync.RWMutex
-	tokens map[string]*vertexToken
+	mu              sync.RWMutex
+	tokens          map[string]*vertexToken
+	outboundClients *OutboundClientFactory
 }
 
 type vertexToken struct {
@@ -23,22 +27,37 @@ type vertexToken struct {
 }
 
 // NewVertexTokenManager creates a new token manager.
-func NewVertexTokenManager() *VertexTokenManager {
-	return &VertexTokenManager{
+func NewVertexTokenManager(clients ...*OutboundClientFactory) *VertexTokenManager {
+	m := &VertexTokenManager{
 		tokens: make(map[string]*vertexToken),
 	}
+	if len(clients) > 0 {
+		m.outboundClients = clients[0]
+	}
+	return m
 }
 
 // Register parses a service account JSON key and creates a token source for
 // the given upstream. The token source handles caching and automatic refresh.
-func (m *VertexTokenManager) Register(upstreamID string, serviceAccountJSON []byte) error {
-	creds, err := google.CredentialsFromJSON(context.Background(), serviceAccountJSON, vertexOAuthScope)
+func (m *VertexTokenManager) Register(upstream *types.Upstream, serviceAccountJSON []byte) error {
+	if upstream == nil {
+		return fmt.Errorf("upstream is nil")
+	}
+	ctx := context.Background()
+	if m.outboundClients != nil {
+		client, err := m.outboundClients.ClientFor(upstream, 15*time.Second)
+		if err != nil {
+			return fmt.Errorf("resolving outbound proxy for upstream %s: %w", upstream.ID, err)
+		}
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, client)
+	}
+	creds, err := google.CredentialsFromJSON(ctx, serviceAccountJSON, vertexOAuthScope)
 	if err != nil {
-		return fmt.Errorf("parsing service account JSON for upstream %s: %w", upstreamID, err)
+		return fmt.Errorf("parsing service account JSON for upstream %s: %w", upstream.ID, err)
 	}
 	source := oauth2.ReuseTokenSource(nil, creds.TokenSource)
 	m.mu.Lock()
-	m.tokens[upstreamID] = &vertexToken{source: source}
+	m.tokens[upstream.ID] = &vertexToken{source: source}
 	m.mu.Unlock()
 	return nil
 }

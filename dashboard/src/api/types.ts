@@ -138,6 +138,7 @@ export interface UpstreamTestResult {
   status_code?: number;
   latency_ms?: number;
   model?: string;
+  proxy_mode?: "environment" | "direct" | "socks5";
   error?: string;
 }
 
@@ -400,6 +401,10 @@ export interface Upstream {
   provider: "anthropic" | "openai" | "gemini" | "bedrock-anthropic" | "bedrock-openai" | "claudecode" | "codex" | "vertex-anthropic" | "vertex-google" | "vertex-openai";
   name: string;
   base_url: string;
+  proxy_mode: "environment" | "direct" | "socks5";
+  socks_proxy_url?: string;
+  socks_proxy_username?: string;
+  socks_proxy_password_set: boolean;
   supported_models: string[];
   model_map?: Record<string, string>;
   weight: number;
@@ -553,4 +558,3 @@ export interface RoutingMatrix {
   kinds: string[];
   cells: RoutingMatrixCell[];
 }
-

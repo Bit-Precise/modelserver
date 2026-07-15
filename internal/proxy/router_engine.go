@@ -87,6 +87,7 @@ func NewRouter(
 	oauthMgr *OAuthTokenManager,
 	codexOAuthMgr *CodexOAuthTokenManager,
 	catalog modelcatalog.Catalog,
+	outboundClients ...*OutboundClientFactory,
 ) *Router {
 	r := &Router{
 		sessionTTL:    sessionTTL,
@@ -97,7 +98,7 @@ func NewRouter(
 	}
 
 	// Create the Vertex AI token manager.
-	r.vertexTokenManager = NewVertexTokenManager()
+	r.vertexTokenManager = NewVertexTokenManager(outboundClients...)
 
 	// Wire the token manager into the already-registered VertexAnthropicTransformer.
 	SetVertexAnthropicTokenManager(r.vertexTokenManager)
@@ -140,7 +141,7 @@ func (r *Router) buildMaps(
 		for _, u := range upstreams {
 			if u.Provider == types.ProviderVertexAnthropic || u.Provider == types.ProviderVertexGoogle || u.Provider == types.ProviderVertexOpenAI {
 				if key, ok := keys[u.ID]; ok {
-					if err := r.vertexTokenManager.Register(u.ID, []byte(key)); err != nil {
+					if err := r.vertexTokenManager.Register(&u, []byte(key)); err != nil {
 						r.logger.Error("failed to register vertex token source",
 							"upstream_id", u.ID, "error", err)
 					}
