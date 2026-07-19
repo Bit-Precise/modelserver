@@ -545,12 +545,10 @@ func (s *Server) createExtraUsageTopup(ctx context.Context, input *CreateExtraUs
 
 // getExtraUsageTopup handles GET /api/v1/projects/{projectID}/extra-usage/topup/{orderID}.
 // The resolver already validated that the order exists, is a topup order, and
-// belongs to the requested project. The handler fetches and returns the order.
-//
-// Behavior (matches legacy handleGetExtraUsageTopup):
-//  1. Nil-guard: 500 "extra usage store is not configured"
-//  2. GetOrderByID(orderID) → any error or nil → 500 "failed to fetch order"
-//  3. Return 200 with {data: order}
+// belongs to the requested project. The handler re-fetches to return the full
+// row. A race between resolver and handler (order deleted, transient store
+// error) is reported as 404 for parity with legacy handleGetExtraUsageTopup,
+// which treated any err/nil from GetOrderByID as 404 "order not found".
 func (s *Server) getExtraUsageTopup(_ context.Context, input *GetExtraUsageTopupInput) (*GetExtraUsageTopupOutput, error) {
 	if s == nil || s.ExtraUsage == nil {
 		return nil, contract.NewError(http.StatusInternalServerError, "internal", "extra usage store is not configured", nil)
@@ -558,7 +556,7 @@ func (s *Server) getExtraUsageTopup(_ context.Context, input *GetExtraUsageTopup
 
 	order, err := s.ExtraUsage.GetOrderByID(input.OrderID)
 	if err != nil || order == nil {
-		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to fetch order", nil)
+		return nil, contract.NewError(http.StatusNotFound, "not_found", "order not found", nil)
 	}
 
 	return &GetExtraUsageTopupOutput{
