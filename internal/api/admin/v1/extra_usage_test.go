@@ -1206,6 +1206,37 @@ func TestCreateTopupPolicyRequiresProjectMembership(t *testing.T) {
 	}
 }
 
+// TestCreateTopupSuperadminWithoutMembershipDenied proves — at the runtime
+// middleware layer, not just via policy inspection — that a superadmin who is
+// not a member of the target project cannot initiate an extra-usage topup.
+// This locks the RequireProjectMembership() enforcement path; a refactor that
+// silently reintroduces the superadmin bypass in authorizeRBAC would fail here
+// even if TestCreateTopupPolicyRequiresProjectMembership still passed.
+func TestCreateTopupSuperadminWithoutMembershipDenied(t *testing.T) {
+	t.Parallel()
+	managementStore := &fakeManagementStore{
+		user:   activeUser(true), // superadmin
+		member: nil,              // NOT a member of testProjectID
+	}
+	server := &Server{
+		Store:  managementStore,
+		Tokens: fakeTokenValidator{claims: &auth.Claims{UserID: testUserID, TokenType: "access"}},
+	}
+	router := testRouter(server)
+
+	body := strings.NewReader(`{"channel":"wechat","amount_fen":10000}`)
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/v1/projects/"+testProjectID+"/extra-usage/topup", body)
+	request.Header.Set("Authorization", "Bearer test-token")
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 // --- G1 (adminExtraUsageOverview) Tests ---
 
 // Test 1: ListExtraUsageSettings error → 500 "failed to list settings"

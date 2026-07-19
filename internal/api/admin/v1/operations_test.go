@@ -182,10 +182,20 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 	}
 	expectedPutPaths := []string{
 		"/api/v1/admin/extra-usage/projects/{projectID}/bypass",
+		"/api/v1/projects/{projectID}/extra-usage",
 	}
-	wantPathCount := len(expectedGetPaths) + len(expectedPostPaths) + len(expectedPutPaths)
-	if len(api.OpenAPI().Paths) != wantPathCount {
-		t.Fatalf("documented path count = %d, want %d", len(api.OpenAPI().Paths), wantPathCount)
+	distinctPaths := map[string]struct{}{}
+	for _, path := range expectedGetPaths {
+		distinctPaths[path] = struct{}{}
+	}
+	for _, path := range expectedPostPaths {
+		distinctPaths[path] = struct{}{}
+	}
+	for _, path := range expectedPutPaths {
+		distinctPaths[path] = struct{}{}
+	}
+	if len(api.OpenAPI().Paths) != len(distinctPaths) {
+		t.Fatalf("documented path count = %d, want %d", len(api.OpenAPI().Paths), len(distinctPaths))
 	}
 	for _, path := range expectedGetPaths {
 		if api.OpenAPI().Paths[path] == nil || api.OpenAPI().Paths[path].Get == nil {
