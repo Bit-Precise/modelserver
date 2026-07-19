@@ -21,21 +21,12 @@ type ExtraUsageTopupResolver struct {
 }
 
 func (r ExtraUsageTopupResolver) Resolve(_ context.Context, ref authz.ResourceReference) (authz.Resource, error) {
-	if r.Store == nil {
-		// During offline spec generation, return a placeholder resource.
-		// At runtime, the resolver will be properly wired with a store.
-		return authz.Resource{
-			Type:      "extra-usage-topup",
-			ID:        ref.ID,
-			ProjectID: "", // unknown without store access
-		}, nil
-	}
 	order, err := r.Store.GetOrderByID(ref.ID)
 	if err != nil || order == nil {
 		return authz.Resource{}, err
 	}
 	if order.OrderType != types.OrderTypeExtraUsageTopup {
-		return authz.Resource{}, nil // empty ProjectID → 404 via containment
+		return authz.Resource{}, nil
 	}
 	return authz.Resource{
 		Type:      "extra-usage-topup",
@@ -45,7 +36,5 @@ func (r ExtraUsageTopupResolver) Resolve(_ context.Context, ref authz.ResourceRe
 }
 
 func init() {
-	// Register a stub resolver for offline spec generation.
-	// At runtime (in main.go), the resolver will be wired with the proper store.
-	Default().Register("extra-usage-topup", ExtraUsageTopupResolver{})
+	KnownResourceTypes["extra-usage-topup"] = struct{}{}
 }

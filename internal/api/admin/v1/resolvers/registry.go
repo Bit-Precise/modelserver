@@ -33,11 +33,19 @@ func (r Registry) Register(resourceType string, resolver authz.ResourceResolver)
 }
 
 // Default returns the resolver set the admin server uses when no
-// registry is supplied. Later batches populate this by mutating the
-// returned map from init functions colocated with each subsystem's
-// resolver implementation.
+// registry is supplied. Runtime callers (main.go) always pass an
+// explicit registry via Server.Resolvers, so Default stays empty:
+// any fallback to Default at runtime is treated as misconfiguration
+// (containment check on an unregistered type denies by default).
 func Default() Registry {
 	return defaultRegistry
 }
 
 var defaultRegistry = New()
+
+// KnownResourceTypes declares the resource types that admin operations
+// may reference in AccessPolicy.Resource. Batches register their type
+// via init() so the contract-level invariant test can verify that every
+// declared Resource has a corresponding known type — without exposing a
+// callable stub resolver in the runtime registry.
+var KnownResourceTypes = map[string]struct{}{}
