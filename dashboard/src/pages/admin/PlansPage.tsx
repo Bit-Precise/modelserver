@@ -191,6 +191,12 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
     cache_creation_rate: 0,
     cache_read_rate: 0.0035,
   },
+  "kimi-k3": {
+    input_rate: 0.04,
+    output_rate: 0.2,
+    cache_creation_rate: 0,
+    cache_read_rate: 0.004,
+  },
   _default: {
     input_rate: 0.4,
     output_rate: 2.0,
