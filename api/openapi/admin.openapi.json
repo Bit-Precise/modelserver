@@ -1,6 +1,51 @@
 {
   "components": {
     "schemas": {
+      "AdminExtraUsageOverviewRow": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "bypass_balance_check": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "monthly_limit_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "spend_7d_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "spend_7d_credits",
+          "project_id",
+          "enabled",
+          "balance_credits",
+          "monthly_limit_credits",
+          "bypass_balance_check",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "AdminProjectsSubscriptionsOverviewOutputBody": {
         "additionalProperties": false,
         "properties": {
@@ -448,6 +493,24 @@
         "properties": {
           "data": {
             "$ref": "#/components/schemas/GlobalCapabilities"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "DataResponseListAdminExtraUsageOverviewRow": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AdminExtraUsageOverviewRow"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2136,6 +2199,68 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/extra-usage/overview": {
+      "get": {
+        "operationId": "adminExtraUsageOverview",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseListAdminExtraUsageOverviewRow"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Admin extra-usage overview (superadmin)",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.extra_usage.read",
+          "superadmin": "required"
+        }
+      }
+    },
     "/api/v1/admin/notifications": {
       "get": {
         "description": "Returns paginated notifications with optional filtering by audience type and include_deleted flag.",

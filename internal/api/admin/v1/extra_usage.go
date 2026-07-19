@@ -122,6 +122,18 @@ func registerExtraUsageOperations(api huma.API, server *Server) {
 		),
 		Authorize: server.authorizationMiddleware,
 	}, server.getExtraUsageTopup)
+
+	contract.Register(api, contract.Operation{
+		ID:            "adminExtraUsageOverview",
+		Method:        http.MethodGet,
+		Path:          "/api/v1/admin/extra-usage/overview",
+		Summary:       "Admin extra-usage overview (superadmin)",
+		Tags:          []string{"Extra Usage"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        authz.System(authz.PermissionSystemExtraUsageRead),
+		Authorize:     server.authorizationMiddleware,
+	}, server.adminExtraUsageOverview)
 }
 
 // CreditUnitPrices holds the per-million-credit price in each supported
@@ -159,6 +171,18 @@ type GetExtraUsageInput struct {
 
 type GetExtraUsageOutput struct {
 	Body DataResponse[ExtraUsageGetResponse]
+}
+
+// AdminExtraUsageOverviewRow is a single row in the admin extra-usage overview.
+// It embeds the ExtraUsageSettings and adds the 7-day spend data.
+type AdminExtraUsageOverviewRow struct {
+	types.ExtraUsageSettings
+	Spend7DaysCredits int64 `json:"spend_7d_credits"`
+}
+
+// AdminExtraUsageOverviewOutput wraps the overview rows in the standard data envelope.
+type AdminExtraUsageOverviewOutput struct {
+	Body DataResponse[[]AdminExtraUsageOverviewRow]
 }
 
 type UpdateExtraUsageInput struct {
@@ -511,5 +535,41 @@ func (s *Server) listExtraUsageTransactions(ctx context.Context, input *ListExtr
 			Data: txs,
 			Meta: paginationMeta(total, pagination),
 		},
+	}, nil
+}
+
+// adminExtraUsageOverview handles GET /api/v1/admin/extra-usage/overview.
+// Returns an overview of all projects' extra-usage settings with 7-day spend aggregation.
+// This is a superadmin-only endpoint.
+//
+// Behavior (matches legacy handleAdminExtraUsageOverview):
+//  1. ListExtraUsageSettings() → 500 "failed to list settings"
+//  2. For each setting, SumRecentExtraUsageSpendCredits(projectID, 7) → 500 "failed to sum recent spend"
+//  3. Return 200 with {data: [rows with embedded settings + spend]}
+//  NOTE: This preserves the N+1 query pattern; optimization is not in scope for this batch.
+func (s *Server) adminExtraUsageOverview(_ context.Context, _ *struct{}) (*AdminExtraUsageOverviewOutput, error) {
+	if s == nil || s.ExtraUsage == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "extra usage store is not configured", nil)
+	}
+
+	rows, err := s.ExtraUsage.ListExtraUsageSettings()
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to list settings", nil)
+	}
+
+	out := make([]AdminExtraUsageOverviewRow, 0, len(rows))
+	for _, row := range rows {
+		spend, err := s.ExtraUsage.SumRecentExtraUsageSpendCredits(row.ProjectID, 7)
+		if err != nil {
+			return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to sum recent spend", nil)
+		}
+		out = append(out, AdminExtraUsageOverviewRow{
+			ExtraUsageSettings: row,
+			Spend7DaysCredits:  spend,
+		})
+	}
+
+	return &AdminExtraUsageOverviewOutput{
+		Body: DataResponse[[]AdminExtraUsageOverviewRow]{Data: out},
 	}, nil
 }

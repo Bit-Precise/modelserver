@@ -40,6 +40,12 @@ type fakeExtraUsageStore struct {
 	getOrderReturn *types.Order
 	getOrderErr    error
 
+	listSettingsReturn []types.ExtraUsageSettings
+	listSettingsErr    error
+
+	sumRecentSpendReturn map[string]int64 // projectID -> spend
+	sumRecentSpendErr    map[string]error // projectID -> error
+
 	getSettingsCalls []string // projectID
 	upsertCalls      []struct {
 		projectID       string
@@ -122,10 +128,23 @@ func (s *fakeExtraUsageStore) TopUpExtraUsage(req store.TopUpExtraUsageReq) (int
 }
 
 func (s *fakeExtraUsageStore) ListExtraUsageSettings() ([]types.ExtraUsageSettings, error) {
-	return nil, nil
+	if s.listSettingsErr != nil {
+		return nil, s.listSettingsErr
+	}
+	return s.listSettingsReturn, nil
 }
 
 func (s *fakeExtraUsageStore) SumRecentExtraUsageSpendCredits(projectID string, days int) (int64, error) {
+	if s.sumRecentSpendErr != nil {
+		if err, ok := s.sumRecentSpendErr[projectID]; ok {
+			return 0, err
+		}
+	}
+	if s.sumRecentSpendReturn != nil {
+		if spend, ok := s.sumRecentSpendReturn[projectID]; ok {
+			return spend, nil
+		}
+	}
 	return 0, nil
 }
 
@@ -1162,5 +1181,123 @@ func TestCreateTopupPolicyRequiresProjectMembership(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("createExtraUsageTopup POST operation not found in OpenAPI paths")
+	}
+}
+
+// --- G1 (adminExtraUsageOverview) Tests ---
+
+// Test 1: ListExtraUsageSettings error → 500 "failed to list settings"
+func TestAdminExtraUsageOverviewListSettingsError(t *testing.T) {
+	t.Parallel()
+	store := &fakeExtraUsageStore{
+		listSettingsErr: errors.New("database error"),
+	}
+	s := newExtraUsageServer(store)
+
+	_, err := s.adminExtraUsageOverview(context.Background(), &struct{}{})
+	assertStatusError(t, err, 500, "internal")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "failed to list settings" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "failed to list settings")
+	}
+}
+
+// Test 2: SumRecentExtraUsageSpendCredits error mid-loop → 500 "failed to sum recent spend"
+func TestAdminExtraUsageOverviewSumRecentSpendError(t *testing.T) {
+	t.Parallel()
+	store := &fakeExtraUsageStore{
+		listSettingsReturn: []types.ExtraUsageSettings{
+			{ProjectID: "proj-001", Enabled: true},
+		},
+		sumRecentSpendErr: map[string]error{
+			"proj-001": errors.New("query error"),
+		},
+	}
+	s := newExtraUsageServer(store)
+
+	_, err := s.adminExtraUsageOverview(context.Background(), &struct{}{})
+	assertStatusError(t, err, 500, "internal")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "failed to sum recent spend" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "failed to sum recent spend")
+	}
+}
+
+// Test 3: Happy path with 2 rows → 200 with 2 items in data, each row has embedded ExtraUsageSettings + Spend7DaysCredits
+func TestAdminExtraUsageOverviewHappyPath(t *testing.T) {
+	t.Parallel()
+	updatedAt := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	store := &fakeExtraUsageStore{
+		listSettingsReturn: []types.ExtraUsageSettings{
+			{
+				ProjectID:           "proj-001",
+				Enabled:             true,
+				BalanceCredits:      5000,
+				MonthlyLimitCredits: 10000,
+				BypassBalanceCheck:  false,
+				UpdatedAt:           updatedAt,
+			},
+			{
+				ProjectID:           "proj-002",
+				Enabled:             false,
+				BalanceCredits:      0,
+				MonthlyLimitCredits: 0,
+				BypassBalanceCheck:  true,
+				UpdatedAt:           updatedAt,
+			},
+		},
+		sumRecentSpendReturn: map[string]int64{
+			"proj-001": 1500,
+			"proj-002": 0,
+		},
+	}
+	s := newExtraUsageServer(store)
+
+	output, err := s.adminExtraUsageOverview(context.Background(), &struct{}{})
+	if err != nil {
+		t.Fatalf("adminExtraUsageOverview() error = %v", err)
+	}
+
+	// Verify data array has 2 items
+	if len(output.Body.Data) != 2 {
+		t.Errorf("data length = %d, want 2", len(output.Body.Data))
+	}
+
+	// Verify first row
+	row1 := output.Body.Data[0]
+	if row1.ProjectID != "proj-001" {
+		t.Errorf("first row ProjectID = %q, want proj-001", row1.ProjectID)
+	}
+	if !row1.Enabled {
+		t.Errorf("first row Enabled = %v, want true", row1.Enabled)
+	}
+	if row1.BalanceCredits != 5000 {
+		t.Errorf("first row BalanceCredits = %d, want 5000", row1.BalanceCredits)
+	}
+	if row1.Spend7DaysCredits != 1500 {
+		t.Errorf("first row Spend7DaysCredits = %d, want 1500", row1.Spend7DaysCredits)
+	}
+
+	// Verify second row
+	row2 := output.Body.Data[1]
+	if row2.ProjectID != "proj-002" {
+		t.Errorf("second row ProjectID = %q, want proj-002", row2.ProjectID)
+	}
+	if row2.Enabled {
+		t.Errorf("second row Enabled = %v, want false", row2.Enabled)
+	}
+	if !row2.BypassBalanceCheck {
+		t.Errorf("second row BypassBalanceCheck = %v, want true", row2.BypassBalanceCheck)
+	}
+	if row2.Spend7DaysCredits != 0 {
+		t.Errorf("second row Spend7DaysCredits = %d, want 0", row2.Spend7DaysCredits)
 	}
 }
