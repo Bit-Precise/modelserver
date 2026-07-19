@@ -81,7 +81,7 @@ func TestEveryOperationHasCatalogPermission(t *testing.T) {
 func TestEveryResourceHasResolver(t *testing.T) {
 	t.Parallel()
 
-	registry := resolvers.Default()
+	known := resolvers.KnownResourceTypes
 	sawResource := false
 	forEachOperation(t, func(method, path string, operation *huma.Operation) {
 		raw, ok := operation.Extensions["x-modelserver-authz"]
@@ -96,13 +96,13 @@ func TestEveryResourceHasResolver(t *testing.T) {
 			return
 		}
 		sawResource = true
-		if _, present := registry[access.Resource.ResourceType]; !present {
-			t.Errorf("%s %s: resource type %q missing from resolvers.Default()",
+		if _, present := known[access.Resource.ResourceType]; !present {
+			t.Errorf("%s %s: resource type %q missing from resolvers.KnownResourceTypes",
 				method, path, access.Resource.ResourceType)
 		}
 	})
 
-	if !sawResource && len(registry) == 0 {
+	if !sawResource && len(known) == 0 {
 		t.Skip("no operations use resource resolvers yet; test becomes active once a subsystem batch declares Resource bindings")
 	}
 }
@@ -257,6 +257,29 @@ func TestBatch05NoLegacyChiOverlap(t *testing.T) {
 		{http.MethodGet, "/api/v1/admin/notifications/{id}"},
 		{http.MethodPut, "/api/v1/admin/notifications/{id}"},
 		{http.MethodDelete, "/api/v1/admin/notifications/{id}"},
+	}
+	router := chi.NewRouter()
+	admin.MountRoutes(router, nil, &config.Config{}, nil, nil, nil, nil, nil)
+	for _, route := range migrated {
+		ctx := chi.NewRouteContext()
+		if router.Match(ctx, route.method, route.path) {
+			t.Errorf("legacy admin still registers %s %s", route.method, route.path)
+		}
+	}
+}
+
+func TestBatch06NoLegacyChiOverlap(t *testing.T) {
+	t.Parallel()
+
+	migrated := []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/admin/extra-usage/overview"},
+		{http.MethodPost, "/api/v1/admin/extra-usage/projects/{projectID}/topup"},
+		{http.MethodPut, "/api/v1/admin/extra-usage/projects/{projectID}/bypass"},
+		{http.MethodGet, "/api/v1/projects/{projectID}/extra-usage"},
+		{http.MethodPut, "/api/v1/projects/{projectID}/extra-usage"},
+		{http.MethodGet, "/api/v1/projects/{projectID}/extra-usage/transactions"},
+		{http.MethodPost, "/api/v1/projects/{projectID}/extra-usage/topup"},
+		{http.MethodGet, "/api/v1/projects/{projectID}/extra-usage/topup/{orderID}"},
 	}
 	router := chi.NewRouter()
 	admin.MountRoutes(router, nil, &config.Config{}, nil, nil, nil, nil, nil)

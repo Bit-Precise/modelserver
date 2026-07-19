@@ -1,6 +1,84 @@
 {
   "components": {
     "schemas": {
+      "AdminDirectTopupInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount_credits"
+        ],
+        "type": "object"
+      },
+      "AdminDirectTopupResponseData": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "balance_credits"
+        ],
+        "type": "object"
+      },
+      "AdminExtraUsageOverviewRow": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "bypass_balance_check": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "monthly_limit_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "spend_7d_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "spend_7d_credits",
+          "project_id",
+          "enabled",
+          "balance_credits",
+          "monthly_limit_credits",
+          "bypass_balance_check",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "AdminProjectsSubscriptionsOverviewOutputBody": {
         "additionalProperties": false,
         "properties": {
@@ -14,6 +92,15 @@
         "required": [
           "data"
         ],
+        "type": "object"
+      },
+      "AdminSetBypassInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "bypass": {
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "AuthConfig": {
@@ -83,6 +170,67 @@
           "metric",
           "limit",
           "per_model"
+        ],
+        "type": "object"
+      },
+      "CreateExtraUsageTopupInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_cents": {
+            "description": "Amount in USD cents (required for stripe).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "amount_fen": {
+            "description": "Amount in CNY fen (required for wechat/alipay).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "channel": {
+            "description": "Payment channel: wechat, alipay, or stripe.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "CreateExtraUsageTopupResponseData": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "payment_ref": {
+            "type": "string"
+          },
+          "payment_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id",
+          "channel",
+          "currency",
+          "amount",
+          "credits",
+          "payment_url",
+          "payment_ref"
         ],
         "type": "object"
       },
@@ -291,6 +439,29 @@
         ],
         "type": "object"
       },
+      "CreditUnitPrices": {
+        "additionalProperties": false,
+        "properties": {
+          "cny_fen_per_million": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "implicit_usd_to_cny_rate": {
+            "format": "double",
+            "type": "number"
+          },
+          "usd_cents_per_million": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cny_fen_per_million",
+          "usd_cents_per_million",
+          "implicit_usd_to_cny_rate"
+        ],
+        "type": "object"
+      },
       "CreditWindowStatus": {
         "additionalProperties": false,
         "properties": {
@@ -311,6 +482,30 @@
         ],
         "type": "object"
       },
+      "DataResponseAdminDirectTopupResponseData": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminDirectTopupResponseData"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "DataResponseCreateExtraUsageTopupResponseData": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/CreateExtraUsageTopupResponseData"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
       "DataResponseDeleteNotificationResponseData": {
         "additionalProperties": false,
         "properties": {
@@ -323,11 +518,53 @@
         ],
         "type": "object"
       },
+      "DataResponseExtraUsageGetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ExtraUsageGetResponse"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "DataResponseExtraUsageSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ExtraUsageSettings"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
       "DataResponseGlobalCapabilities": {
         "additionalProperties": false,
         "properties": {
           "data": {
             "$ref": "#/components/schemas/GlobalCapabilities"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "DataResponseListAdminExtraUsageOverviewRow": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AdminExtraUsageOverviewRow"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -370,6 +607,18 @@
         "properties": {
           "data": {
             "$ref": "#/components/schemas/Notification"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "DataResponseOrder": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Order"
           }
         },
         "required": [
@@ -463,6 +712,149 @@
         },
         "required": [
           "error"
+        ],
+        "type": "object"
+      },
+      "ExtraUsageGetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "bypass_balance_check": {
+            "type": "boolean"
+          },
+          "credit_unit_prices": {
+            "$ref": "#/components/schemas/CreditUnitPrices"
+          },
+          "daily_topup_limit_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_topup": {
+            "$ref": "#/components/schemas/TopupAmounts"
+          },
+          "min_topup": {
+            "$ref": "#/components/schemas/TopupAmounts"
+          },
+          "monthly_limit_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "monthly_spent_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "monthly_window_start": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "balance_credits",
+          "monthly_limit_credits",
+          "monthly_spent_credits",
+          "monthly_window_start",
+          "bypass_balance_check",
+          "credit_unit_prices",
+          "min_topup",
+          "max_topup",
+          "daily_topup_limit_credits"
+        ],
+        "type": "object"
+      },
+      "ExtraUsageSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "bypass_balance_check": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "monthly_limit_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "enabled",
+          "balance_credits",
+          "monthly_limit_credits",
+          "bypass_balance_check",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ExtraUsageTransaction": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "balance_after_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "type",
+          "amount_credits",
+          "balance_after_credits",
+          "created_at"
         ],
         "type": "object"
       },
@@ -573,6 +965,25 @@
           "image_input_rate",
           "image_cached_input_rate",
           "image_output_rate"
+        ],
+        "type": "object"
+      },
+      "ListResponseExtraUsageTransaction": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ExtraUsageTransaction"
+            },
+            "type": "array"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
         ],
         "type": "object"
       },
@@ -1030,6 +1441,81 @@
         ],
         "type": "object"
       },
+      "Order": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "existing_subscription_id": {
+            "type": "string"
+          },
+          "extra_usage_amount_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "string"
+          },
+          "order_type": {
+            "type": "string"
+          },
+          "payment_ref": {
+            "type": "string"
+          },
+          "payment_url": {
+            "type": "string"
+          },
+          "periods": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "unit_price": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "periods",
+          "unit_price",
+          "amount",
+          "currency",
+          "status",
+          "order_type",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "Plan": {
         "additionalProperties": false,
         "properties": {
@@ -1468,6 +1954,24 @@
         ],
         "type": "object"
       },
+      "TopupAmounts": {
+        "additionalProperties": false,
+        "properties": {
+          "cny_fen": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "usd_cents": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cny_fen",
+          "usd_cents"
+        ],
+        "type": "object"
+      },
       "UnreadCountBody": {
         "additionalProperties": false,
         "properties": {
@@ -1491,6 +1995,21 @@
         "required": [
           "count"
         ],
+        "type": "object"
+      },
+      "UpdateExtraUsageInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Enable or disable extra usage for this project.",
+            "type": "boolean"
+          },
+          "monthly_limit_credits": {
+            "description": "Monthly credit limit. Must be \u003e= 0.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
         "type": "object"
       },
       "UpdateModelInputBody": {
@@ -1734,6 +2253,278 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/extra-usage/overview": {
+      "get": {
+        "operationId": "adminExtraUsageOverview",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseListAdminExtraUsageOverviewRow"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Admin extra-usage overview (superadmin)",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.extra_usage.read",
+          "superadmin": "required"
+        }
+      }
+    },
+    "/api/v1/admin/extra-usage/projects/{projectID}/bypass": {
+      "put": {
+        "operationId": "adminExtraUsageSetBypass",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminSetBypassInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseExtraUsageSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Toggle extra-usage balance-check bypass on a project (superadmin)",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.extra_usage.manage",
+          "projectIdPathParam": "projectID",
+          "superadmin": "required",
+          "systemOnProjectPath": true
+        }
+      }
+    },
+    "/api/v1/admin/extra-usage/projects/{projectID}/topup": {
+      "post": {
+        "operationId": "adminExtraUsageDirectTopup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminDirectTopupInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseAdminDirectTopupResponseData"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Admin direct top-up (superadmin, bypasses payment provider)",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.extra_usage.manage",
+          "projectIdPathParam": "projectID",
+          "superadmin": "required",
+          "systemOnProjectPath": true
+        }
+      }
+    },
     "/api/v1/admin/notifications": {
       "get": {
         "description": "Returns paginated notifications with optional filtering by audience type and include_deleted flag.",
@@ -4991,6 +5782,594 @@
           "mode": "rbac",
           "scope": "project",
           "permission": "project.read",
+          "projectIdPathParam": "projectID",
+          "superadmin": "bypass"
+        }
+      }
+    },
+    "/api/v1/projects/{projectID}/extra-usage": {
+      "get": {
+        "operationId": "getExtraUsage",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "description": "Project identifier.",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseExtraUsageGetResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Get extra-usage settings",
+        "tags": [
+          "Projects",
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.read",
+          "projectIdPathParam": "projectID",
+          "superadmin": "bypass"
+        }
+      },
+      "put": {
+        "operationId": "updateExtraUsage",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "description": "Project identifier.",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateExtraUsageInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseExtraUsageSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Update extra-usage settings",
+        "tags": [
+          "Projects",
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.write",
+          "projectIdPathParam": "projectID",
+          "superadmin": "bypass"
+        }
+      }
+    },
+    "/api/v1/projects/{projectID}/extra-usage/topup": {
+      "post": {
+        "description": "Initiates a payment order to top up the project's extra-usage credit balance.",
+        "operationId": "createExtraUsageTopup",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "description": "Project identifier.",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExtraUsageTopupInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseCreateExtraUsageTopupResponseData"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Create extra-usage topup order",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.topup",
+          "projectIdPathParam": "projectID",
+          "superadmin": "none"
+        }
+      }
+    },
+    "/api/v1/projects/{projectID}/extra-usage/topup/{orderID}": {
+      "get": {
+        "operationId": "getExtraUsageTopup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Topup order identifier.",
+            "in": "path",
+            "name": "orderID",
+            "required": true,
+            "schema": {
+              "description": "Topup order identifier.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseOrder"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Get extra-usage topup order status",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.read",
+          "projectIdPathParam": "projectID",
+          "resource": {
+            "type": "extra-usage-topup",
+            "idPathParam": "orderID"
+          },
+          "superadmin": "bypass"
+        }
+      }
+    },
+    "/api/v1/projects/{projectID}/extra-usage/transactions": {
+      "get": {
+        "operationId": "listExtraUsageTransactions",
+        "parameters": [
+          {
+            "description": "Project identifier.",
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "description": "Project identifier.",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 1,
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "per_page",
+            "schema": {
+              "default": 20,
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "default": "created_at",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "default": "desc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by transaction type (topup, deduction, refund, adjust).",
+            "explode": false,
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "description": "Filter by transaction type (topup, deduction, refund, adjust).",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponseExtraUsageTransaction"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "List extra-usage ledger transactions",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "project",
+          "permission": "project.extra_usage.read",
           "projectIdPathParam": "projectID",
           "superadmin": "bypass"
         }

@@ -4,6 +4,57 @@
  */
 
 export interface paths {
+    "/api/v1/admin/extra-usage/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin extra-usage overview (superadmin) */
+        get: operations["adminExtraUsageOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/extra-usage/projects/{projectID}/bypass": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Toggle extra-usage balance-check bypass on a project (superadmin) */
+        put: operations["adminExtraUsageSetBypass"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/extra-usage/projects/{projectID}/topup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin direct top-up (superadmin, bypasses payment provider) */
+        post: operations["adminExtraUsageDirectTopup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/notifications": {
         parameters: {
             query?: never;
@@ -447,6 +498,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{projectID}/extra-usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get extra-usage settings */
+        get: operations["getExtraUsage"];
+        /** Update extra-usage settings */
+        put: operations["updateExtraUsage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{projectID}/extra-usage/topup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create extra-usage topup order
+         * @description Initiates a payment order to top up the project's extra-usage credit balance.
+         */
+        post: operations["createExtraUsageTopup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{projectID}/extra-usage/topup/{orderID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get extra-usage topup order status */
+        get: operations["getExtraUsageTopup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{projectID}/extra-usage/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List extra-usage ledger transactions */
+        get: operations["listExtraUsageTransactions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users": {
         parameters: {
             query?: never;
@@ -506,8 +629,36 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AdminDirectTopupInputBody: {
+            /** Format: int64 */
+            amount_credits: number;
+            description?: string;
+        };
+        AdminDirectTopupResponseData: {
+            /** Format: int64 */
+            balance_credits: number;
+            project_id: string;
+        };
+        AdminExtraUsageOverviewRow: {
+            /** Format: int64 */
+            balance_credits: number;
+            bypass_balance_check: boolean;
+            /** Format: date-time */
+            created_at: string;
+            enabled: boolean;
+            /** Format: int64 */
+            monthly_limit_credits: number;
+            project_id: string;
+            /** Format: int64 */
+            spend_7d_credits: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
         AdminProjectsSubscriptionsOverviewOutputBody: {
             data: components["schemas"]["ProjectSubscriptionOverview"][];
+        };
+        AdminSetBypassInputBody: {
+            bypass?: boolean;
         };
         AuthConfig: {
             /** Format: uri */
@@ -530,6 +681,31 @@ export interface components {
             limit: number;
             metric: string;
             per_model: boolean;
+        };
+        CreateExtraUsageTopupInputBody: {
+            /**
+             * Format: int64
+             * @description Amount in USD cents (required for stripe).
+             */
+            amount_cents?: number;
+            /**
+             * Format: int64
+             * @description Amount in CNY fen (required for wechat/alipay).
+             */
+            amount_fen?: number;
+            /** @description Payment channel: wechat, alipay, or stripe. */
+            channel: string;
+        };
+        CreateExtraUsageTopupResponseData: {
+            /** Format: int64 */
+            amount: number;
+            channel: string;
+            /** Format: int64 */
+            credits: number;
+            currency: string;
+            order_id: string;
+            payment_ref: string;
+            payment_url: string;
         };
         CreateModelInputBody: {
             aliases?: string[] | null;
@@ -589,17 +765,40 @@ export interface components {
             window: string;
             window_type: string;
         };
+        CreditUnitPrices: {
+            /** Format: int64 */
+            cny_fen_per_million: number;
+            /** Format: double */
+            implicit_usd_to_cny_rate: number;
+            /** Format: int64 */
+            usd_cents_per_million: number;
+        };
         CreditWindowStatus: {
             /** Format: double */
             percentage: number;
             resets_at?: string;
             window: string;
         };
+        DataResponseAdminDirectTopupResponseData: {
+            data: components["schemas"]["AdminDirectTopupResponseData"];
+        };
+        DataResponseCreateExtraUsageTopupResponseData: {
+            data: components["schemas"]["CreateExtraUsageTopupResponseData"];
+        };
         DataResponseDeleteNotificationResponseData: {
             data: components["schemas"]["DeleteNotificationResponseData"];
         };
+        DataResponseExtraUsageGetResponse: {
+            data: components["schemas"]["ExtraUsageGetResponse"];
+        };
+        DataResponseExtraUsageSettings: {
+            data: components["schemas"]["ExtraUsageSettings"];
+        };
         DataResponseGlobalCapabilities: {
             data: components["schemas"]["GlobalCapabilities"];
+        };
+        DataResponseListAdminExtraUsageOverviewRow: {
+            data: components["schemas"]["AdminExtraUsageOverviewRow"][] | null;
         };
         DataResponseListModelListRow: {
             data: components["schemas"]["ModelListRow"][] | null;
@@ -609,6 +808,9 @@ export interface components {
         };
         DataResponseNotification: {
             data: components["schemas"]["Notification"];
+        };
+        DataResponseOrder: {
+            data: components["schemas"]["Order"];
         };
         DataResponsePlan: {
             data: components["schemas"]["Plan"];
@@ -633,6 +835,52 @@ export interface components {
         ErrorEnvelope: {
             error: components["schemas"]["ErrorDetail"];
         };
+        ExtraUsageGetResponse: {
+            /** Format: int64 */
+            balance_credits: number;
+            bypass_balance_check: boolean;
+            credit_unit_prices: components["schemas"]["CreditUnitPrices"];
+            /** Format: int64 */
+            daily_topup_limit_credits: number;
+            enabled: boolean;
+            max_topup: components["schemas"]["TopupAmounts"];
+            min_topup: components["schemas"]["TopupAmounts"];
+            /** Format: int64 */
+            monthly_limit_credits: number;
+            /** Format: int64 */
+            monthly_spent_credits: number;
+            monthly_window_start: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        ExtraUsageSettings: {
+            /** Format: int64 */
+            balance_credits: number;
+            bypass_balance_check: boolean;
+            /** Format: date-time */
+            created_at: string;
+            enabled: boolean;
+            /** Format: int64 */
+            monthly_limit_credits: number;
+            project_id: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ExtraUsageTransaction: {
+            /** Format: int64 */
+            amount_credits: number;
+            /** Format: int64 */
+            balance_after_credits: number;
+            /** Format: date-time */
+            created_at: string;
+            description?: string;
+            id: string;
+            order_id?: string;
+            project_id: string;
+            reason?: string;
+            request_id?: string;
+            type: string;
+        };
         GlobalCapabilities: {
             is_superadmin: boolean;
             permissions: ("project.archive" | "project.billing.manage" | "project.billing.read" | "project.extra_usage.read" | "project.extra_usage.topup" | "project.extra_usage.write" | "project.keys.create" | "project.keys.manage" | "project.keys.read" | "project.members.manage" | "project.members.read" | "project.members.usage.read" | "project.models.read" | "project.oauth_grants.manage" | "project.oauth_grants.read" | "project.orders.create" | "project.orders.manage" | "project.orders.read" | "project.ownership.transfer" | "project.plans.read" | "project.policies.manage" | "project.policies.read" | "project.read" | "project.requests.read" | "project.settings.write" | "project.subscriptions.read" | "project.traces.read" | "project.usage.read" | "system.extra_usage.manage" | "system.extra_usage.read" | "system.models.manage" | "system.models.read" | "system.notifications.manage" | "system.notifications.read" | "system.oauth_clients.manage" | "system.oauth_clients.read" | "system.plans.manage" | "system.plans.read" | "system.projects.read" | "system.requests.read" | "system.routing.manage" | "system.routing.read" | "system.subscription.override" | "system.upstream_groups.manage" | "system.upstream_groups.read" | "system.upstreams.manage" | "system.upstreams.read" | "system.users.read" | "system.users.write")[];
@@ -650,6 +898,10 @@ export interface components {
             text_input_rate: number;
             /** Format: double */
             text_output_rate: number;
+        };
+        ListResponseExtraUsageTransaction: {
+            data: components["schemas"]["ExtraUsageTransaction"][];
+            meta: components["schemas"]["Meta"];
         };
         ListResponseNotification: {
             data: components["schemas"]["Notification"][];
@@ -780,6 +1032,31 @@ export interface components {
             /** @description OAuth state parameter. May carry a Hydra return_to encoded as "<random>|<url>". */
             state?: string;
         };
+        Order: {
+            /** Format: int64 */
+            amount: number;
+            channel?: string;
+            /** Format: date-time */
+            created_at: string;
+            currency: string;
+            existing_subscription_id?: string;
+            /** Format: int64 */
+            extra_usage_amount_credits?: number;
+            id: string;
+            metadata?: string;
+            order_type: string;
+            payment_ref?: string;
+            payment_url?: string;
+            /** Format: int64 */
+            periods: number;
+            plan_id?: string;
+            project_id: string;
+            status: string;
+            /** Format: int64 */
+            unit_price: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
         Plan: {
             classic_rules?: components["schemas"]["ClassicRule"][] | null;
             client_model_credit_rates?: {
@@ -907,12 +1184,27 @@ export interface components {
             ttft_ms: number;
             upstream_id?: string;
         };
+        TopupAmounts: {
+            /** Format: int64 */
+            cny_fen: number;
+            /** Format: int64 */
+            usd_cents: number;
+        };
         UnreadCountBody: {
             data: components["schemas"]["UnreadCountData"];
         };
         UnreadCountData: {
             /** Format: int64 */
             count: number;
+        };
+        UpdateExtraUsageInputBody: {
+            /** @description Enable or disable extra usage for this project. */
+            enabled?: boolean;
+            /**
+             * Format: int64
+             * @description Monthly credit limit. Must be >= 0.
+             */
+            monthly_limit_credits?: number;
         };
         UpdateModelInputBody: {
             aliases?: string[];
@@ -1003,6 +1295,195 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    adminExtraUsageOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponseListAdminExtraUsageOverviewRow"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminExtraUsageSetBypass: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminSetBypassInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponseExtraUsageSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminExtraUsageDirectTopup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDirectTopupInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponseAdminDirectTopupResponseData"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listAllNotifications: {
         parameters: {
             query?: {
@@ -3138,6 +3619,380 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getExtraUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier. */
+                projectID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponseExtraUsageGetResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateExtraUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier. */
+                projectID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateExtraUsageInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponseExtraUsageSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createExtraUsageTopup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier. */
+                projectID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateExtraUsageTopupInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponseCreateExtraUsageTopupResponseData"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getExtraUsageTopup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: string;
+                /** @description Topup order identifier. */
+                orderID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataResponseOrder"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listExtraUsageTransactions: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+                sort?: string;
+                order?: "asc" | "desc";
+                /** @description Filter by transaction type (topup, deduction, refund, adjust). */
+                type?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Project identifier. */
+                projectID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponseExtraUsageTransaction"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -56,6 +56,47 @@ func (*routeTestStore) ModelReferenceCountsFor(string) (storepkg.ModelReferenceC
 	return storepkg.ModelReferenceCounts{}, nil
 }
 
+// Extra usage store stubs (interface expanded in Batch 6)
+func (*routeTestStore) GetExtraUsageSettings(string) (*types.ExtraUsageSettings, error) {
+	return nil, nil
+}
+func (*routeTestStore) UpsertExtraUsageSettings(string, bool, int64) (*types.ExtraUsageSettings, error) {
+	return nil, nil
+}
+func (*routeTestStore) GetMonthlyExtraSpendCredits(string, time.Time) (int64, error) {
+	return 0, nil
+}
+func (*routeTestStore) ListExtraUsageTransactions(string, types.PaginationParams, string) ([]types.ExtraUsageTransaction, int, error) {
+	return []types.ExtraUsageTransaction{}, 0, nil
+}
+func (*routeTestStore) SumDailyExtraUsageTopupCredits(string, time.Time) (int64, error) {
+	return 0, nil
+}
+func (*routeTestStore) CreateOrder(*types.Order) error {
+	return nil
+}
+func (*routeTestStore) UpdateOrderStatus(string, string) error {
+	return nil
+}
+func (*routeTestStore) UpdateOrderPayment(string, string, string, string) error {
+	return nil
+}
+func (*routeTestStore) GetOrderByID(string) (*types.Order, error) {
+	return nil, nil
+}
+func (*routeTestStore) TopUpExtraUsage(storepkg.TopUpExtraUsageReq) (int64, error) {
+	return 0, nil
+}
+func (*routeTestStore) ListExtraUsageSettings() ([]types.ExtraUsageSettings, error) {
+	return []types.ExtraUsageSettings{}, nil
+}
+func (*routeTestStore) SumRecentExtraUsageSpendCredits(string, int) (int64, error) {
+	return 0, nil
+}
+func (*routeTestStore) SetExtraUsageBypass(string, bool) (*types.ExtraUsageSettings, error) {
+	return nil, nil
+}
+
 type routeTestTokens struct{}
 
 func (routeTestTokens) ValidateToken(string) (*auth.Claims, error) {

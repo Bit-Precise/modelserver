@@ -60,6 +60,17 @@ And these migrated admin-reads + notifications operations (Batch 5):
 - `PUT /api/v1/admin/notifications/{id}`
 - `DELETE /api/v1/admin/notifications/{id}`
 
+And these migrated extra-usage operations (Batch 6):
+
+- `GET /api/v1/admin/extra-usage/overview`
+- `POST /api/v1/admin/extra-usage/projects/{projectID}/topup`
+- `PUT /api/v1/admin/extra-usage/projects/{projectID}/bypass`
+- `GET /api/v1/projects/{projectID}/extra-usage`
+- `PUT /api/v1/projects/{projectID}/extra-usage`
+- `GET /api/v1/projects/{projectID}/extra-usage/transactions`
+- `POST /api/v1/projects/{projectID}/extra-usage/topup`
+- `GET /api/v1/projects/{projectID}/extra-usage/topup/{orderID}`
+
 All other management routes remain on their legacy Chi handlers until they are
 individually migrated. A route must not be registered by both implementations.
 

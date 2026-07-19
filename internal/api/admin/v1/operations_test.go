@@ -152,6 +152,9 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 		"/api/v1/projects",
 		"/api/v1/projects/{projectID}",
 		"/api/v1/projects/{projectID}/capabilities",
+		"/api/v1/projects/{projectID}/extra-usage",
+		"/api/v1/projects/{projectID}/extra-usage/transactions",
+		"/api/v1/projects/{projectID}/extra-usage/topup/{orderID}",
 		"/api/v1/users",
 		"/api/v1/users/compact",
 		"/api/v1/users/{userID}",
@@ -163,6 +166,7 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 		"/api/v1/admin/requests",
 		"/api/v1/admin/projects/subscriptions-overview",
 		"/api/v1/admin/requests/{requestID}/http-log",
+		"/api/v1/admin/extra-usage/overview",
 		"/api/v1/admin/notifications",
 		"/api/v1/admin/notifications/{id}",
 		"/api/v1/notifications",
@@ -173,10 +177,25 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 		"/api/v1/auth/oauth/{provider}",
 		"/api/v1/notifications/{id}/read",
 		"/api/v1/notifications/read_all",
+		"/api/v1/projects/{projectID}/extra-usage/topup",
+		"/api/v1/admin/extra-usage/projects/{projectID}/topup",
 	}
-	wantPathCount := len(expectedGetPaths) + len(expectedPostPaths)
-	if len(api.OpenAPI().Paths) != wantPathCount {
-		t.Fatalf("documented path count = %d, want %d", len(api.OpenAPI().Paths), wantPathCount)
+	expectedPutPaths := []string{
+		"/api/v1/admin/extra-usage/projects/{projectID}/bypass",
+		"/api/v1/projects/{projectID}/extra-usage",
+	}
+	distinctPaths := map[string]struct{}{}
+	for _, path := range expectedGetPaths {
+		distinctPaths[path] = struct{}{}
+	}
+	for _, path := range expectedPostPaths {
+		distinctPaths[path] = struct{}{}
+	}
+	for _, path := range expectedPutPaths {
+		distinctPaths[path] = struct{}{}
+	}
+	if len(api.OpenAPI().Paths) != len(distinctPaths) {
+		t.Fatalf("documented path count = %d, want %d", len(api.OpenAPI().Paths), len(distinctPaths))
 	}
 	for _, path := range expectedGetPaths {
 		if api.OpenAPI().Paths[path] == nil || api.OpenAPI().Paths[path].Get == nil {
@@ -186,6 +205,11 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 	for _, path := range expectedPostPaths {
 		if api.OpenAPI().Paths[path] == nil || api.OpenAPI().Paths[path].Post == nil {
 			t.Errorf("missing documented POST %s", path)
+		}
+	}
+	for _, path := range expectedPutPaths {
+		if api.OpenAPI().Paths[path] == nil || api.OpenAPI().Paths[path].Put == nil {
+			t.Errorf("missing documented PUT %s", path)
 		}
 	}
 

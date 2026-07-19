@@ -11,6 +11,7 @@ import (
 	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/auth"
 	"github.com/modelserver/modelserver/internal/authz"
+	"github.com/modelserver/modelserver/internal/billing"
 	"github.com/modelserver/modelserver/internal/config"
 	"github.com/modelserver/modelserver/internal/httplog"
 	"github.com/modelserver/modelserver/internal/modelcatalog"
@@ -53,6 +54,10 @@ type Server struct {
 	AdminSuper     adminSuperStore
 	Notifications  notificationsStore
 	HTTPLog        *httplog.Logger
+	ExtraUsage     extraUsageStore
+	PayClient      billing.PaymentClient
+	BillingCfg     config.BillingConfig
+	ExtraUsageCfg  config.ExtraUsageConfig
 }
 
 // effectivePolicies returns the caller-supplied policies map when set,
