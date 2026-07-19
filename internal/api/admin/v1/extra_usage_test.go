@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +46,16 @@ type fakeExtraUsageStore struct {
 
 	sumRecentSpendReturn map[string]int64 // projectID -> spend
 	sumRecentSpendErr    map[string]error // projectID -> error
+
+	topUpResult          int64             // balance returned by TopUpExtraUsage
+	topUpErr             error             // error returned by TopUpExtraUsage
+	topUpCalledWith      *store.TopUpExtraUsageReq
+	setBypassResult      *types.ExtraUsageSettings
+	setBypassErr         error
+	setBypassCalls       []struct {
+		projectID string
+		bypass    bool
+	}
 
 	getSettingsCalls []string // projectID
 	upsertCalls      []struct {
@@ -124,7 +135,11 @@ func (s *fakeExtraUsageStore) GetOrderByID(id string) (*types.Order, error) {
 }
 
 func (s *fakeExtraUsageStore) TopUpExtraUsage(req store.TopUpExtraUsageReq) (int64, error) {
-	return 0, nil
+	s.topUpCalledWith = &req
+	if s.topUpErr != nil {
+		return 0, s.topUpErr
+	}
+	return s.topUpResult, nil
 }
 
 func (s *fakeExtraUsageStore) ListExtraUsageSettings() ([]types.ExtraUsageSettings, error) {
@@ -149,7 +164,14 @@ func (s *fakeExtraUsageStore) SumRecentExtraUsageSpendCredits(projectID string, 
 }
 
 func (s *fakeExtraUsageStore) SetExtraUsageBypass(projectID string, bypass bool) (*types.ExtraUsageSettings, error) {
-	return nil, nil
+	s.setBypassCalls = append(s.setBypassCalls, struct {
+		projectID string
+		bypass    bool
+	}{projectID, bypass})
+	if s.setBypassErr != nil {
+		return nil, s.setBypassErr
+	}
+	return s.setBypassResult, nil
 }
 
 func formatInt64(v int64) string {
@@ -1299,5 +1321,168 @@ func TestAdminExtraUsageOverviewHappyPath(t *testing.T) {
 	}
 	if row2.Spend7DaysCredits != 0 {
 		t.Errorf("second row Spend7DaysCredits = %d, want 0", row2.Spend7DaysCredits)
+	}
+}
+
+// --- G2 (adminExtraUsageDirectTopup) Tests ---
+
+// Test 1: amountCredits <= 0 → 400 bad_request
+func TestAdminDirectTopupAmountCreditsNegative(t *testing.T) {
+	t.Parallel()
+	store := &fakeExtraUsageStore{}
+	s := newExtraUsageServer(store)
+	input := &AdminDirectTopupInput{ProjectID: testProjectID}
+	input.Body.AmountCredits = -100
+
+	_, err := s.adminExtraUsageDirectTopup(context.Background(), input)
+	assertStatusError(t, err, 400, "bad_request")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "amount_credits must be > 0" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "amount_credits must be > 0")
+	}
+}
+
+// Test 2: TopUpExtraUsage error → 500 internal
+func TestAdminDirectTopupStoreError(t *testing.T) {
+	t.Parallel()
+	store := &fakeExtraUsageStore{
+		topUpErr: errors.New("database error"),
+	}
+	s := newExtraUsageServer(store)
+	input := &AdminDirectTopupInput{ProjectID: testProjectID}
+	input.Body.AmountCredits = 1000
+	input.Body.Description = "test adjustment"
+
+	_, err := s.adminExtraUsageDirectTopup(context.Background(), input)
+	assertStatusError(t, err, 500, "internal")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if !strings.Contains(env.Payload.Message, "failed to top up:") {
+		t.Errorf("message = %q, should contain 'failed to top up:'", env.Payload.Message)
+	}
+}
+
+// Test 3: Happy path → 200 with {project_id, balance_credits}
+func TestAdminDirectTopupHappyPath(t *testing.T) {
+	t.Parallel()
+	store := &fakeExtraUsageStore{
+		topUpResult: 5000,
+	}
+	s := newExtraUsageServer(store)
+	input := &AdminDirectTopupInput{ProjectID: testProjectID}
+	input.Body.AmountCredits = 1000
+	input.Body.Description = "admin adjustment"
+
+	output, err := s.adminExtraUsageDirectTopup(context.Background(), input)
+	if err != nil {
+		t.Fatalf("adminExtraUsageDirectTopup() error = %v", err)
+	}
+
+	// Verify response
+	if output.Body.Data.ProjectID != testProjectID {
+		t.Errorf("project_id = %q, want %q", output.Body.Data.ProjectID, testProjectID)
+	}
+	if output.Body.Data.BalanceCredits != 5000 {
+		t.Errorf("balance_credits = %d, want 5000", output.Body.Data.BalanceCredits)
+	}
+
+	// Verify TopUpExtraUsage was called with correct params
+	if store.topUpCalledWith == nil {
+		t.Fatal("expected TopUpExtraUsage to be called")
+	}
+	if store.topUpCalledWith.ProjectID != testProjectID {
+		t.Errorf("TopUpExtraUsage ProjectID = %q, want %q", store.topUpCalledWith.ProjectID, testProjectID)
+	}
+	if store.topUpCalledWith.AmountCredits != 1000 {
+		t.Errorf("TopUpExtraUsage AmountCredits = %d, want 1000", store.topUpCalledWith.AmountCredits)
+	}
+	if store.topUpCalledWith.Reason != types.ExtraUsageReasonAdminAdjust {
+		t.Errorf("TopUpExtraUsage Reason = %q, want %q", store.topUpCalledWith.Reason, types.ExtraUsageReasonAdminAdjust)
+	}
+	if store.topUpCalledWith.Description != "admin adjustment" {
+		t.Errorf("TopUpExtraUsage Description = %q, want %q", store.topUpCalledWith.Description, "admin adjustment")
+	}
+}
+
+// --- G3 (adminExtraUsageSetBypass) Tests ---
+
+// Test 4: nil bypass → 400 bad_request "bypass field required"
+func TestAdminSetBypassNilBypass(t *testing.T) {
+	t.Parallel()
+	store := &fakeExtraUsageStore{}
+	s := newExtraUsageServer(store)
+	input := &AdminSetBypassInput{ProjectID: testProjectID}
+	input.Body.Bypass = nil
+
+	_, err := s.adminExtraUsageSetBypass(context.Background(), input)
+	assertStatusError(t, err, 400, "bad_request")
+
+	env, ok := err.(*contract.ErrorEnvelope)
+	if !ok {
+		t.Fatalf("expected *contract.ErrorEnvelope, got %T", err)
+	}
+	if env.Payload.Message != "bypass field required" {
+		t.Errorf("message = %q, want %q", env.Payload.Message, "bypass field required")
+	}
+}
+
+// Test 5: Happy path → 200 with {data: settings}; assert SetExtraUsageBypass called
+func TestAdminSetBypassHappyPath(t *testing.T) {
+	t.Parallel()
+	updatedAt := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	settings := &types.ExtraUsageSettings{
+		ProjectID:           testProjectID,
+		Enabled:             true,
+		BalanceCredits:      5000,
+		MonthlyLimitCredits: 10000,
+		BypassBalanceCheck:  true,
+		UpdatedAt:           updatedAt,
+	}
+	store := &fakeExtraUsageStore{
+		setBypassResult: settings,
+	}
+	s := newExtraUsageServer(store)
+	input := &AdminSetBypassInput{ProjectID: testProjectID}
+	input.Body.Bypass = pointerBool(true)
+
+	// Create a context with authorization
+	ctx := context.Background()
+	authorization := requestAuthorization{
+		Principal: authz.Principal{
+			UserID: "user-123",
+		},
+	}
+	ctx = context.WithValue(ctx, requestAuthorizationKey{}, authorization)
+
+	output, err := s.adminExtraUsageSetBypass(ctx, input)
+	if err != nil {
+		t.Fatalf("adminExtraUsageSetBypass() error = %v", err)
+	}
+
+	// Verify response
+	if output.Body.Data.ProjectID != testProjectID {
+		t.Errorf("data.project_id = %q, want %q", output.Body.Data.ProjectID, testProjectID)
+	}
+	if !output.Body.Data.BypassBalanceCheck {
+		t.Errorf("data.bypass_balance_check = %v, want true", output.Body.Data.BypassBalanceCheck)
+	}
+
+	// Verify SetExtraUsageBypass was called
+	if len(store.setBypassCalls) != 1 {
+		t.Fatalf("SetExtraUsageBypass called %d times, want 1", len(store.setBypassCalls))
+	}
+	call := store.setBypassCalls[0]
+	if call.projectID != testProjectID {
+		t.Errorf("SetExtraUsageBypass projectID = %q, want %q", call.projectID, testProjectID)
+	}
+	if !call.bypass {
+		t.Errorf("SetExtraUsageBypass bypass = %v, want true", call.bypass)
 	}
 }

@@ -1,6 +1,39 @@
 {
   "components": {
     "schemas": {
+      "AdminDirectTopupInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount_credits"
+        ],
+        "type": "object"
+      },
+      "AdminDirectTopupResponseData": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "balance_credits"
+        ],
+        "type": "object"
+      },
       "AdminExtraUsageOverviewRow": {
         "additionalProperties": false,
         "properties": {
@@ -59,6 +92,15 @@
         "required": [
           "data"
         ],
+        "type": "object"
+      },
+      "AdminSetBypassInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "bypass": {
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "AuthConfig": {
@@ -437,6 +479,18 @@
         "required": [
           "window",
           "percentage"
+        ],
+        "type": "object"
+      },
+      "DataResponseAdminDirectTopupResponseData": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminDirectTopupResponseData"
+          }
+        },
+        "required": [
+          "data"
         ],
         "type": "object"
       },
@@ -2258,6 +2312,216 @@
           "scope": "system",
           "permission": "system.extra_usage.read",
           "superadmin": "required"
+        }
+      }
+    },
+    "/api/v1/admin/extra-usage/projects/{projectID}/bypass": {
+      "put": {
+        "operationId": "adminExtraUsageSetBypass",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminSetBypassInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseExtraUsageSettings"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Toggle extra-usage balance-check bypass on a project (superadmin)",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.extra_usage.manage",
+          "projectIdPathParam": "projectID",
+          "superadmin": "required",
+          "systemOnProjectPath": true
+        }
+      }
+    },
+    "/api/v1/admin/extra-usage/projects/{projectID}/topup": {
+      "post": {
+        "operationId": "adminExtraUsageDirectTopup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminDirectTopupInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataResponseAdminDirectTopupResponseData"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "security": [
+          {
+            "AdminJWT": []
+          }
+        ],
+        "summary": "Admin direct top-up (superadmin, bypasses payment provider)",
+        "tags": [
+          "Extra Usage"
+        ],
+        "x-modelserver-authz": {
+          "mode": "rbac",
+          "scope": "system",
+          "permission": "system.extra_usage.manage",
+          "projectIdPathParam": "projectID",
+          "superadmin": "required",
+          "systemOnProjectPath": true
         }
       }
     },

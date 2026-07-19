@@ -178,8 +178,12 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 		"/api/v1/notifications/{id}/read",
 		"/api/v1/notifications/read_all",
 		"/api/v1/projects/{projectID}/extra-usage/topup",
+		"/api/v1/admin/extra-usage/projects/{projectID}/topup",
 	}
-	wantPathCount := len(expectedGetPaths) + len(expectedPostPaths)
+	expectedPutPaths := []string{
+		"/api/v1/admin/extra-usage/projects/{projectID}/bypass",
+	}
+	wantPathCount := len(expectedGetPaths) + len(expectedPostPaths) + len(expectedPutPaths)
 	if len(api.OpenAPI().Paths) != wantPathCount {
 		t.Fatalf("documented path count = %d, want %d", len(api.OpenAPI().Paths), wantPathCount)
 	}
@@ -191,6 +195,11 @@ func TestRegisterDocumentsSecurityAndAuthorizationFromOnePolicy(t *testing.T) {
 	for _, path := range expectedPostPaths {
 		if api.OpenAPI().Paths[path] == nil || api.OpenAPI().Paths[path].Post == nil {
 			t.Errorf("missing documented POST %s", path)
+		}
+	}
+	for _, path := range expectedPutPaths {
+		if api.OpenAPI().Paths[path] == nil || api.OpenAPI().Paths[path].Put == nil {
+			t.Errorf("missing documented PUT %s", path)
 		}
 	}
 

@@ -134,6 +134,30 @@ func registerExtraUsageOperations(api huma.API, server *Server) {
 		Access:        authz.System(authz.PermissionSystemExtraUsageRead),
 		Authorize:     server.authorizationMiddleware,
 	}, server.adminExtraUsageOverview)
+
+	contract.Register(api, contract.Operation{
+		ID:            "adminExtraUsageDirectTopup",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/admin/extra-usage/projects/{projectID}/topup",
+		Summary:       "Admin direct top-up (superadmin, bypasses payment provider)",
+		Tags:          []string{"Extra Usage"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        authz.SystemOnProjectPath(authz.PermissionSystemExtraUsageManage, "projectID"),
+		Authorize:     server.authorizationMiddleware,
+	}, server.adminExtraUsageDirectTopup)
+
+	contract.Register(api, contract.Operation{
+		ID:            "adminExtraUsageSetBypass",
+		Method:        http.MethodPut,
+		Path:          "/api/v1/admin/extra-usage/projects/{projectID}/bypass",
+		Summary:       "Toggle extra-usage balance-check bypass on a project (superadmin)",
+		Tags:          []string{"Extra Usage"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		Access:        authz.SystemOnProjectPath(authz.PermissionSystemExtraUsageManage, "projectID"),
+		Authorize:     server.authorizationMiddleware,
+	}, server.adminExtraUsageSetBypass)
 }
 
 // CreditUnitPrices holds the per-million-credit price in each supported
@@ -183,6 +207,39 @@ type AdminExtraUsageOverviewRow struct {
 // AdminExtraUsageOverviewOutput wraps the overview rows in the standard data envelope.
 type AdminExtraUsageOverviewOutput struct {
 	Body DataResponse[[]AdminExtraUsageOverviewRow]
+}
+
+// AdminDirectTopupInput is the typed input for POST /api/v1/admin/extra-usage/projects/{projectID}/topup.
+type AdminDirectTopupInput struct {
+	ProjectID string `path:"projectID" format:"uuid"`
+	Body      struct {
+		AmountCredits int64  `json:"amount_credits"`
+		Description   string `json:"description,omitempty"`
+	}
+}
+
+// AdminDirectTopupResponseData is the response for admin direct topup.
+type AdminDirectTopupResponseData struct {
+	ProjectID      string `json:"project_id"`
+	BalanceCredits int64  `json:"balance_credits"`
+}
+
+// AdminDirectTopupOutput wraps the response in the standard data envelope.
+type AdminDirectTopupOutput struct {
+	Body DataResponse[AdminDirectTopupResponseData]
+}
+
+// AdminSetBypassInput is the typed input for PUT /api/v1/admin/extra-usage/projects/{projectID}/bypass.
+type AdminSetBypassInput struct {
+	ProjectID string `path:"projectID" format:"uuid"`
+	Body      struct {
+		Bypass *bool `json:"bypass,omitempty"`
+	}
+}
+
+// AdminSetBypassOutput wraps the settings in the standard data envelope.
+type AdminSetBypassOutput struct {
+	Body DataResponse[types.ExtraUsageSettings]
 }
 
 type UpdateExtraUsageInput struct {
@@ -571,5 +628,82 @@ func (s *Server) adminExtraUsageOverview(_ context.Context, _ *struct{}) (*Admin
 
 	return &AdminExtraUsageOverviewOutput{
 		Body: DataResponse[[]AdminExtraUsageOverviewRow]{Data: out},
+	}, nil
+}
+
+// adminExtraUsageDirectTopup handles POST /api/v1/admin/extra-usage/projects/{projectID}/topup.
+// Superadmin direct credit injection without going through payment provider.
+//
+// Behavior:
+//  1. If body.AmountCredits <= 0 → 400 bad_request "amount_credits must be > 0"
+//  2. TopUpExtraUsage(TopUpExtraUsageReq{ProjectID, AmountCredits, Reason: ExtraUsageReasonAdminAdjust, Description}) → 500 internal "failed to top up: "+err.Error()
+//  3. metrics.SetExtraUsageBalance(projectID, bal) — preserve side effect
+//  4. Return 200 with {project_id, balance_credits}
+func (s *Server) adminExtraUsageDirectTopup(_ context.Context, input *AdminDirectTopupInput) (*AdminDirectTopupOutput, error) {
+	if s == nil || s.ExtraUsage == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "extra usage store is not configured", nil)
+	}
+
+	if input.Body.AmountCredits <= 0 {
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", "amount_credits must be > 0", nil)
+	}
+
+	bal, err := s.ExtraUsage.TopUpExtraUsage(store.TopUpExtraUsageReq{
+		ProjectID:     input.ProjectID,
+		AmountCredits: input.Body.AmountCredits,
+		Reason:        types.ExtraUsageReasonAdminAdjust,
+		Description:   input.Body.Description,
+	})
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to top up: "+err.Error(), nil)
+	}
+
+	metrics.SetExtraUsageBalance(input.ProjectID, bal)
+
+	return &AdminDirectTopupOutput{
+		Body: DataResponse[AdminDirectTopupResponseData]{
+			Data: AdminDirectTopupResponseData{
+				ProjectID:      input.ProjectID,
+				BalanceCredits: bal,
+			},
+		},
+	}, nil
+}
+
+// adminExtraUsageSetBypass handles PUT /api/v1/admin/extra-usage/projects/{projectID}/bypass.
+// Toggle the balance-check bypass flag on a project's extra-usage settings.
+//
+// Behavior:
+//  1. If body.Bypass == nil → 400 bad_request "bypass field required"
+//  2. SetExtraUsageBypass(projectID, *body.Bypass) → 500 internal "failed to set bypass"
+//  3. Log actor via authorizationFromContext(ctx).Principal.UserID
+//  4. Return 200 with {data: settings}
+func (s *Server) adminExtraUsageSetBypass(ctx context.Context, input *AdminSetBypassInput) (*AdminSetBypassOutput, error) {
+	if s == nil || s.ExtraUsage == nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "extra usage store is not configured", nil)
+	}
+
+	if input.Body.Bypass == nil {
+		return nil, contract.NewError(http.StatusBadRequest, "bad_request", "bypass field required", nil)
+	}
+
+	settings, err := s.ExtraUsage.SetExtraUsageBypass(input.ProjectID, *input.Body.Bypass)
+	if err != nil {
+		return nil, contract.NewError(http.StatusInternalServerError, "internal", "failed to set bypass", nil)
+	}
+
+	actorID := ""
+	if authorization, ok := authorizationFromContext(ctx); ok {
+		actorID = authorization.Principal.UserID
+	}
+	slog.Default().Info("extra_usage_bypass_toggled",
+		"project_id", input.ProjectID,
+		"bypass", *input.Body.Bypass,
+		"actor_user_id", actorID)
+
+	return &AdminSetBypassOutput{
+		Body: DataResponse[types.ExtraUsageSettings]{
+			Data: *settings,
+		},
 	}, nil
 }
