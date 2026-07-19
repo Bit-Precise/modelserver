@@ -45,8 +45,8 @@ func TestServerEffectiveResolversFallsBackToDefaults(t *testing.T) {
 	if got == nil {
 		t.Fatal("effectiveResolvers() returned nil")
 	}
-	// Task 8's Default() is currently empty; verify shape only.
-	if len(got) != 0 {
-		t.Errorf("default resolver registry has %d entries; expected 0 until subsystem batches register", len(got))
+	// Batch 6 registers extra-usage-topup; later batches will add more.
+	if _, ok := got["extra-usage-topup"]; !ok {
+		t.Errorf("default resolver registry missing extra-usage-topup")
 	}
 }

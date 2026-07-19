@@ -16,8 +16,11 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/modelserver/modelserver/internal/admin"
 	adminv1 "github.com/modelserver/modelserver/internal/api/admin/v1"
+	"github.com/modelserver/modelserver/internal/api/admin/v1/resolvers"
 	"github.com/modelserver/modelserver/internal/api/contract"
 	"github.com/modelserver/modelserver/internal/auth"
+	"github.com/modelserver/modelserver/internal/authz"
+	"github.com/modelserver/modelserver/internal/billing"
 	"github.com/modelserver/modelserver/internal/collector"
 	"github.com/modelserver/modelserver/internal/config"
 	"github.com/modelserver/modelserver/internal/crypto"
@@ -282,9 +285,20 @@ func main() {
 	// Initialize JWT manager.
 	jwtMgr := auth.NewJWTManager(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL, cfg.Auth.RefreshTokenTTL)
 
+	// Construct payment client if configured.
+	var payClient billing.PaymentClient
+	if cfg.Billing.PaymentAPIURL != "" {
+		payClient = billing.NewHTTPPaymentClient(cfg.Billing.PaymentAPIURL, cfg.Billing.PaymentTenantID, cfg.Billing.PaymentAPIKey)
+	}
+
 	// Mount admin API routes.
 	admin.MountRoutes(adminRouter, st, cfg, encryptionKey, jwtMgr, catalog, httpLogger, router, outboundClients)
 	adminAPI := contract.NewAdminAPI(adminRouter, contract.APIOptions{ServeDocs: true})
+
+	// Wire resolvers with dependencies.
+	resolverRegistry := make(map[string]authz.ResourceResolver)
+	resolverRegistry["extra-usage-topup"] = resolvers.ExtraUsageTopupResolver{Store: st}
+
 	adminv1.Register(adminAPI, &adminv1.Server{
 		Store:      st,
 		Users:      st,
@@ -299,6 +313,11 @@ func main() {
 		AdminSuper: st,
 		Notifications: st,
 		HTTPLog:    httpLogger,
+		ExtraUsage: st,
+		PayClient:  payClient,
+		BillingCfg: cfg.Billing,
+		ExtraUsageCfg: cfg.ExtraUsage,
+		Resolvers:  resolverRegistry,
 		AssignFreePlan: func(projectID string) {
 			admin.AssignFreePlan(st, projectID)
 		},

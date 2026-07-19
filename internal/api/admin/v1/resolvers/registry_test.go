@@ -59,7 +59,8 @@ func TestRegistryPanicsOnDuplicate(t *testing.T) {
 func TestDefaultReturnsEmptyRegistryForNow(t *testing.T) {
 	t.Parallel()
 
-	if len(Default()) != 0 {
-		t.Fatalf("Default() = %v; expected empty until subsystem batches register resolvers", Default())
+	// Batch 6 registers extra-usage-topup; later batches will add more.
+	if _, ok := Default()["extra-usage-topup"]; !ok {
+		t.Fatalf("Default() missing extra-usage-topup resolver")
 	}
 }
