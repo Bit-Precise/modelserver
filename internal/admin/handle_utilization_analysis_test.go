@@ -64,14 +64,14 @@ func TestSuggestRatesForFixedLimitScalesKnownRates(t *testing.T) {
 
 func TestUtilizationAnalysisBaseRates_GPT55SubscriptionDiscount(t *testing.T) {
 	rate := utilizationAnalysisBaseRates["gpt-5.5"]
-	if math.Abs(rate.InputRate-0.0667) > 0.000001 {
-		t.Fatalf("InputRate = %v, want subscription discount 0.0667 (catalog x 0.1)", rate.InputRate)
+	if math.Abs(rate.InputRate-0.2668) > 0.000001 {
+		t.Fatalf("InputRate = %v, want subscription discount 0.2668 (catalog x 0.4 after 053/067 doubles)", rate.InputRate)
 	}
-	if math.Abs(rate.OutputRate-0.4) > 0.000001 {
-		t.Fatalf("OutputRate = %v, want subscription discount 0.4 (catalog x 0.1)", rate.OutputRate)
+	if math.Abs(rate.OutputRate-1.6) > 0.000001 {
+		t.Fatalf("OutputRate = %v, want subscription discount 1.6 (catalog x 0.4 after 053/067 doubles)", rate.OutputRate)
 	}
-	if math.Abs(rate.CacheReadRate-0.0067) > 0.000001 {
-		t.Fatalf("CacheReadRate = %v, want subscription discount 0.0067 (catalog x 0.1)", rate.CacheReadRate)
+	if math.Abs(rate.CacheReadRate-0.0268) > 0.000001 {
+		t.Fatalf("CacheReadRate = %v, want subscription discount 0.0268 (catalog x 0.4 after 053/067 doubles)", rate.CacheReadRate)
 	}
 	// Migration 047 strips the long_context block from gpt-5.5 (the
 	// rebased plan entry has none, so the OLS base rate has none either).
@@ -111,8 +111,8 @@ func TestSuggestRatesForFixedLimitNoUsableCredits(t *testing.T) {
 }
 
 // TestUtilizationBaseRates_GPT56 asserts the utilization analyser knows the
-// three gpt-5.6 models at their plan-rate values (catalog * 0.2) with the
-// long_context multipliers preserved.
+// three gpt-5.6 models at their plan-rate values (catalog * 0.4 after the
+// 053/067 doubles) with the long_context multipliers preserved.
 func TestUtilizationBaseRates_GPT56(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -121,9 +121,9 @@ func TestUtilizationBaseRates_GPT56(t *testing.T) {
 		wantCacheRead float64
 		wantCacheCrea float64
 	}{
-		{"gpt-5.6-sol", 0.1334, 0.8, 0.0134, 0.1668},
-		{"gpt-5.6-terra", 0.0666, 0.4, 0.0066, 0.0834},
-		{"gpt-5.6-luna", 0.0266, 0.16, 0.0027, 0.0334},
+		{"gpt-5.6-sol", 0.2668, 1.6, 0.0268, 0.3336},
+		{"gpt-5.6-terra", 0.1332, 0.8, 0.0132, 0.1668},
+		{"gpt-5.6-luna", 0.0532, 0.32, 0.0054, 0.0668},
 	}
 	for _, tc := range cases {
 		r, ok := utilizationAnalysisBaseRates[tc.name]
