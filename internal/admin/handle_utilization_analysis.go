@@ -84,6 +84,7 @@ var utilizationAnalysisBaseRates = map[string]types.CreditRate{
 	"gpt-5.1-codex-max":  {InputRate: 0.0668, OutputRate: 0.5332, CacheCreationRate: 0, CacheReadRate: 0.0068},
 	"gpt-5.1-codex-mini": {InputRate: 0.0132, OutputRate: 0.1068, CacheCreationRate: 0, CacheReadRate: 0.0012},
 	"glm-5.2":            {InputRate: 0.0187, OutputRate: 0.0587, CacheCreationRate: 0, CacheReadRate: 0.0035},
+	"glm-5.3":            {InputRate: 0.0187, OutputRate: 0.0587, CacheCreationRate: 0, CacheReadRate: 0.0035},
 }
 
 // featureKey is "model:token_type".
