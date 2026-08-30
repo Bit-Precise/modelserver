@@ -77,6 +77,43 @@ var utilizationAnalysisBaseRates = map[string]types.CreditRate{
 	"gpt-5.1-codex-mini": {InputRate: 0.0132, OutputRate: 0.1068, CacheCreationRate: 0, CacheReadRate: 0.0012},
 	"glm-5.2":            {InputRate: 0.0187, OutputRate: 0.0587, CacheCreationRate: 0, CacheReadRate: 0.0035},
 	"glm-5.3":            {InputRate: 0.0187, OutputRate: 0.0587, CacheCreationRate: 0, CacheReadRate: 0.0035},
+	// Alibaba Cloud OpenCode Token Plan models. These mirror migration 070's
+	// subscription rates so utilization suggestions start from the same base.
+	"qwen3.8-max":   {InputRate: 0.022067, OutputRate: 0.066201, CacheCreationRate: 0.027584, CacheReadRate: 0.002207},
+	"qwen3.8-flash": {InputRate: 0.001471, OutputRate: 0.004965, CacheCreationRate: 0.001839, CacheReadRate: 0.000147},
+	"qwen3.7-max":   {InputRate: 0.022067, OutputRate: 0.066201, CacheCreationRate: 0.027584, CacheReadRate: 0.002207},
+	"qwen3.7-plus": {InputRate: 0.003678, OutputRate: 0.014711, CacheCreationRate: 0.004597, CacheReadRate: 0.000368, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 256000,
+		InputMultiplier:      4,
+		OutputMultiplier:     3,
+	}},
+	"qwen3.6-plus": {InputRate: 0.003678, OutputRate: 0.022067, CacheCreationRate: 0.004597, CacheReadRate: 0.000368, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 256000,
+		InputMultiplier:      4,
+		OutputMultiplier:     4,
+	}},
+	"qwen3.6-flash": {InputRate: 0.002207, OutputRate: 0.013240, CacheCreationRate: 0.002758, CacheReadRate: 0.000221, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 256000,
+		InputMultiplier:      4,
+		OutputMultiplier:     4,
+	}},
+	"deepseek-v4-pro-0813":   {InputRate: 0.010923, OutputRate: 0.032769},
+	"deepseek-v4-flash-0731": {InputRate: 0.003641, OutputRate: 0.010923},
+	"deepseek-v3.2":          {InputRate: 0.002427, OutputRate: 0.003641, CacheCreationRate: 0.003034, CacheReadRate: 0.000243},
+	"kimi-k2.7-code":         {InputRate: 0.011953, OutputRate: 0.049651, CacheCreationRate: 0.014941, CacheReadRate: 0.001195},
+	"kimi-k2.6":              {InputRate: 0.011953, OutputRate: 0.049651, CacheCreationRate: 0.014941, CacheReadRate: 0.001195},
+	"kimi-k2.5":              {InputRate: 0.007356, OutputRate: 0.038617, CacheCreationRate: 0.009195, CacheReadRate: 0.000736},
+	"glm-5.1": {InputRate: 0.011033, OutputRate: 0.044134, CacheCreationRate: 0.013792, CacheReadRate: 0.001103, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 32000,
+		InputMultiplier:      1.3333333333,
+		OutputMultiplier:     1.1666666667,
+	}},
+	"glm-5": {InputRate: 0.007356, OutputRate: 0.033100, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 32000,
+		InputMultiplier:      1.5,
+		OutputMultiplier:     1.2222222222,
+	}},
+	"minimax-m2.5": {InputRate: 0.003862, OutputRate: 0.015447},
 }
 
 // featureKey is "model:token_type".

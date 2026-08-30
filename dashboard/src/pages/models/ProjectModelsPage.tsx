@@ -119,6 +119,16 @@ function PricingInfo() {
             >
               阿里云百炼文档
             </a>
+            。OpenCode Token Plan 模型的 API 标准价按{" "}
+            <a
+              href="https://help.aliyun.com/zh/model-studio/model-pricing"
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary hover:underline"
+            >
+              模型调用价格
+            </a>
+            计费。
           </li>
         </ul>
         <p>
