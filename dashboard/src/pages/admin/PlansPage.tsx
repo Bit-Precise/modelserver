@@ -37,8 +37,8 @@ import { toast } from "sonner";
 
 // Default model credit rates for subscription plans.
 // Rates are per-token, normalized so Haiku input = 2/15.
-// Cache writes are charged at the regular input price (not 1.25x like API).
-// Cache reads are entirely free on subscription plans.
+// Cache rates are model-specific; GPT-5.6 retains OpenAI's 1.25x cache-write
+// relationship and GPT models may charge cached-input reads.
 const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
   "claude-opus-4-7": {
     input_rate: 0.667,
@@ -71,10 +71,10 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
     cache_read_rate: 0,
   },
   "gpt-5.6-sol": {
-    input_rate: 0.2668,
-    output_rate: 1.6,
-    cache_creation_rate: 0.3336,
-    cache_read_rate: 0.0268,
+    input_rate: 0.2132,
+    output_rate: 1.0668,
+    cache_creation_rate: 0.2668,
+    cache_read_rate: 0.0212,
     long_context: {
       threshold_input_tokens: 272000,
       input_multiplier: 2,
@@ -82,10 +82,10 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
     },
   },
   "gpt-5.6-terra": {
-    input_rate: 0.1332,
-    output_rate: 0.8,
-    cache_creation_rate: 0.1668,
-    cache_read_rate: 0.0132,
+    input_rate: 0.1068,
+    output_rate: 0.64,
+    cache_creation_rate: 0.1332,
+    cache_read_rate: 0.0108,
     long_context: {
       threshold_input_tokens: 272000,
       input_multiplier: 2,
@@ -93,10 +93,10 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
     },
   },
   "gpt-5.6-luna": {
-    input_rate: 0.0532,
-    output_rate: 0.32,
-    cache_creation_rate: 0.0668,
-    cache_read_rate: 0.0054,
+    input_rate: 0.0108,
+    output_rate: 0.064,
+    cache_creation_rate: 0.0132,
+    cache_read_rate: 0.0012,
     long_context: {
       threshold_input_tokens: 272000,
       input_multiplier: 2,
@@ -116,26 +116,16 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
     cache_read_rate: 0.0132,
   },
   "gpt-5.4-mini": {
-    input_rate: 0.0132,
-    output_rate: 0.1068,
+    input_rate: 0.04,
+    output_rate: 0.24,
     cache_creation_rate: 0,
-    cache_read_rate: 0.0012,
-    long_context: {
-      threshold_input_tokens: 272000,
-      input_multiplier: 2,
-      output_multiplier: 1.5,
-    },
+    cache_read_rate: 0.004,
   },
   "gpt-5.4-nano": {
-    input_rate: 0.0028,
-    output_rate: 0.0212,
+    input_rate: 0.0108,
+    output_rate: 0.0668,
     cache_creation_rate: 0,
-    cache_read_rate: 0.0004,
-    long_context: {
-      threshold_input_tokens: 272000,
-      input_multiplier: 2,
-      output_multiplier: 1.5,
-    },
+    cache_read_rate: 0.0012,
   },
   "gpt-5.3-codex": {
     input_rate: 0.0932,

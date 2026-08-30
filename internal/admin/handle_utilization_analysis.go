@@ -48,33 +48,25 @@ var utilizationAnalysisBaseRates = map[string]types.CreditRate{
 	"claude-sonnet-4-6":         {InputRate: 0.4, OutputRate: 2.0, CacheCreationRate: 0.4, CacheReadRate: 0},
 	"claude-haiku-4-5":          {InputRate: 0.133, OutputRate: 0.667, CacheCreationRate: 0.133, CacheReadRate: 0},
 	"claude-haiku-4-5-20251001": {InputRate: 0.133, OutputRate: 0.667, CacheCreationRate: 0.133, CacheReadRate: 0},
-	"gpt-5.6-sol": {InputRate: 0.2668, OutputRate: 1.6, CacheCreationRate: 0.3336, CacheReadRate: 0.0268, LongContext: &types.LongContextCreditRate{
+	"gpt-5.6-sol": {InputRate: 0.2132, OutputRate: 1.0668, CacheCreationRate: 0.2668, CacheReadRate: 0.0212, LongContext: &types.LongContextCreditRate{
 		ThresholdInputTokens: 272000,
 		InputMultiplier:      2.0,
 		OutputMultiplier:     1.5,
 	}},
-	"gpt-5.6-terra": {InputRate: 0.1332, OutputRate: 0.8, CacheCreationRate: 0.1668, CacheReadRate: 0.0132, LongContext: &types.LongContextCreditRate{
+	"gpt-5.6-terra": {InputRate: 0.1068, OutputRate: 0.64, CacheCreationRate: 0.1332, CacheReadRate: 0.0108, LongContext: &types.LongContextCreditRate{
 		ThresholdInputTokens: 272000,
 		InputMultiplier:      2.0,
 		OutputMultiplier:     1.5,
 	}},
-	"gpt-5.6-luna": {InputRate: 0.0532, OutputRate: 0.32, CacheCreationRate: 0.0668, CacheReadRate: 0.0054, LongContext: &types.LongContextCreditRate{
+	"gpt-5.6-luna": {InputRate: 0.0108, OutputRate: 0.064, CacheCreationRate: 0.0132, CacheReadRate: 0.0012, LongContext: &types.LongContextCreditRate{
 		ThresholdInputTokens: 272000,
 		InputMultiplier:      2.0,
 		OutputMultiplier:     1.5,
 	}},
-	"gpt-5.5":                   {InputRate: 0.2668, OutputRate: 1.6, CacheCreationRate: 0, CacheReadRate: 0.0268},
-	"gpt-5.4":                   {InputRate: 0.1332, OutputRate: 0.8, CacheCreationRate: 0, CacheReadRate: 0.0132},
-	"gpt-5.4-mini": {InputRate: 0.0132, OutputRate: 0.1068, CacheCreationRate: 0, CacheReadRate: 0.0012, LongContext: &types.LongContextCreditRate{
-		ThresholdInputTokens: 272000,
-		InputMultiplier:      2.0,
-		OutputMultiplier:     1.5,
-	}},
-	"gpt-5.4-nano": {InputRate: 0.0028, OutputRate: 0.0212, CacheCreationRate: 0, CacheReadRate: 0.0004, LongContext: &types.LongContextCreditRate{
-		ThresholdInputTokens: 272000,
-		InputMultiplier:      2.0,
-		OutputMultiplier:     1.5,
-	}},
+	"gpt-5.5":            {InputRate: 0.2668, OutputRate: 1.6, CacheCreationRate: 0, CacheReadRate: 0.0268},
+	"gpt-5.4":            {InputRate: 0.1332, OutputRate: 0.8, CacheCreationRate: 0, CacheReadRate: 0.0132},
+	"gpt-5.4-mini":       {InputRate: 0.04, OutputRate: 0.24, CacheCreationRate: 0, CacheReadRate: 0.004},
+	"gpt-5.4-nano":       {InputRate: 0.0108, OutputRate: 0.0668, CacheCreationRate: 0, CacheReadRate: 0.0012},
 	"gpt-5.3-codex":      {InputRate: 0.0932, OutputRate: 0.7468, CacheCreationRate: 0, CacheReadRate: 0.0092},
 	"codex-auto-review":  {InputRate: 0.0932, OutputRate: 0.7468, CacheCreationRate: 0, CacheReadRate: 0.0092},
 	"gpt-5.2-codex":      {InputRate: 0.0932, OutputRate: 0.7468, CacheCreationRate: 0, CacheReadRate: 0.0092},
