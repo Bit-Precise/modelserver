@@ -144,6 +144,23 @@ func TestUtilizationBaseRates_GPT56(t *testing.T) {
 	}
 }
 
+func TestUtilizationBaseRates_GPT6Astra(t *testing.T) {
+	r, ok := utilizationAnalysisBaseRates["gpt-6-astra"]
+	if !ok {
+		t.Fatal("gpt-6-astra missing from utilizationAnalysisBaseRates")
+	}
+	if r.InputRate != 0.5332 || r.OutputRate != 2.6668 ||
+		r.CacheReadRate != 0.0532 || r.CacheCreationRate != 0.6668 {
+		t.Fatalf("gpt-6-astra rates: %+v; want in=0.5332 out=2.6668 cr=0.0532 cc=0.6668", r)
+	}
+	if r.LongContext == nil ||
+		r.LongContext.ThresholdInputTokens != 272000 ||
+		r.LongContext.InputMultiplier != 2.0 ||
+		r.LongContext.OutputMultiplier != 1.5 {
+		t.Fatalf("gpt-6-astra long_context: %+v; want thr=272000 in=2 out=1.5", r.LongContext)
+	}
+}
+
 func TestUtilizationBaseRates_GPT54MiniNano(t *testing.T) {
 	cases := []struct {
 		name          string

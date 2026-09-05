@@ -48,6 +48,11 @@ var utilizationAnalysisBaseRates = map[string]types.CreditRate{
 	"claude-sonnet-4-6":         {InputRate: 0.4, OutputRate: 2.0, CacheCreationRate: 0.4, CacheReadRate: 0},
 	"claude-haiku-4-5":          {InputRate: 0.133, OutputRate: 0.667, CacheCreationRate: 0.133, CacheReadRate: 0},
 	"claude-haiku-4-5-20251001": {InputRate: 0.133, OutputRate: 0.667, CacheCreationRate: 0.133, CacheReadRate: 0},
+	"gpt-6-astra": {InputRate: 0.5332, OutputRate: 2.6668, CacheCreationRate: 0.6668, CacheReadRate: 0.0532, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 272000,
+		InputMultiplier:      2.0,
+		OutputMultiplier:     1.5,
+	}},
 	"gpt-5.6-sol": {InputRate: 0.2132, OutputRate: 1.0668, CacheCreationRate: 0.2668, CacheReadRate: 0.0212, LongContext: &types.LongContextCreditRate{
 		ThresholdInputTokens: 272000,
 		InputMultiplier:      2.0,

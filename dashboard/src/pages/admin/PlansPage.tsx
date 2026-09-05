@@ -37,8 +37,8 @@ import { toast } from "sonner";
 
 // Default model credit rates for subscription plans.
 // Rates are per-token, normalized so Haiku input = 2/15.
-// Cache rates are model-specific; GPT-5.6 retains OpenAI's 1.25x cache-write
-// relationship and GPT models may charge cached-input reads.
+// Cache rates are model-specific; GPT-5.6 and GPT-6 retain OpenAI's 1.25x
+// cache-write relationship and GPT models may charge cached-input reads.
 const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
   "claude-opus-4-7": {
     input_rate: 0.667,
@@ -69,6 +69,17 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
     output_rate: 0.667,
     cache_creation_rate: 0.133,
     cache_read_rate: 0,
+  },
+  "gpt-6-astra": {
+    input_rate: 0.5332,
+    output_rate: 2.6668,
+    cache_creation_rate: 0.6668,
+    cache_read_rate: 0.0532,
+    long_context: {
+      threshold_input_tokens: 272000,
+      input_multiplier: 2,
+      output_multiplier: 1.5,
+    },
   },
   "gpt-5.6-sol": {
     input_rate: 0.2132,
