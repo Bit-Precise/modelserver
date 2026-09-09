@@ -29,6 +29,26 @@ func TestIsCodexCapacityErrorBody(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "top-level message envelope",
+			body: `{"message":"Selected model is at capacity. Please try a different model."}`,
+			want: true,
+		},
+		{
+			name: "string error envelope",
+			body: `{"error":"Selected model is at capacity. Please try a different model."}`,
+			want: true,
+		},
+		{
+			name: "nested detail envelope",
+			body: `{"response":{"failure":{"detail":"Selected model is at capacity. Please try a different model."}}}`,
+			want: true,
+		},
+		{
+			name: "whitespace in message",
+			body: `{"error":{"message":"Selected model is at capacity.\nPlease try a different model."}}`,
+			want: true,
+		},
+		{
 			name: "different error",
 			body: `{"error":{"code":"invalid_prompt"}}`,
 			want: false,
@@ -100,6 +120,30 @@ func TestProbeCodexCapacityStream_RetryOnCRLFFailedEvent(t *testing.T) {
 	retry, _ := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
 	if !retry {
 		t.Fatal("probe did not recognize CRLF-delimited overloaded event")
+	}
+}
+
+func TestProbeCodexCapacityStream_RetryOnErrorEventMessage(t *testing.T) {
+	body := "event: error\n" +
+		"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}\n\n"
+	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if !retry {
+		t.Fatal("probe did not recognize Codex error event capacity message")
+	}
+	got, err := io.ReadAll(replay)
+	if err != nil {
+		t.Fatalf("read replay body: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("replay body = %q, want original body", got)
+	}
+}
+
+func TestProbeCodexCapacityStream_RetryOnDataOnlyErrorEvent(t *testing.T) {
+	body := "data: {\"type\":\"error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}\n\n"
+	retry, _ := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if !retry {
+		t.Fatal("probe did not recognize data-only Codex error event")
 	}
 }
 

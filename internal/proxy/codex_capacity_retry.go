@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/tidwall/gjson"
 )
 
 type codexReplayBody struct {
@@ -58,23 +56,70 @@ func isCodexCapacityErrorBody(body []byte) bool {
 	if len(body) == 0 {
 		return false
 	}
-	lower := strings.ToLower(string(body))
-	if gjson.ValidBytes(body) {
-		for _, path := range []string{"error.code", "response.error.code"} {
-			if isCodexCapacityCode(gjson.GetBytes(body, path).String()) {
-				return true
-			}
+	trimmed := bytes.TrimPrefix(bytes.TrimSpace(body), []byte{0xef, 0xbb, 0xbf})
+	if json.Valid(trimmed) {
+		var value any
+		if json.Unmarshal(trimmed, &value) == nil && isCodexCapacityJSONValue(value, true, false) {
+			return true
 		}
-		for _, path := range []string{"error.message", "response.error.message"} {
-			if strings.Contains(strings.ToLower(gjson.GetBytes(body, path).String()), codexCapacityMessage) {
-				return true
-			}
-		}
+		// A valid JSON value that is not an error envelope (for example a
+		// normal Responses output containing the same sentence) must not be
+		// classified by a raw substring search.
 		return false
 	}
-	return strings.Contains(lower, codexCapacityMessage) ||
-		strings.Contains(lower, `"server_is_overloaded"`) ||
-		strings.Contains(lower, `"slow_down"`)
+	return containsCodexCapacityText(string(trimmed)) ||
+		strings.Contains(strings.ToLower(string(trimmed)), `"server_is_overloaded"`) ||
+		strings.Contains(strings.ToLower(string(trimmed)), `"slow_down"`)
+}
+
+// isCodexCapacityJSONValue walks an error envelope without searching arbitrary
+// output text. Codex has used several equivalent shapes over time, including
+// {"message": ...}, {"detail": ...}, {"error": "..."}, and nested
+// response.error objects. The root message/detail fields are accepted because
+// those fields are only used as an error envelope by the Responses endpoint;
+// message/text/delta fields nested under output/content are deliberately not.
+func isCodexCapacityJSONValue(value any, root, errorContext bool) bool {
+	switch v := value.(type) {
+	case string:
+		return (root || errorContext) && containsCodexCapacityText(v)
+	case []any:
+		for _, item := range v {
+			if isCodexCapacityJSONValue(item, false, errorContext) {
+				return true
+			}
+		}
+	case map[string]any:
+		for key, item := range v {
+			name := strings.ToLower(strings.TrimSpace(key))
+			switch name {
+			case "code", "error_code", "errorcode":
+				if code, ok := item.(string); ok && isCodexCapacityCode(code) {
+					return true
+				}
+			case "message", "detail", "reason", "description":
+				if message, ok := item.(string); ok && (root || errorContext) && containsCodexCapacityText(message) {
+					return true
+				}
+			case "error", "errors", "failure", "cause":
+				if isCodexCapacityJSONValue(item, false, true) {
+					return true
+				}
+				continue
+			}
+			if isCodexCapacityJSONValue(item, false, errorContext) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsCodexCapacityText(value string) bool {
+	// Fields may contain line breaks or repeated whitespace after a proxy has
+	// formatted the error. Compare a whitespace-normalized, case-insensitive
+	// representation rather than only the byte-for-byte sentence.
+	normalized := strings.Join(strings.Fields(strings.ToLower(value)), " ")
+	return strings.Contains(normalized, codexCapacityMessage)
 }
 
 func isCodexCapacityCode(code string) bool {
@@ -218,9 +263,36 @@ func sseEventEnd(raw []byte) (int, int) {
 }
 
 func isCodexCapacitySSEEvent(event []byte) bool {
-	lower := strings.ToLower(string(event))
-	if !strings.Contains(lower, "response.failed") {
+	eventName, data := parseCodexSSEEvent(event)
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(data, &envelope)
+	if !strings.EqualFold(eventName, "response.failed") &&
+		!strings.EqualFold(eventName, "error") &&
+		!strings.EqualFold(envelope.Type, "response.failed") &&
+		!strings.EqualFold(envelope.Type, "error") {
 		return false
 	}
+	if len(data) > 0 {
+		return isCodexCapacityErrorBody(data)
+	}
 	return isCodexCapacityErrorBody(event)
+}
+
+func parseCodexSSEEvent(event []byte) (eventName string, data []byte) {
+	var payload bytes.Buffer
+	for _, line := range bytes.Split(event, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		switch {
+		case bytes.HasPrefix(line, []byte("event:")):
+			eventName = strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("event:"))))
+		case bytes.HasPrefix(line, []byte("data:")):
+			if payload.Len() > 0 {
+				payload.WriteByte('\n')
+			}
+			payload.Write(bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:"))))
+		}
+	}
+	return eventName, payload.Bytes()
 }
