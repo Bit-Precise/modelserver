@@ -153,6 +153,36 @@ func TestSelectWithRetry_NoSessionUnrestricted(t *testing.T) {
 	}
 }
 
+func TestSelectCapacityFallbacks_ExcludesAttemptedUpstreams(t *testing.T) {
+	r, g := newTestRouterForSession(t)
+
+	fallbacks := r.SelectCapacityFallbacks(g, map[string]struct{}{"up-b": {}})
+	if len(fallbacks) != 2 {
+		t.Fatalf("fallback count = %d, want 2", len(fallbacks))
+	}
+	for _, fallback := range fallbacks {
+		if fallback.Upstream.ID == "up-b" {
+			t.Fatalf("selected excluded upstream %q", fallback.Upstream.ID)
+		}
+	}
+}
+
+func TestUnbindSessionFromUpstream_OnlyDeletesMatchingBinding(t *testing.T) {
+	r, _ := newTestRouterForSession(t)
+	key := sessionKey{sessionID: "sess-capacity", model: "claude-sonnet"}
+
+	r.BindSession(key.sessionID, key.model, "up-a")
+	r.UnbindSessionFromUpstream(key.sessionID, key.model, "up-b")
+	if value, ok := r.sessionMap.Load(key); !ok || value.(sessionBinding).upstreamID != "up-a" {
+		t.Fatal("non-matching unbind removed or changed the binding")
+	}
+
+	r.UnbindSessionFromUpstream(key.sessionID, key.model, "up-a")
+	if _, ok := r.sessionMap.Load(key); ok {
+		t.Fatal("matching capacity-failed binding was not removed")
+	}
+}
+
 // TestSelectWithRetry_ExpiredBindingIsReplaced confirms that an expired
 // binding is dropped and a fresh pick is atomically written in its place.
 func TestSelectWithRetry_ExpiredBindingIsReplaced(t *testing.T) {

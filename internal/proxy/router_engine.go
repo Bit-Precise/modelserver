@@ -404,6 +404,68 @@ func (r *Router) SelectWithRetry(ctx context.Context, group *resolvedGroup, sess
 	return result
 }
 
+// SelectCapacityFallbacks returns available upstreams that are not in excluded.
+// It is used by the executor for Codex's model-at-capacity error, which is a
+// retryable provider-level failure even when the group's normal retry policy
+// has MaxRetries set to zero. Keeping this separate from SelectWithRetry means
+// ordinary failures still obey the configured retry policy.
+func (r *Router) SelectCapacityFallbacks(group *resolvedGroup, excluded map[string]struct{}) []*SelectedUpstream {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var primaryCandidates []lb.CandidateInfo
+	var backupCandidates []lb.CandidateInfo
+	for _, m := range group.members {
+		uid := m.upstream.ID
+		if _, skip := excluded[uid]; skip {
+			continue
+		}
+		if m.upstream.Status == types.UpstreamStatusDisabled || m.upstream.Status == types.UpstreamStatusDraining {
+			continue
+		}
+		if !r.circuitBreaker.CanPass(uid) {
+			continue
+		}
+		if m.upstream.MaxConcurrent > 0 && r.connTracker.Count(uid) >= int64(m.upstream.MaxConcurrent) {
+			continue
+		}
+
+		ci := lb.CandidateInfo{
+			Upstream:    m.upstream,
+			Weight:      m.weight,
+			IsBackup:    m.isBackup,
+			ActiveConns: r.connTracker.Count(uid),
+		}
+		if m.isBackup {
+			backupCandidates = append(backupCandidates, ci)
+		} else {
+			primaryCandidates = append(primaryCandidates, ci)
+		}
+	}
+
+	candidates := primaryCandidates
+	if len(candidates) == 0 {
+		candidates = backupCandidates
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	balancer, ok := r.balancers[group.group.ID]
+	if !ok {
+		balancer = lb.NewBalancer(group.group.LBPolicy, r.connTracker)
+	}
+	ranked := balancer.SelectN(candidates, len(candidates))
+	result := make([]*SelectedUpstream, len(ranked))
+	for i, u := range ranked {
+		result[i] = &SelectedUpstream{
+			Upstream: u,
+			APIKey:   r.decryptedKeys[u.ID],
+		}
+	}
+	return result
+}
+
 // pinSessionToUpstream resolves the (session, model) key to a primary
 // upstream from candidates, establishing or refreshing the binding as a
 // side effect. It handles three cases atomically against concurrent
@@ -597,6 +659,22 @@ func (r *Router) BindSession(sessionID, model, upstreamID string) {
 		return
 	}
 	r.sessionMap.Store(sessionKey{sessionID: sessionID, model: model}, sessionBinding{upstreamID: upstreamID, usedAt: time.Now()})
+}
+
+// UnbindSessionFromUpstream removes a sticky binding only if it still points
+// at upstreamID. CompareAndDelete avoids deleting a newer binding installed
+// concurrently after another request already failed over successfully.
+func (r *Router) UnbindSessionFromUpstream(sessionID, model, upstreamID string) {
+	if sessionID == "" || model == "" || upstreamID == "" {
+		return
+	}
+	key := sessionKey{sessionID: sessionID, model: model}
+	value, ok := r.sessionMap.Load(key)
+	binding, ok := value.(sessionBinding)
+	if !ok || binding.upstreamID != upstreamID {
+		return
+	}
+	r.sessionMap.CompareAndDelete(key, value)
 }
 
 // StartSessionCleanup runs a background goroutine that periodically removes

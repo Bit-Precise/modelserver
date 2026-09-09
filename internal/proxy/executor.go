@@ -92,6 +92,11 @@ type RequestContext struct {
 	CapturedClientBody      []byte
 	CapturedClientHeaders   http.Header
 	CapturedClientTruncated bool
+
+	// CodexCapacityError is set only when the final response is a Codex
+	// model-at-capacity failure with no fallback left. It keeps request
+	// accounting from treating an HTTP 200 response.failed stream as success.
+	CodexCapacityError bool
 }
 
 // buildEarlyErrorRequest constructs the *types.Request used by Execute's
@@ -350,9 +355,14 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 	// different reason and must reach the client unmodified.
 	encryptedRetried := false
 
-	// 6. Retry loop: try each candidate in order.
-	for attempt, candidate := range candidates {
+	// 6. Retry loop: try each candidate in order. The slice may grow while
+	// handling Codex's model-capacity error: when the normal retry policy has
+	// no spare slots, we append dynamically selected fallback channels.
+	attemptedUpstreams := make(map[string]struct{}, len(candidates))
+	for attempt := 0; attempt < len(candidates); attempt++ {
+		candidate := candidates[attempt]
 		upstream := candidate.Upstream
+		attemptedUpstreams[upstream.ID] = struct{}{}
 		transformer := GetProviderTransformer(upstream.Provider, reqCtx.RequestKind)
 
 		logger := e.logger.With(
@@ -557,6 +567,79 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			cancelFn()
 		}
 
+		// Codex reports model saturation in two forms: an HTTP error body
+		// (usually 503), or a response.failed SSE event on an otherwise 200
+		// stream. This closure can be reused after same-upstream OAuth or
+		// encrypted-content recovery replays, so every resulting response gets
+		// the same capacity handling.
+		codexCapacityRetry := false
+		handleCodexCapacity := func() (detected, retry bool) {
+			if upstream.Provider != types.ProviderCodex ||
+				!inspectCodexCapacityResponse(resp, doErr, reqCtx.IsStream, e.streamIdleTimeout) {
+				return false, false
+			}
+
+			e.router.UnbindSessionFromUpstream(reqCtx.SessionID, reqCtx.Model, upstream.ID)
+			hasNext := false
+			for _, existing := range candidates {
+				if _, attempted := attemptedUpstreams[existing.Upstream.ID]; !attempted {
+					hasNext = true
+					break
+				}
+			}
+
+			known := make(map[string]struct{}, len(candidates))
+			for _, existing := range candidates {
+				known[existing.Upstream.ID] = struct{}{}
+			}
+			added := 0
+			for _, fallback := range e.router.SelectCapacityFallbacks(group, attemptedUpstreams) {
+				if _, exists := known[fallback.Upstream.ID]; exists {
+					continue
+				}
+				candidates = append(candidates, fallback)
+				known[fallback.Upstream.ID] = struct{}{}
+				added++
+			}
+			if added > 0 {
+				hasNext = true
+				logger.Info("codex model-at-capacity; added fallback channels",
+					"fallback_count", added)
+			}
+			if !hasNext {
+				return true, false
+			}
+
+			e.router.ConnTracker().Release(upstream.ID)
+			e.router.CircuitBreaker().RecordFailure(upstream.ID)
+			e.router.Metrics().RecordError(upstream.ID)
+			statusCode := 0
+			errMsg := codexCapacityMessage
+			if resp != nil {
+				statusCode = resp.StatusCode
+				errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+				_ = resp.Body.Close()
+				if len(errBody) > 0 {
+					errMsg = string(errBody)
+				}
+			}
+			logger.Warn("codex model-at-capacity, retrying another channel",
+				"status", statusCode,
+				"error", errMsg,
+				"duration_ms", time.Since(attemptStart).Milliseconds())
+			if cancelFn != nil {
+				cancelFn()
+			}
+			return true, true
+		}
+
+		if detected, retry := handleCodexCapacity(); detected {
+			codexCapacityRetry = true
+			if retry {
+				continue
+			}
+		}
+
 		// 6h. Evaluate the response for retryability.
 		result := e.evaluateResponse(resp, doErr, retryPolicy)
 
@@ -589,6 +672,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			}
 			continue
 		}
+		codexResponseReplayed := false
 
 		// 6h2. Claude Code OAuth 401/403 recovery: if the upstream returned
 		//       401 or 403, force-refresh the token and retry once. This
@@ -698,6 +782,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 				retryCancelFn()
 			}
 			cancelFn = retryCancelFn
+			codexResponseReplayed = true
 
 			// Fall through to the normal commit path with the retry result.
 		}
@@ -750,6 +835,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 						retryCancelFn()
 					}
 					cancelFn = retryCancelFn
+					codexResponseReplayed = true
 
 					// Classify outcome for the operator-facing metric.
 					if doErr == nil && resp != nil && resp.StatusCode < http.StatusBadRequest {
@@ -774,11 +860,25 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			}
 		}
 
+		if codexResponseReplayed {
+			if detected, retry := handleCodexCapacity(); detected {
+				codexCapacityRetry = true
+				if retry {
+					continue
+				}
+			}
+		}
+
+		// Preserve the final Codex capacity classification for response
+		// accounting. Retry attempts leave this false; only a response that is
+		// about to be committed with no fallback remaining sets it.
+		reqCtx.CodexCapacityError = codexCapacityRetry
+
 		// 6i. Commit: this is the final response (success or non-retryable error).
 		//     Only record success in CB/metrics if we got a non-5xx response.
 		//     Connection errors (resp==nil) or 5xx responses that weren't retried
 		//     (because no retry policy) should still count as failures.
-		if resp != nil && resp.StatusCode < 500 {
+		if resp != nil && resp.StatusCode < 500 && !codexCapacityRetry {
 			e.router.CircuitBreaker().RecordSuccess(upstream.ID)
 			e.router.Metrics().RecordSuccess(upstream.ID)
 		} else {
@@ -796,7 +896,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 		}
 
 		// Bind the session to this upstream for stickiness (only on success).
-		if reqCtx.SessionID != "" && resp != nil && resp.StatusCode < 500 {
+		if reqCtx.SessionID != "" && resp != nil && resp.StatusCode < 500 && !codexCapacityRetry {
 			e.router.BindSession(reqCtx.SessionID, reqCtx.Model, upstream.ID)
 		}
 
@@ -1027,7 +1127,9 @@ func (e *Executor) commitStreamingResponse(
 	// received") fire while modelserver looks healthy.
 	upstreamBody := resp.Body
 	if e.streamIdleTimeout > 0 {
-		upstreamBody = newIdleTimeoutReader(resp.Body, e.streamIdleTimeout)
+		if _, alreadyWrapped := upstreamBody.(interface{ streamIdleTimeoutApplied() }); !alreadyWrapped {
+			upstreamBody = newIdleTimeoutReader(resp.Body, e.streamIdleTimeout)
+		}
 	}
 
 	// interruptErrPtr is set by the stream-flush block below when
@@ -1058,6 +1160,9 @@ func (e *Executor) commitStreamingResponse(
 	} else {
 		wrapped = transformer.WrapStream(upstreamBody, startTime, func(metrics StreamMetrics) {
 			metrics.InterruptErr = *interruptErrPtr
+			if reqCtx.CodexCapacityError && metrics.InterruptErr == nil {
+				metrics.InterruptErr = errCodexCapacity
+			}
 			e.completeStreamingRequest(candidate, reqCtx, metrics, startTime, cancelFn, logger)
 		})
 	}
@@ -1388,6 +1493,12 @@ func (e *Executor) commitNonStreamingResponse(
 	if reqCtx.Policy != nil {
 		credits = reqCtx.Policy.ComputeCreditsForClient(model, reqCtx.ClientBucket, e.catalogDefaultRate(model), respMetrics.InputTokens, respMetrics.OutputTokens, respMetrics.CacheCreationTokens, respMetrics.CacheReadTokens)
 	}
+	requestStatus := types.RequestStatusSuccess
+	errorMessage := ""
+	if reqCtx.CodexCapacityError {
+		requestStatus = types.RequestStatusError
+		errorMessage = string(body)
+	}
 
 	req := types.Request{
 		ProjectID:             reqCtx.Project.ID,
@@ -1400,7 +1511,8 @@ func (e *Executor) commitNonStreamingResponse(
 		RequestKind:           reqCtx.RequestKind,
 		Model:                 model,
 		Streaming:             false,
-		Status:                types.RequestStatusSuccess,
+		Status:                requestStatus,
+		ErrorMessage:          errorMessage,
 		InputTokens:           respMetrics.InputTokens,
 		OutputTokens:          respMetrics.OutputTokens,
 		CacheCreationTokens:   respMetrics.CacheCreationTokens,
@@ -1424,7 +1536,7 @@ func (e *Executor) commitNonStreamingResponse(
 
 	logger.Info("request completed",
 		"msg_id", respMetrics.MsgID,
-		"status", types.RequestStatusSuccess,
+		"status", requestStatus,
 		"streaming", false,
 		"input_tokens", respMetrics.InputTokens,
 		"output_tokens", respMetrics.OutputTokens,
@@ -1614,6 +1726,9 @@ func copyWithFlush(src io.Reader, dst io.Writer, flusher http.Flusher) (int64, e
 // the underlying error recorded so dashboards and billing see the truth
 // instead of a phantom success.
 func requestStatusFromMetrics(m StreamMetrics) (string, string) {
+	if errors.Is(m.InterruptErr, errCodexCapacity) {
+		return types.RequestStatusError, codexCapacityMessage
+	}
 	if m.InterruptErr != nil {
 		return types.RequestStatusError, "stream_interrupted: " + m.InterruptErr.Error()
 	}

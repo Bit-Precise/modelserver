@@ -39,6 +39,12 @@ type idleTimeoutReader struct {
 	closeErr error
 }
 
+// streamIdleTimeoutApplied marks response bodies that already have the
+// streaming idle watchdog. The Codex capacity probe wraps before the normal
+// streaming commit path, so commitStreamingResponse uses this marker to avoid
+// stacking a second watchdog around the replay body.
+func (r *idleTimeoutReader) streamIdleTimeoutApplied() {}
+
 func newIdleTimeoutReader(inner io.ReadCloser, timeout time.Duration) *idleTimeoutReader {
 	r := &idleTimeoutReader{
 		inner:   inner,

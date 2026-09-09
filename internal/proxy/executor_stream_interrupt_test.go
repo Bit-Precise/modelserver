@@ -51,3 +51,13 @@ func TestCompleteStreamingRequest_CleanStreamRecordsSuccess(t *testing.T) {
 		t.Errorf("error_message = %q, want empty", msg)
 	}
 }
+
+func TestRequestStatusFromMetrics_CodexCapacityIsNotLabeledInterrupted(t *testing.T) {
+	status, msg := requestStatusFromMetrics(StreamMetrics{InterruptErr: errCodexCapacity})
+	if status != types.RequestStatusError {
+		t.Fatalf("status = %q, want %q", status, types.RequestStatusError)
+	}
+	if msg != codexCapacityMessage {
+		t.Fatalf("error_message = %q, want %q", msg, codexCapacityMessage)
+	}
+}
