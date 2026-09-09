@@ -6,6 +6,7 @@ export interface AdminRequestFilters {
   model?: string;
   request_kind?: string;
   status?: string;
+  retry_status?: string;
   created_by?: string;
   since?: string;
   until?: string;
@@ -18,6 +19,7 @@ export function useAdminRequests(filters: AdminRequestFilters = {}) {
   if (filters.model) params.set("model", filters.model);
   if (filters.request_kind) params.set("request_kind", filters.request_kind);
   if (filters.status) params.set("status", filters.status);
+  if (filters.retry_status) params.set("retry_status", filters.retry_status);
   if (filters.created_by) params.set("created_by", filters.created_by);
   if (filters.since) params.set("since", filters.since);
   if (filters.until) params.set("until", filters.until);

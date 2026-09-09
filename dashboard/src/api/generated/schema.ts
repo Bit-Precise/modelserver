@@ -1174,6 +1174,8 @@ export interface components {
             provider?: string;
             request_kind?: string;
             retry_reason?: string;
+            /** @enum {string} */
+            retry_status: "normal" | "non_retryable_error" | "retryable_error" | "retry_exhausted";
             route_id?: string;
             /** Format: double */
             selection_ms?: number;
@@ -1974,6 +1976,7 @@ export interface operations {
                 model?: string;
                 request_kind?: string;
                 status?: string;
+                retry_status?: "normal" | "non_retryable_error" | "retryable_error" | "retry_exhausted";
                 created_by?: string;
                 /** @description RFC3339 lower bound (inclusive) */
                 since?: string;

@@ -97,6 +97,13 @@ type RequestContext struct {
 	// model-at-capacity failure with no fallback left. It keeps request
 	// accounting from treating an HTTP 200 response.failed stream as success.
 	CodexCapacityError bool
+
+	// Retry observability is kept on the request context so every completion
+	// path (sync, streaming, image, and early errors) records the same final
+	// classification.
+	Attempt     int
+	RetryStatus string
+	RetryReason string
 }
 
 // buildEarlyErrorRequest constructs the *types.Request used by Execute's
@@ -110,7 +117,7 @@ type RequestContext struct {
 // ExtraUsageCostCredits stays at whatever the caller had (typically 0,
 // because settle never ran).
 func buildEarlyErrorRequest(reqCtx *RequestContext, startTime time.Time, errorMessage string) *types.Request {
-	return &types.Request{
+	req := &types.Request{
 		OAuthGrantID:          reqCtx.OAuthGrantID,
 		Status:                types.RequestStatusError,
 		LatencyMs:             time.Since(startTime).Milliseconds(),
@@ -120,6 +127,54 @@ func buildEarlyErrorRequest(reqCtx *RequestContext, startTime time.Time, errorMe
 		ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
 		ExtraUsageReason:      reqCtx.ExtraUsageReason,
 	}
+	applyRetryFields(reqCtx, req)
+	return req
+}
+
+// applyRetryFields copies request-scoped retry observability onto a final
+// request record. A final error with no retryable attempt is explicitly marked
+// non-retryable; a successful request with no retry history is normal.
+func applyRetryFields(reqCtx *RequestContext, req *types.Request) {
+	if reqCtx.Attempt > 0 {
+		req.Attempt = reqCtx.Attempt
+	}
+	req.RetryReason = reqCtx.RetryReason
+	if reqCtx.RetryStatus != "" {
+		req.RetryStatus = reqCtx.RetryStatus
+	} else if req.Status == types.RequestStatusSuccess {
+		req.RetryStatus = types.RequestRetryStatusNormal
+	} else {
+		req.RetryStatus = types.RequestRetryStatusNonRetryableError
+	}
+}
+
+func markRetryableAttempt(reqCtx *RequestContext, reason string) {
+	reqCtx.RetryStatus = types.RequestRetryStatusRetryableError
+	if reason != "" {
+		reqCtx.RetryReason = reason
+	}
+}
+
+func markRetryExhausted(reqCtx *RequestContext) {
+	reqCtx.RetryStatus = types.RequestRetryStatusRetryExhausted
+}
+
+func retryReason(resp *http.Response, err error) string {
+	if err != nil {
+		if isTimeoutError(err) {
+			return "timeout"
+		}
+		return "connection_error"
+	}
+	if resp != nil {
+		switch {
+		case resp.StatusCode == http.StatusTooManyRequests:
+			return "429"
+		case resp.StatusCode >= 500 && resp.StatusCode < 600:
+			return "5xx"
+		}
+	}
+	return "retryable_error"
 }
 
 // finalizeEarlyError completes the pending request row when Execute bails
@@ -363,6 +418,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 		candidate := candidates[attempt]
 		upstream := candidate.Upstream
 		attemptedUpstreams[upstream.ID] = struct{}{}
+		reqCtx.Attempt = attempt + 1
 		transformer := GetProviderTransformer(upstream.Provider, reqCtx.RequestKind)
 
 		logger := e.logger.With(
@@ -607,8 +663,19 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 					"fallback_count", added)
 			}
 			if !hasNext {
+				reqCtx.RetryReason = "codex_capacity"
+				markRetryExhausted(reqCtx)
+				// inspectCodexCapacityResponse may have consumed and replayed the
+				// body. Restore it before commit so the client and request log keep
+				// the original capacity error when no fallback remains.
+				if resp != nil && resp.Body != nil {
+					errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+					_ = resp.Body.Close()
+					resp.Body = io.NopCloser(bytes.NewReader(errBody))
+				}
 				return true, false
 			}
+			markRetryableAttempt(reqCtx, "codex_capacity")
 
 			e.router.ConnTracker().Release(upstream.ID)
 			e.router.CircuitBreaker().RecordFailure(upstream.ID)
@@ -640,10 +707,23 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			}
 		}
 
-		// 6h. Evaluate the response for retryability.
-		result := e.evaluateResponse(resp, doErr, retryPolicy)
+		// 6h. Evaluate the response for ordinary retryability. A Codex capacity
+		// response with no fallback remaining must be committed as the original
+		// upstream error, rather than being consumed by the generic retry-policy
+		// path and replaced with "all upstreams failed".
+		result := proxyResultCommit
+		if !codexCapacityRetry {
+			result = e.evaluateResponse(resp, doErr, retryPolicy)
+		}
 
 		if result == proxyResultRetryable {
+			reason := retryReason(resp, doErr)
+			reqCtx.RetryReason = reason
+			if attempt+1 >= len(candidates) {
+				markRetryExhausted(reqCtx)
+			} else {
+				markRetryableAttempt(reqCtx, reason)
+			}
 			// Release connection, record error, log, and try next candidate.
 			e.router.ConnTracker().Release(upstream.ID)
 			e.router.CircuitBreaker().RecordFailure(upstream.ID)
@@ -905,6 +985,9 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 	}
 
 	// 7. All candidates exhausted.
+	if reqCtx.RetryStatus == types.RequestRetryStatusRetryableError {
+		markRetryExhausted(reqCtx)
+	}
 	writeProxyError(w, http.StatusBadGateway, "all upstreams failed")
 	e.finalizeEarlyError(reqCtx, startTime, "all upstreams exhausted")
 }
@@ -1052,6 +1135,7 @@ func (e *Executor) commitErrorResponse(
 		ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
 		ExtraUsageReason:      reqCtx.ExtraUsageReason,
 	}
+	applyRetryFields(reqCtx, &req)
 	if reqCtx.RequestID != "" {
 		go func() {
 			if err := e.store.CompleteRequest(reqCtx.RequestID, &req); err != nil {
@@ -1281,6 +1365,7 @@ func (e *Executor) completeStreamingRequest(
 	status, errMsg := requestStatusFromMetrics(metrics)
 	req.Status = status
 	req.ErrorMessage = errMsg
+	applyRetryFields(reqCtx, &req)
 	if reqCtx.RequestID != "" {
 		go func() {
 			if err := e.store.CompleteRequest(reqCtx.RequestID, &req); err != nil {
@@ -1372,6 +1457,7 @@ func (e *Executor) completeImageStreamingRequest(
 	} else {
 		req.Status = types.RequestStatusSuccess
 	}
+	applyRetryFields(reqCtx, &req)
 	if usagePresent {
 		req.Metadata = imageUsageMetadata(usage)
 	}
@@ -1524,6 +1610,7 @@ func (e *Executor) commitNonStreamingResponse(
 		ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
 		ExtraUsageReason:      reqCtx.ExtraUsageReason,
 	}
+	applyRetryFields(reqCtx, &req)
 	if reqCtx.RequestID != "" {
 		go func() {
 			if err := e.store.CompleteRequest(reqCtx.RequestID, &req); err != nil {
@@ -1644,6 +1731,7 @@ func (e *Executor) commitImageNonStreamingResponseBody(
 		ExtraUsageCostCredits: reqCtx.ExtraUsageCostCredits,
 		ExtraUsageReason:      reqCtx.ExtraUsageReason,
 	}
+	applyRetryFields(reqCtx, &req)
 	if imgMetrics.UsagePresent {
 		req.Metadata = imageUsageMetadata(imgMetrics.Usage)
 	}

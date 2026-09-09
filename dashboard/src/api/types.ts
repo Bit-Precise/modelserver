@@ -159,6 +159,13 @@ export interface Request {
   model: string;
   streaming: boolean;
   status: "success" | "error" | "rate_limited";
+  retry_status:
+    | "normal"
+    | "non_retryable_error"
+    | "retryable_error"
+    | "retry_exhausted";
+  attempt?: number;
+  retry_reason?: string;
   input_tokens: number;
   output_tokens: number;
   cache_creation_tokens: number;

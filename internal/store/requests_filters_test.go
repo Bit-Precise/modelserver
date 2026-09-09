@@ -4,7 +4,29 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/modelserver/modelserver/internal/types"
 )
+
+func TestNormalizeRequestRetryStatus(t *testing.T) {
+	tests := []struct {
+		status string
+		want   string
+	}{
+		{status: types.RequestStatusProcessing, want: types.RequestRetryStatusNormal},
+		{status: types.RequestStatusSuccess, want: types.RequestRetryStatusNormal},
+		{status: types.RequestStatusError, want: types.RequestRetryStatusNonRetryableError},
+		{status: types.RequestStatusRateLimited, want: types.RequestRetryStatusNonRetryableError},
+	}
+
+	for _, tt := range tests {
+		req := types.Request{Status: tt.status}
+		normalizeRequestRetryStatus(&req)
+		if req.RetryStatus != tt.want {
+			t.Errorf("status %q: RetryStatus = %q, want %q", tt.status, req.RetryStatus, tt.want)
+		}
+	}
+}
 
 // TestBuildRequestFilters_RequestKindEmitsPredicate proves a non-empty
 // RequestKind injects the right SQL fragment and arg. Without this,
@@ -41,8 +63,8 @@ func TestBuildRequestFilters_RequestKindEmptyIsNoop(t *testing.T) {
 
 // TestBuildRequestFilters_ComposesWithOtherFilters guards against
 // arg-numbering regressions when multiple optional predicates are set
-// together — the order is Model → RequestKind → Status → APIKeyID →
-// CreatedBy → Since → Until.
+// together — the order is Model → RequestKind → Status → RetryStatus →
+// APIKeyID → CreatedBy → Since → Until.
 func TestBuildRequestFilters_ComposesWithOtherFilters(t *testing.T) {
 	since := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	where, args, next := buildRequestFilters("proj-1", RequestFilters{
@@ -72,6 +94,21 @@ func TestBuildRequestFilters_ComposesWithOtherFilters(t *testing.T) {
 	}
 }
 
+func TestBuildRequestFilters_RetryStatus(t *testing.T) {
+	where, args, next := buildRequestFilters("proj-1", RequestFilters{
+		Status:      "success",
+		RetryStatus: "retryable_error",
+	})
+
+	if !strings.Contains(where, "r.status = $2") ||
+		!strings.Contains(where, "r.retry_status = $3") {
+		t.Fatalf("WHERE missing retry status predicates: %q", where)
+	}
+	if next != 4 || len(args) != 3 || args[2] != "retryable_error" {
+		t.Fatalf("args = %v, next = %d", args, next)
+	}
+}
+
 // TestBuildGlobalRequestFilters_RequestKind ensures the admin/global
 // builder honors RequestKind too — the global builder skips the
 // project_id predicate, so this is a separate code path.
@@ -85,5 +122,18 @@ func TestBuildGlobalRequestFilters_RequestKind(t *testing.T) {
 	}
 	if len(args) != 1 || args[0] != "openai_chat_completions" {
 		t.Errorf("args = %v, want [openai_chat_completions]", args)
+	}
+}
+
+func TestBuildGlobalRequestFilters_RetryStatus(t *testing.T) {
+	where, args, next := buildGlobalRequestFilters(RequestFilters{
+		RetryStatus: "retry_exhausted",
+	})
+
+	if !strings.Contains(where, "r.retry_status = $1") {
+		t.Fatalf("global WHERE missing retry_status predicate: %q", where)
+	}
+	if next != 2 || len(args) != 1 || args[0] != "retry_exhausted" {
+		t.Fatalf("args = %v, next = %d", args, next)
 	}
 }

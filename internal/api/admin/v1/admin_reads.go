@@ -49,6 +49,7 @@ type ListAllRequestsInput struct {
 	Model       string `query:"model,omitempty"`
 	RequestKind string `query:"request_kind,omitempty"`
 	Status      string `query:"status,omitempty"`
+	RetryStatus string `query:"retry_status,omitempty" enum:"normal,non_retryable_error,retryable_error,retry_exhausted"`
 	CreatedBy   string `query:"created_by,omitempty"`
 	Since       string `query:"since,omitempty" doc:"RFC3339 lower bound (inclusive)"`
 	Until       string `query:"until,omitempty" doc:"RFC3339 upper bound (inclusive)"`
@@ -255,6 +256,7 @@ func (s *Server) listAllRequests(_ context.Context, input *ListAllRequestsInput)
 		Model:       input.Model,
 		RequestKind: input.RequestKind,
 		Status:      input.Status,
+		RetryStatus: input.RetryStatus,
 		CreatedBy:   input.CreatedBy,
 	}
 

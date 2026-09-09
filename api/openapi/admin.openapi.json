@@ -1913,6 +1913,15 @@
           "retry_reason": {
             "type": "string"
           },
+          "retry_status": {
+            "enum": [
+              "normal",
+              "non_retryable_error",
+              "retryable_error",
+              "retry_exhausted"
+            ],
+            "type": "string"
+          },
           "route_id": {
             "type": "string"
           },
@@ -1944,6 +1953,7 @@
           "model",
           "streaming",
           "status",
+          "retry_status",
           "input_tokens",
           "output_tokens",
           "cache_creation_tokens",
@@ -3354,6 +3364,20 @@
             "in": "query",
             "name": "status",
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "retry_status",
+            "schema": {
+              "enum": [
+                "normal",
+                "non_retryable_error",
+                "retryable_error",
+                "retry_exhausted"
+              ],
               "type": "string"
             }
           },

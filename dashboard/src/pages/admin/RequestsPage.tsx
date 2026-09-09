@@ -52,6 +52,7 @@ export function AdminRequestsPage() {
   const [model, setModel] = useState("");
   const [requestKind, setRequestKind] = useState("");
   const [status, setStatus] = useState("");
+  const [retryStatus, setRetryStatus] = useState("");
   const [since, setSince] = useState(defaultSince);
   const [until, setUntil] = useState(defaultUntil);
   const [createdBy, setCreatedBy] = useState("");
@@ -75,6 +76,7 @@ export function AdminRequestsPage() {
     model: model || undefined,
     request_kind: requestKind || undefined,
     status: status || undefined,
+    retry_status: retryStatus || undefined,
     created_by: createdBy || undefined,
     since: since ? `${since}T00:00:00Z` : undefined,
     until: until ? `${until}T23:59:59Z` : undefined,
@@ -119,6 +121,10 @@ export function AdminRequestsPage() {
     {
       header: "Status",
       accessor: (r) => <StatusBadge status={r.status} />,
+    },
+    {
+      header: "Retry",
+      accessor: (r) => <StatusBadge status={r.retry_status || "normal"} />,
     },
     {
       header: "CCH / FP",
@@ -253,6 +259,24 @@ export function AdminRequestsPage() {
             <SelectItem value="rate_limited">Rate Limited</SelectItem>
           </SelectContent>
         </Select>
+        <Select
+          value={retryStatus}
+          onValueChange={(v) => {
+            setRetryStatus(!v || v === "all" ? "" : v);
+            setPage(1);
+          }}
+        >
+          <SelectTrigger className="w-52">
+            <SelectValue placeholder="All retry states" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All retry states</SelectItem>
+            <SelectItem value="normal">Normal</SelectItem>
+            <SelectItem value="non_retryable_error">Non-retryable error</SelectItem>
+            <SelectItem value="retryable_error">Retryable error</SelectItem>
+            <SelectItem value="retry_exhausted">Retry exhausted</SelectItem>
+          </SelectContent>
+        </Select>
         {users.length > 0 && (
           <Select
             value={createdBy}
@@ -322,6 +346,13 @@ export function AdminRequestsPage() {
               <DetailRow label="Provider" value={selected.provider} />
               <DetailRow label="Upstream" value={upstreamName(selected.upstream_id)} />
               <DetailRow label="Status" value={selected.status} />
+              <DetailRow label="Retry Status" value={selected.retry_status || "normal"} />
+              {selected.attempt && (
+                <DetailRow label="Attempt" value={String(selected.attempt)} />
+              )}
+              {selected.retry_reason && (
+                <DetailRow label="Retry Reason" value={selected.retry_reason} />
+              )}
               <DetailRow label="Streaming" value={selected.streaming ? "Yes" : "No"} />
               <DetailRow label="Input Tokens" value={formatTokens(selected.input_tokens)} />
               <DetailRow label="Output Tokens" value={formatTokens(selected.output_tokens)} />

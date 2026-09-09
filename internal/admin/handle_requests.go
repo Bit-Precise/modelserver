@@ -24,6 +24,7 @@ func handleListRequests(st *store.Store) http.HandlerFunc {
 			Model:       q.Get("model"),
 			RequestKind: q.Get("request_kind"),
 			Status:      q.Get("status"),
+			RetryStatus: q.Get("retry_status"),
 			APIKeyID:    q.Get("api_key_id"),
 		}
 
@@ -73,6 +74,7 @@ func handleListAllRequests(st *store.Store) http.HandlerFunc {
 			Model:       q.Get("model"),
 			RequestKind: q.Get("request_kind"),
 			Status:      q.Get("status"),
+			RetryStatus: q.Get("retry_status"),
 			CreatedBy:   q.Get("created_by"),
 		}
 		if since := q.Get("since"); since != "" {

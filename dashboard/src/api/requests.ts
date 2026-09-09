@@ -6,6 +6,7 @@ export interface RequestFilters {
   model?: string;
   request_kind?: string;
   status?: string;
+  retry_status?: string;
   api_key_id?: string;
   created_by?: string;
   since?: string;
@@ -19,6 +20,7 @@ export function useRequests(projectId: string, filters: RequestFilters = {}) {
   if (filters.model) params.set("model", filters.model);
   if (filters.request_kind) params.set("request_kind", filters.request_kind);
   if (filters.status) params.set("status", filters.status);
+  if (filters.retry_status) params.set("retry_status", filters.retry_status);
   if (filters.api_key_id) params.set("api_key_id", filters.api_key_id);
   if (filters.created_by) params.set("created_by", filters.created_by);
   if (filters.since) params.set("since", filters.since);

@@ -12,19 +12,20 @@ import (
 // CreateRequest inserts a new request log.
 // UpstreamID may be empty at creation time (set later via CompleteRequest).
 func (s *Store) CreateRequest(r *types.Request) error {
+	normalizeRequestRetryStatus(r)
 	metadataJSON := []byte("{}")
 	if r.Metadata != nil {
 		metadataJSON, _ = json.Marshal(r.Metadata)
 	}
 	return s.pool.QueryRow(context.Background(), `
 		INSERT INTO requests (project_id, api_key_id, oauth_grant_id, upstream_id, trace_id, msg_id, provider, request_kind, model, streaming,
-			status, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+			status, retry_status, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
 			credits_consumed, latency_ms, ttft_ms, error_message, client_ip, created_by, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 		RETURNING id, created_at`,
 		r.ProjectID, nullString(r.APIKeyID), nullString(r.OAuthGrantID), nullString(r.UpstreamID),
 		nullString(r.TraceID), nullString(r.MsgID),
-		r.Provider, r.RequestKind, r.Model, r.Streaming, r.Status,
+		r.Provider, r.RequestKind, r.Model, r.Streaming, r.Status, r.RetryStatus,
 		r.InputTokens, r.OutputTokens, r.CacheCreationTokens, r.CacheReadTokens,
 		r.CreditsConsumed, r.LatencyMs, r.TTFTMs, nullString(r.ErrorMessage), r.ClientIP, nullString(r.CreatedBy),
 		metadataJSON,
@@ -36,6 +37,7 @@ func (s *Store) CreateRequest(r *types.Request) error {
 // Note: request_kind is intentionally not updated here — it is set at
 // CreateRequest time by the handler and never changes for a given request.
 func (s *Store) CompleteRequest(id string, r *types.Request) error {
+	normalizeRequestRetryStatus(r)
 	metadataJSON := []byte("{}")
 	if r.Metadata != nil {
 		metadataJSON, _ = json.Marshal(r.Metadata)
@@ -49,14 +51,15 @@ func (s *Store) CompleteRequest(id string, r *types.Request) error {
 			provider = COALESCE(NULLIF($13, ''), provider),
 			route_id = $14,
 			upstream_group_id = $15,
-			attempt = $16,
+			attempt = CASE WHEN $16 > 0 THEN $16 ELSE attempt END,
 			retry_reason = $17,
 			selection_ms = $18,
 			is_extra_usage = $19,
 			extra_usage_cost_credits = $20,
 			extra_usage_reason = $21,
-			metadata = CASE WHEN $22::jsonb = '{}'::jsonb THEN metadata ELSE metadata || $22::jsonb END
-		WHERE id = $23`,
+			retry_status = $22,
+			metadata = CASE WHEN $23::jsonb = '{}'::jsonb THEN metadata ELSE metadata || $23::jsonb END
+		WHERE id = $24`,
 		r.Status, nullString(r.MsgID), r.InputTokens, r.OutputTokens,
 		r.CacheCreationTokens, r.CacheReadTokens, r.CreditsConsumed,
 		r.LatencyMs, r.TTFTMs, nullString(r.ErrorMessage), r.ClientIP,
@@ -64,6 +67,7 @@ func (s *Store) CompleteRequest(id string, r *types.Request) error {
 		nullString(r.RouteID), nullString(r.GroupID),
 		r.Attempt, nullString(r.RetryReason), r.SelectionMs,
 		r.IsExtraUsage, r.ExtraUsageCostCredits, r.ExtraUsageReason,
+		r.RetryStatus,
 		metadataJSON,
 		id,
 	)
@@ -79,19 +83,24 @@ func (s *Store) BatchCreateRequests(requests []types.Request) error {
 	}
 	for i := range requests {
 		r := &requests[i]
+		normalizeRequestRetryStatus(r)
+		attempt := r.Attempt
+		if attempt <= 0 {
+			attempt = 1
+		}
 		metadataJSON, _ := json.Marshal(r.Metadata)
 		if metadataJSON == nil {
 			metadataJSON = []byte("{}")
 		}
 		err := tx.QueryRow(ctx, `
 			INSERT INTO requests (project_id, api_key_id, oauth_grant_id, upstream_id, trace_id, msg_id, provider, request_kind, model, streaming,
-				status, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+				status, retry_status, attempt, retry_reason, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
 				credits_consumed, latency_ms, ttft_ms, error_message, client_ip, created_by, metadata)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 			RETURNING id, created_at`,
 			r.ProjectID, nullString(r.APIKeyID), nullString(r.OAuthGrantID), nullString(r.UpstreamID),
 			nullString(r.TraceID), nullString(r.MsgID),
-			r.Provider, r.RequestKind, r.Model, r.Streaming, r.Status,
+			r.Provider, r.RequestKind, r.Model, r.Streaming, r.Status, r.RetryStatus, attempt, nullString(r.RetryReason),
 			r.InputTokens, r.OutputTokens, r.CacheCreationTokens, r.CacheReadTokens,
 			r.CreditsConsumed, r.LatencyMs, r.TTFTMs, nullString(r.ErrorMessage), r.ClientIP, nullString(r.CreatedBy),
 			metadataJSON,
@@ -102,6 +111,17 @@ func (s *Store) BatchCreateRequests(requests []types.Request) error {
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func normalizeRequestRetryStatus(r *types.Request) {
+	if r.RetryStatus != "" {
+		return
+	}
+	if r.Status == types.RequestStatusSuccess || r.Status == types.RequestStatusProcessing {
+		r.RetryStatus = types.RequestRetryStatusNormal
+		return
+	}
+	r.RetryStatus = types.RequestRetryStatusNonRetryableError
 }
 
 // ListRequests returns request logs for a project with pagination and filters.
@@ -118,7 +138,7 @@ func (s *Store) ListRequests(projectID string, p types.PaginationParams, filters
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT r.id, r.project_id, COALESCE(r.api_key_id::text, ''), COALESCE(r.oauth_grant_id::text, ''),
 			COALESCE(r.upstream_id::text, ''), COALESCE(r.trace_id::text, ''), COALESCE(r.msg_id, ''),
-			r.provider, r.request_kind, r.model, r.streaming, r.status, r.input_tokens, r.output_tokens, r.cache_creation_tokens, r.cache_read_tokens,
+			r.provider, r.request_kind, r.model, r.streaming, r.status, r.retry_status, r.attempt, COALESCE(r.retry_reason, ''), r.input_tokens, r.output_tokens, r.cache_creation_tokens, r.cache_read_tokens,
 			r.credits_consumed, r.latency_ms, r.ttft_ms, COALESCE(r.error_message, ''), r.client_ip, r.created_at,
 			COALESCE(og.client_name, '') as oauth_grant_client_name,
 			r.metadata,
@@ -143,7 +163,7 @@ func (s *Store) ListRequests(projectID string, p types.PaginationParams, filters
 		var r types.Request
 		var metadataJSON []byte
 		if err := rows.Scan(&r.ID, &r.ProjectID, &r.APIKeyID, &r.OAuthGrantID, &r.UpstreamID, &r.TraceID, &r.MsgID,
-			&r.Provider, &r.RequestKind, &r.Model, &r.Streaming, &r.Status,
+			&r.Provider, &r.RequestKind, &r.Model, &r.Streaming, &r.Status, &r.RetryStatus, &r.Attempt, &r.RetryReason,
 			&r.InputTokens, &r.OutputTokens, &r.CacheCreationTokens, &r.CacheReadTokens,
 			&r.CreditsConsumed, &r.LatencyMs, &r.TTFTMs, &r.ErrorMessage, &r.ClientIP, &r.CreatedAt,
 			&r.OAuthGrantClientName, &metadataJSON, &r.HttpLogPath,
@@ -164,6 +184,7 @@ type RequestFilters struct {
 	Model       string
 	RequestKind string
 	Status      string
+	RetryStatus string
 	APIKeyID    string
 	CreatedBy   string
 	Since       time.Time
@@ -188,6 +209,11 @@ func buildRequestFilters(projectID string, f RequestFilters) (string, []interfac
 	if f.Status != "" {
 		conditions = append(conditions, fmt.Sprintf("r.status = $%d", n))
 		args = append(args, f.Status)
+		n++
+	}
+	if f.RetryStatus != "" {
+		conditions = append(conditions, fmt.Sprintf("r.retry_status = $%d", n))
+		args = append(args, f.RetryStatus)
 		n++
 	}
 	if f.APIKeyID != "" {
@@ -229,7 +255,7 @@ func (s *Store) ListAllRequests(p types.PaginationParams, filters RequestFilters
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT r.id, r.project_id, COALESCE(r.api_key_id::text, ''), COALESCE(r.oauth_grant_id::text, ''),
 			COALESCE(r.upstream_id::text, ''), COALESCE(r.trace_id::text, ''), COALESCE(r.msg_id, ''),
-			r.provider, r.request_kind, r.model, r.streaming, r.status, r.input_tokens, r.output_tokens, r.cache_creation_tokens, r.cache_read_tokens,
+			r.provider, r.request_kind, r.model, r.streaming, r.status, r.retry_status, r.attempt, COALESCE(r.retry_reason, ''), r.input_tokens, r.output_tokens, r.cache_creation_tokens, r.cache_read_tokens,
 			r.credits_consumed, r.latency_ms, r.ttft_ms, COALESCE(r.error_message, ''), r.client_ip, r.created_at,
 			COALESCE(og.client_name, '') as oauth_grant_client_name,
 			r.metadata,
@@ -254,7 +280,7 @@ func (s *Store) ListAllRequests(p types.PaginationParams, filters RequestFilters
 		var r types.Request
 		var metadataJSON []byte
 		if err := rows.Scan(&r.ID, &r.ProjectID, &r.APIKeyID, &r.OAuthGrantID, &r.UpstreamID, &r.TraceID, &r.MsgID,
-			&r.Provider, &r.RequestKind, &r.Model, &r.Streaming, &r.Status,
+			&r.Provider, &r.RequestKind, &r.Model, &r.Streaming, &r.Status, &r.RetryStatus, &r.Attempt, &r.RetryReason,
 			&r.InputTokens, &r.OutputTokens, &r.CacheCreationTokens, &r.CacheReadTokens,
 			&r.CreditsConsumed, &r.LatencyMs, &r.TTFTMs, &r.ErrorMessage, &r.ClientIP, &r.CreatedAt,
 			&r.OAuthGrantClientName, &metadataJSON, &r.HttpLogPath,
@@ -290,6 +316,11 @@ func buildGlobalRequestFilters(f RequestFilters) (string, []interface{}, int) {
 		args = append(args, f.Status)
 		n++
 	}
+	if f.RetryStatus != "" {
+		conditions = append(conditions, fmt.Sprintf("r.retry_status = $%d", n))
+		args = append(args, f.RetryStatus)
+		n++
+	}
 	if f.APIKeyID != "" {
 		conditions = append(conditions, fmt.Sprintf("r.api_key_id = $%d", n))
 		args = append(args, f.APIKeyID)
@@ -323,7 +354,7 @@ func (s *Store) ListRequestsByTraceID(traceID string) ([]types.Request, error) {
 	rows, err := s.pool.Query(context.Background(), `
 		SELECT r.id, r.project_id, COALESCE(r.api_key_id::text, ''), COALESCE(r.oauth_grant_id::text, ''),
 			COALESCE(r.upstream_id::text, ''), COALESCE(r.trace_id::text, ''), COALESCE(r.msg_id, ''),
-			r.provider, r.request_kind, r.model, r.streaming, r.status, r.input_tokens, r.output_tokens, r.cache_creation_tokens, r.cache_read_tokens,
+			r.provider, r.request_kind, r.model, r.streaming, r.status, r.retry_status, r.attempt, COALESCE(r.retry_reason, ''), r.input_tokens, r.output_tokens, r.cache_creation_tokens, r.cache_read_tokens,
 			r.credits_consumed, r.latency_ms, r.ttft_ms, COALESCE(r.error_message, ''), r.client_ip, r.created_at,
 			COALESCE(og.client_name, '') as oauth_grant_client_name,
 			r.metadata,
@@ -345,7 +376,7 @@ func (s *Store) ListRequestsByTraceID(traceID string) ([]types.Request, error) {
 		var r types.Request
 		var metadataJSON []byte
 		if err := rows.Scan(&r.ID, &r.ProjectID, &r.APIKeyID, &r.OAuthGrantID, &r.UpstreamID, &r.TraceID, &r.MsgID,
-			&r.Provider, &r.RequestKind, &r.Model, &r.Streaming, &r.Status,
+			&r.Provider, &r.RequestKind, &r.Model, &r.Streaming, &r.Status, &r.RetryStatus, &r.Attempt, &r.RetryReason,
 			&r.InputTokens, &r.OutputTokens, &r.CacheCreationTokens, &r.CacheReadTokens,
 			&r.CreditsConsumed, &r.LatencyMs, &r.TTFTMs, &r.ErrorMessage, &r.ClientIP, &r.CreatedAt,
 			&r.OAuthGrantClientName, &metadataJSON, &r.HttpLogPath,
@@ -387,7 +418,7 @@ func (s *Store) GetRequest(id string) (*types.Request, error) {
 	err := s.pool.QueryRow(context.Background(), `
 		SELECT r.id, r.project_id, COALESCE(r.api_key_id::text, ''), COALESCE(r.oauth_grant_id::text, ''),
 			COALESCE(r.upstream_id::text, ''), COALESCE(r.trace_id::text, ''), COALESCE(r.msg_id, ''),
-			r.provider, r.request_kind, r.model, r.streaming, r.status, r.input_tokens, r.output_tokens, r.cache_creation_tokens, r.cache_read_tokens,
+			r.provider, r.request_kind, r.model, r.streaming, r.status, r.retry_status, r.attempt, COALESCE(r.retry_reason, ''), r.input_tokens, r.output_tokens, r.cache_creation_tokens, r.cache_read_tokens,
 			r.credits_consumed, r.latency_ms, r.ttft_ms, COALESCE(r.error_message, ''), r.client_ip, r.created_at,
 			COALESCE(og.client_name, '') as oauth_grant_client_name,
 			r.metadata,
@@ -400,7 +431,7 @@ func (s *Store) GetRequest(id string) (*types.Request, error) {
 		LEFT JOIN users u ON u.id::text = r.created_by
 		WHERE r.id = $1`, id,
 	).Scan(&r.ID, &r.ProjectID, &r.APIKeyID, &r.OAuthGrantID, &r.UpstreamID, &r.TraceID, &r.MsgID,
-		&r.Provider, &r.RequestKind, &r.Model, &r.Streaming, &r.Status,
+		&r.Provider, &r.RequestKind, &r.Model, &r.Streaming, &r.Status, &r.RetryStatus, &r.Attempt, &r.RetryReason,
 		&r.InputTokens, &r.OutputTokens, &r.CacheCreationTokens, &r.CacheReadTokens,
 		&r.CreditsConsumed, &r.LatencyMs, &r.TTFTMs, &r.ErrorMessage, &r.ClientIP, &r.CreatedAt,
 		&r.OAuthGrantClientName, &metadataJSON, &r.HttpLogPath,
