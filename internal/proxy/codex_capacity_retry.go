@@ -43,8 +43,11 @@ func newCodexReplayBody(prefix []byte, tail io.Reader, closer io.Closer, pending
 }
 
 const (
-	codexCapacityMessage       = "selected model is at capacity. please try a different model."
-	codexCapacityProbeMaxBytes = 64 * 1024
+	codexCapacityMessage                = "selected model is at capacity. please try a different model."
+	codexCapacityProbeMaxBytes          = 64 * 1024
+	codexCapacityRetryReason            = "codex_capacity"
+	codexCapacityNoFallbackRetryReason  = "codex_capacity_no_fallback"
+	codexCapacityAfterCommitRetryReason = "codex_capacity_after_commit"
 )
 
 var errCodexCapacity = errors.New(codexCapacityMessage)
@@ -168,13 +171,12 @@ func inspectCodexCapacityResponse(resp *http.Response, doErr error, isStream boo
 }
 
 // codexStreamEventAllowsCommit reports whether it is safe to start forwarding
-// a Codex stream. Metadata and structural events (including output_item.added)
-// are held back because the next event can still be response.failed with
-// server_is_overloaded. Once an actual output delta starts, or a terminal
-// non-capacity event arrives, the response must be committed and cannot be
-// replayed transparently. Unknown JSON events are held briefly too, so newly
-// introduced metadata events do not bypass the capacity check; the probe has
-// a bounded buffer.
+// a Codex stream. Metadata, lifecycle, and *.done events are held back because
+// none of their bytes have reached the client yet and the next event can still
+// be response.failed with server_is_overloaded. Once an actual *.delta starts,
+// an image is partially emitted, or a terminal non-capacity event arrives, the
+// response must be committed and cannot be replayed transparently. Unknown
+// JSON events are held briefly too; the probe has a bounded buffer.
 func codexStreamEventAllowsCommit(event []byte) bool {
 	for _, line := range bytes.Split(event, []byte("\n")) {
 		line = bytes.TrimSpace(line)
@@ -191,31 +193,18 @@ func codexStreamEventAllowsCommit(event []byte) bool {
 			return true
 		}
 		switch envelope.Type {
-		case "response.created",
-			"response.in_progress",
-			"response.metadata",
-			"codex.response.metadata",
-			"response.output_item.added",
-			"response.content_part.added",
-			"response.content_part.done",
-			"response.custom_tool_call_input.done",
-			"response.output_text.done",
-			"response.reasoning_summary_part.added",
-			"response.reasoning_summary_part.done",
-			"responsesapi.websocket_timing":
-			return false
-		case "response.failed", "response.completed":
+		case "error", "response.failed", "response.incomplete", "response.completed":
 			return true
 		}
-		if strings.HasPrefix(envelope.Type, "response.output") ||
-			strings.HasPrefix(envelope.Type, "response.reasoning") ||
-			strings.HasPrefix(envelope.Type, "response.function_call") ||
-			strings.HasPrefix(envelope.Type, "response.custom_tool_call") {
+		if strings.HasPrefix(envelope.Type, "response.") &&
+			(strings.HasSuffix(envelope.Type, ".delta") ||
+				envelope.Type == "response.image_generation_call.partial_image") {
 			return true
 		}
-		// Hold unknown JSON response events briefly as well. New Codex metadata
-		// event kinds can precede response.failed; the bounded probe buffer
-		// below prevents this from delaying a normal stream indefinitely.
+		// Hold structural, lifecycle, *.done, and unknown JSON events. If no
+		// actual delta follows, a capacity failure can still be retried without
+		// exposing bytes from two different upstream responses to the client.
+		// The bounded probe buffer below prevents indefinite accumulation.
 		return false
 	}
 	return false

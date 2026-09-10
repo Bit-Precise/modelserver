@@ -154,6 +154,25 @@ func TestProbeCodexCapacityStream_HoldsOutputItemAddedUntilFailedEvent(t *testin
 	}
 }
 
+func TestProbeCodexCapacityStream_HoldsDoneEventsUntilFailedEvent(t *testing.T) {
+	body := "event: response.created\ndata: {\"type\":\"response.created\"}\n\n" +
+		"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"summary\":[]}}\n\n" +
+		"event: response.reasoning_summary_text.done\ndata: {\"type\":\"response.reasoning_summary_text.done\",\"text\":\"\"}\n\n" +
+		"event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"summary\":[]}}\n\n" +
+		"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"}}}\n\n"
+	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if !retry {
+		t.Fatal("probe committed a buffered *.done event before the capacity failure")
+	}
+	got, err := io.ReadAll(replay)
+	if err != nil {
+		t.Fatalf("read replay body: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("replay body = %q, want original body", got)
+	}
+}
+
 func TestProbeCodexCapacityStream_DoesNotRetryAfterOutputDelta(t *testing.T) {
 	body := "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"content\":[]}}\n\n" +
 		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"visible output\"}\n\n" +
@@ -168,6 +187,52 @@ func TestProbeCodexCapacityStream_DoesNotRetryAfterOutputDelta(t *testing.T) {
 	}
 	if string(got) != body {
 		t.Fatalf("replay body = %q, want original body", got)
+	}
+}
+
+func TestProbeCodexCapacityStream_DoesNotRetryAfterReasoningDelta(t *testing.T) {
+	body := "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"summary\":[]}}\n\n" +
+		"event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"visible reasoning\"}\n\n" +
+		"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"}}}\n\n"
+	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if retry {
+		t.Fatal("probe retried after a reasoning delta had been exposed")
+	}
+	got, err := io.ReadAll(replay)
+	if err != nil {
+		t.Fatalf("read replay body: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("replay body = %q, want original body", got)
+	}
+}
+
+func TestCodexStreamEventAllowsCommit(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		want      bool
+	}{
+		{name: "created", eventType: "response.created", want: false},
+		{name: "output item added", eventType: "response.output_item.added", want: false},
+		{name: "output item done", eventType: "response.output_item.done", want: false},
+		{name: "reasoning done", eventType: "response.reasoning_summary_text.done", want: false},
+		{name: "output delta", eventType: "response.output_text.delta", want: true},
+		{name: "reasoning delta", eventType: "response.reasoning_summary_text.delta", want: true},
+		{name: "function delta", eventType: "response.function_call_arguments.delta", want: true},
+		{name: "partial image", eventType: "response.image_generation_call.partial_image", want: true},
+		{name: "failed", eventType: "response.failed", want: true},
+		{name: "incomplete", eventType: "response.incomplete", want: true},
+		{name: "completed", eventType: "response.completed", want: true},
+		{name: "error", eventType: "error", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := []byte("data: {\"type\":\"" + tt.eventType + "\"}\n\n")
+			if got := codexStreamEventAllowsCommit(event); got != tt.want {
+				t.Fatalf("codexStreamEventAllowsCommit(%q) = %v, want %v", tt.eventType, got, tt.want)
+			}
+		})
 	}
 }
 

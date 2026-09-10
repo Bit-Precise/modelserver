@@ -664,8 +664,28 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 					"fallback_count", added)
 			}
 			if !hasNext {
-				reqCtx.RetryReason = "codex_capacity"
+				reqCtx.RetryReason = codexCapacityNoFallbackRetryReason
 				markRetryExhausted(reqCtx)
+				logger.Warn("codex model-at-capacity; no eligible fallback channel",
+					"group_id", group.group.ID,
+					"group_name", group.group.Name,
+					"group_members", len(group.members),
+					"attempted_upstreams", len(attemptedUpstreams),
+				)
+				for _, member := range group.members {
+					_, attempted := attemptedUpstreams[member.upstream.ID]
+					logger.Info("codex capacity fallback candidate unavailable",
+						"candidate_upstream_id", member.upstream.ID,
+						"candidate_upstream_name", member.upstream.Name,
+						"attempted", attempted,
+						"status", member.upstream.Status,
+						"circuit_state", e.router.CircuitBreaker().State(member.upstream.ID).String(),
+						"concurrent", e.router.ConnTracker().Count(member.upstream.ID),
+						"max_concurrent", member.upstream.MaxConcurrent,
+						"is_backup", member.isBackup,
+						"weight", member.weight,
+					)
+				}
 				// inspectCodexCapacityResponse may have consumed and replayed the
 				// body. Restore it before commit so the client and request log keep
 				// the original capacity error when no fallback remains.
@@ -676,7 +696,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 				}
 				return true, false
 			}
-			markRetryableAttempt(reqCtx, "codex_capacity")
+			markRetryableAttempt(reqCtx, codexCapacityRetryReason)
 
 			e.router.ConnTracker().Release(upstream.ID)
 			e.router.CircuitBreaker().RecordFailure(upstream.ID)
@@ -1251,13 +1271,13 @@ func (e *Executor) commitStreamingResponse(
 			}
 			if metrics.CodexCapacityError {
 				reqCtx.CodexCapacityError = true
-				reqCtx.RetryReason = "codex_capacity"
+				reqCtx.RetryReason = codexCapacityAfterCommitRetryReason
 				e.router.UnbindSessionFromUpstream(reqCtx.SessionID, reqCtx.Model, candidate.Upstream.ID)
 				e.router.CircuitBreaker().RecordFailure(candidate.Upstream.ID)
 				if *interruptErrPtr == nil {
 					e.router.Metrics().RecordError(candidate.Upstream.ID)
 				}
-				logger.Warn("codex model-at-capacity after streaming output; failover skipped to preserve response integrity",
+				logger.Warn("codex model-at-capacity after stream commit; failover skipped to preserve response integrity",
 					"upstream_id", candidate.Upstream.ID,
 					"request_id", reqCtx.RequestID,
 				)
