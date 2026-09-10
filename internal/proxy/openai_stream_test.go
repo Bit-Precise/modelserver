@@ -234,3 +234,54 @@ func TestOpenAIStreamInterceptor_ModelFallback(t *testing.T) {
 		t.Errorf("model = %q, want %q", gotModel, "gpt-5.2-fallback")
 	}
 }
+
+func TestCodexTransformer_StreamDetectsCapacityAfterOutput(t *testing.T) {
+	sseData := strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_capacity","model":"gpt-6-astra"}}`,
+		``,
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"partial output"}`,
+		``,
+		`event: response.failed`,
+		`data: {"type":"response.failed","response":{"id":"resp_capacity","model":"gpt-6-astra","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`,
+		``,
+	}, "\n")
+
+	var got StreamMetrics
+	transformer := &CodexTransformer{}
+	wrapped := transformer.WrapStream(
+		io.NopCloser(strings.NewReader(sseData)),
+		time.Now(),
+		func(metrics StreamMetrics) { got = metrics },
+	)
+	output, err := io.ReadAll(wrapped)
+	if err != nil {
+		t.Fatalf("ReadAll failed: %v", err)
+	}
+	if string(output) != sseData {
+		t.Fatalf("stream output changed; got %q, want original bytes", string(output))
+	}
+	if !got.CodexCapacityError {
+		t.Fatal("Codex capacity failure after output was not detected")
+	}
+}
+
+func TestCodexTransformer_StreamDetectsDataOnlyCapacityWithoutUsage(t *testing.T) {
+	sseData := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial output\"}\n\n" +
+		"data: {\"type\":\"error\",\"code\":\"server_is_overloaded\"}\n\n"
+
+	var got StreamMetrics
+	transformer := &CodexTransformer{}
+	wrapped := transformer.WrapStream(
+		io.NopCloser(strings.NewReader(sseData)),
+		time.Now(),
+		func(metrics StreamMetrics) { got = metrics },
+	)
+	if _, err := io.ReadAll(wrapped); err != nil {
+		t.Fatalf("ReadAll failed: %v", err)
+	}
+	if !got.CodexCapacityError {
+		t.Fatal("data-only Codex capacity error without usage was not detected")
+	}
+}

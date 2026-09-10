@@ -93,9 +93,10 @@ type RequestContext struct {
 	CapturedClientHeaders   http.Header
 	CapturedClientTruncated bool
 
-	// CodexCapacityError is set only when the final response is a Codex
-	// model-at-capacity failure with no fallback left. It keeps request
-	// accounting from treating an HTTP 200 response.failed stream as success.
+	// CodexCapacityError is set when a Codex attempt ends with a model-at-
+	// capacity failure. It keeps request accounting from treating either an
+	// immediate HTTP 200 response.failed stream or a late failure after partial
+	// output as success.
 	CodexCapacityError bool
 
 	// Retry observability is kept on the request context so every completion
@@ -1243,7 +1244,31 @@ func (e *Executor) commitStreamingResponse(
 		})
 	} else {
 		wrapped = transformer.WrapStream(upstreamBody, startTime, func(metrics StreamMetrics) {
-			metrics.InterruptErr = *interruptErrPtr
+			if *interruptErrPtr != nil {
+				// A downstream write/read failure takes precedence over a
+				// provider classification when both happen on the same close.
+				metrics.InterruptErr = *interruptErrPtr
+			}
+			if metrics.CodexCapacityError {
+				reqCtx.CodexCapacityError = true
+				reqCtx.RetryReason = "codex_capacity"
+				e.router.UnbindSessionFromUpstream(reqCtx.SessionID, reqCtx.Model, candidate.Upstream.ID)
+				e.router.CircuitBreaker().RecordFailure(candidate.Upstream.ID)
+				if *interruptErrPtr == nil {
+					e.router.Metrics().RecordError(candidate.Upstream.ID)
+				}
+				logger.Warn("codex model-at-capacity after streaming output; failover skipped to preserve response integrity",
+					"upstream_id", candidate.Upstream.ID,
+					"request_id", reqCtx.RequestID,
+				)
+				// The response may already contain output bytes. It is not
+				// safe to append a second channel's response, so record this
+				// retryable failure as exhausted for this request.
+				markRetryExhausted(reqCtx)
+				if metrics.InterruptErr == nil {
+					metrics.InterruptErr = errCodexCapacity
+				}
+			}
 			if reqCtx.CodexCapacityError && metrics.InterruptErr == nil {
 				metrics.InterruptErr = errCodexCapacity
 			}

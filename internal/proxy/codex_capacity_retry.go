@@ -69,6 +69,7 @@ func isCodexCapacityErrorBody(body []byte) bool {
 	}
 	return containsCodexCapacityText(string(trimmed)) ||
 		strings.Contains(strings.ToLower(string(trimmed)), `"server_is_overloaded"`) ||
+		strings.Contains(strings.ToLower(string(trimmed)), `"server_overloaded"`) ||
 		strings.Contains(strings.ToLower(string(trimmed)), `"slow_down"`)
 }
 
@@ -93,6 +94,12 @@ func isCodexCapacityJSONValue(value any, root, errorContext bool) bool {
 			name := strings.ToLower(strings.TrimSpace(key))
 			switch name {
 			case "code", "error_code", "errorcode":
+				if code, ok := item.(string); ok && isCodexCapacityCode(code) {
+					return true
+				}
+			case "codex_error_info":
+				// Codex rollout telemetry uses server_overloaded for the same
+				// condition represented on the wire as server_is_overloaded.
 				if code, ok := item.(string); ok && isCodexCapacityCode(code) {
 					return true
 				}
@@ -123,7 +130,9 @@ func containsCodexCapacityText(value string) bool {
 }
 
 func isCodexCapacityCode(code string) bool {
-	return strings.EqualFold(code, "server_is_overloaded") || strings.EqualFold(code, "slow_down")
+	return strings.EqualFold(code, "server_is_overloaded") ||
+		strings.EqualFold(code, "server_overloaded") ||
+		strings.EqualFold(code, "slow_down")
 }
 
 // inspectCodexCapacityResponse checks a Codex response without consuming the
@@ -162,7 +171,9 @@ func inspectCodexCapacityResponse(resp *http.Response, doErr error, isStream boo
 // a Codex stream. Metadata events (created/in_progress) are held back because
 // the next event can still be response.failed with server_is_overloaded. Once
 // output starts, or a terminal non-capacity event arrives, the response must
-// be committed and cannot be replayed transparently.
+// be committed and cannot be replayed transparently. Unknown JSON events are
+// held briefly too, so newly introduced metadata events do not bypass the
+// capacity check; the probe has a bounded buffer.
 func codexStreamEventAllowsCommit(event []byte) bool {
 	for _, line := range bytes.Split(event, []byte("\n")) {
 		line = bytes.TrimSpace(line)
@@ -174,22 +185,36 @@ func codexStreamEventAllowsCommit(event []byte) bool {
 			Type string `json:"type"`
 		}
 		if json.Unmarshal(data, &envelope) != nil {
-			// A non-JSON SSE event is not a known metadata event; preserve
-			// existing behavior by allowing it through.
+			// A non-JSON SSE event is not inspectable as a Codex envelope;
+			// preserve existing behavior by allowing it through.
 			return true
 		}
-		if envelope.Type == "response.created" || envelope.Type == "response.in_progress" {
+		switch envelope.Type {
+		case "response.created",
+			"response.in_progress",
+			"response.metadata",
+			"codex.response.metadata",
+			"response.content_part.added",
+			"response.content_part.done",
+			"response.custom_tool_call_input.done",
+			"response.output_text.done",
+			"response.reasoning_summary_part.added",
+			"response.reasoning_summary_part.done",
+			"responsesapi.websocket_timing":
 			return false
+		case "response.failed", "response.completed":
+			return true
 		}
-		if envelope.Type == "response.failed" || envelope.Type == "response.completed" ||
-			strings.HasPrefix(envelope.Type, "response.output") ||
+		if strings.HasPrefix(envelope.Type, "response.output") ||
 			strings.HasPrefix(envelope.Type, "response.reasoning") ||
 			strings.HasPrefix(envelope.Type, "response.function_call") ||
 			strings.HasPrefix(envelope.Type, "response.custom_tool_call") {
 			return true
 		}
-		// Unknown response events are safer to forward than to hold forever.
-		return true
+		// Hold unknown JSON response events briefly as well. New Codex metadata
+		// event kinds can precede response.failed; the bounded probe buffer
+		// below prevents this from delaying a normal stream indefinitely.
+		return false
 	}
 	return false
 }
@@ -234,7 +259,11 @@ func probeCodexCapacityStream(body io.ReadCloser) (retry bool, replay io.ReadClo
 		}
 
 		if readErr != nil {
-			if isCodexCapacitySSEEvent(pending.Bytes()) {
+			// A stream request normally returns SSE, but some gateways emit a
+			// JSON error envelope with HTTP 200. Check the complete pending body
+			// as a fallback after the stream reaches EOF; normal Responses output
+			// remains excluded by the envelope-aware matcher.
+			if isCodexCapacitySSEEvent(pending.Bytes()) || isCodexCapacityErrorBody(pending.Bytes()) {
 				_ = body.Close()
 				return true, io.NopCloser(bytes.NewReader(prefix.Bytes()))
 			}

@@ -22,6 +22,12 @@ type StreamMetrics struct {
 	// nil on clean completion. Read by completeStreamingRequest to flip
 	// the request row from success→error and record the cause.
 	InterruptErr error
+	// CodexCapacityError is set when a Codex Responses stream terminates with
+	// server-side capacity/overload after the stream has already started. Such
+	// a stream cannot be transparently replayed because bytes may already have
+	// been sent to the client, but it must still be recorded as a retryable
+	// capacity failure rather than a successful response.
+	CodexCapacityError bool
 }
 
 // ResponseMetrics is the unified metric output from non-streaming response parsing.
@@ -73,7 +79,7 @@ func init() {
 	providerTransformers[types.ProviderOpenAI] = &OpenAITransformer{}
 	providerTransformers[types.ProviderClaudeCode] = &ClaudeCodeTransformer{}
 	providerTransformers[types.ProviderVertexAnthropic] = &VertexAnthropicTransformer{} // tokenManager set by Router init via SetVertexAnthropicTokenManager
-	providerTransformers[types.ProviderVertexGoogle] = &VertexGoogleTransformer{} // tokenManager set by Router init via SetVertexGoogleTokenManager
+	providerTransformers[types.ProviderVertexGoogle] = &VertexGoogleTransformer{}       // tokenManager set by Router init via SetVertexGoogleTokenManager
 	providerTransformers[types.ProviderGemini] = &GeminiTransformer{}
 	providerTransformers[types.ProviderVertexOpenAI] = &VertexOpenAITransformer{}
 	providerTransformers[types.ProviderCodex] = &CodexTransformer{}

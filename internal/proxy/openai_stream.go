@@ -23,8 +23,13 @@ type openaiStreamInterceptor struct {
 	hasUsage      bool
 	ttft          int64
 	gotFirst      bool
-	onComplete    func(model, respID string, inputTokens, outputTokens, cacheReadTokens, ttft int64)
-	once          sync.Once
+	capacityError bool
+	// reportCapacityError is enabled by the Codex transformer. Other OpenAI
+	// providers use the same parser but should not have a Codex-specific
+	// capacity envelope change their completion behavior.
+	reportCapacityError bool
+	onComplete          func(model, respID string, inputTokens, outputTokens, cacheReadTokens, ttft int64)
+	once                sync.Once
 }
 
 func newOpenAIStreamInterceptor(
@@ -94,6 +99,16 @@ func (si *openaiStreamInterceptor) parseLine(line []byte) {
 		return
 	}
 
+	// Codex can emit response.failed (or a generic error event) after it has
+	// already streamed output. Keep this separate from the normal OpenAI
+	// usage parser: the raw error envelope contains the machine-readable
+	// server_is_overloaded/slow_down code or the user-facing capacity message,
+	// while ordinary output_text/content fields are intentionally ignored by
+	// isCodexCapacityErrorBody.
+	if isCodexCapacityErrorBody(data) {
+		si.capacityError = true
+	}
+
 	eventType, model, respID, usage, hasUsage := ParseOpenAIStreamEvent(data)
 	if model != "" {
 		si.model = model
@@ -113,9 +128,16 @@ func (si *openaiStreamInterceptor) parseLine(line []byte) {
 	}
 }
 
+func (si *openaiStreamInterceptor) codexCapacityErrorDetected() bool {
+	return si.capacityError
+}
+
 func (si *openaiStreamInterceptor) finish() {
 	si.once.Do(func() {
-		if si.onComplete != nil && si.hasUsage {
+		// A Codex capacity/error event may not carry a usage object. Still
+		// finalize so the executor can release the connection and record the
+		// provider failure instead of leaving the request in processing state.
+		if si.onComplete != nil && (si.hasUsage || (si.reportCapacityError && si.capacityError)) {
 			model := si.model
 			if model == "" {
 				model = si.modelFallback

@@ -32,8 +32,9 @@ func (t *CodexTransformer) SetUpstream(r *http.Request, upstream *types.Upstream
 
 // WrapStream reuses the OpenAI Responses SSE interceptor.
 func (t *CodexTransformer) WrapStream(body io.ReadCloser, startTime time.Time, onComplete func(StreamMetrics)) io.ReadCloser {
-	return newOpenAIStreamInterceptor(body, startTime, "", func(model, respID string, inputTokens, outputTokens, cacheReadTokens, ttft int64) {
-		onComplete(StreamMetrics{
+	var interceptor *openaiStreamInterceptor
+	interceptor = newOpenAIStreamInterceptor(body, startTime, "", func(model, respID string, inputTokens, outputTokens, cacheReadTokens, ttft int64) {
+		metrics := StreamMetrics{
 			Model:               model,
 			MsgID:               respID,
 			InputTokens:         inputTokens,
@@ -41,8 +42,12 @@ func (t *CodexTransformer) WrapStream(body io.ReadCloser, startTime time.Time, o
 			CacheCreationTokens: 0,
 			CacheReadTokens:     cacheReadTokens,
 			TTFTMs:              ttft,
-		})
+		}
+		metrics.CodexCapacityError = interceptor.codexCapacityErrorDetected()
+		onComplete(metrics)
 	})
+	interceptor.reportCapacityError = true
+	return interceptor
 }
 
 // ParseResponse parses non-streaming OpenAI Responses bodies (same as OpenAITransformer).

@@ -29,6 +29,16 @@ func TestIsCodexCapacityErrorBody(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "machine-readable overloaded alias",
+			body: `{"error":{"code":"server_overloaded"}}`,
+			want: true,
+		},
+		{
+			name: "codex rollout overloaded info",
+			body: `{"codex_error_info":"server_overloaded"}`,
+			want: true,
+		},
+		{
 			name: "top-level message envelope",
 			body: `{"message":"Selected model is at capacity. Please try a different model."}`,
 			want: true,
@@ -115,6 +125,18 @@ func TestProbeCodexCapacityStream_RetryOnFailedEvent(t *testing.T) {
 	}
 }
 
+func TestProbeCodexCapacityStream_HoldsCodexMetadataUntilFailedEvent(t *testing.T) {
+	body := "event: codex.response.metadata\ndata: {\"type\":\"codex.response.metadata\"}\n\n" +
+		"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"}}}\n\n"
+	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if !retry {
+		t.Fatal("probe did not hold Codex metadata long enough to detect capacity failure")
+	}
+	if _, err := io.ReadAll(replay); err != nil {
+		t.Fatalf("read replay body: %v", err)
+	}
+}
+
 func TestProbeCodexCapacityStream_RetryOnCRLFFailedEvent(t *testing.T) {
 	body := "event: response.failed\r\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"}}}\r\n\r\n"
 	retry, _ := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
@@ -172,6 +194,21 @@ func TestProbeCodexCapacityStream_DoesNotRetryOnGeneratedText(t *testing.T) {
 	}
 	if _, err := io.ReadAll(replay); err != nil {
 		t.Fatalf("read replay body: %v", err)
+	}
+}
+
+func TestProbeCodexCapacityStream_RetryOnJSONErrorBody(t *testing.T) {
+	body := `{"error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}`
+	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if !retry {
+		t.Fatal("probe did not recognize a JSON capacity error returned for a stream request")
+	}
+	got, err := io.ReadAll(replay)
+	if err != nil {
+		t.Fatalf("read replay body: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("replay body = %q, want original body", got)
 	}
 }
 
