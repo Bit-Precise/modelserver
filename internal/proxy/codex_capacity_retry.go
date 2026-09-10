@@ -168,12 +168,13 @@ func inspectCodexCapacityResponse(resp *http.Response, doErr error, isStream boo
 }
 
 // codexStreamEventAllowsCommit reports whether it is safe to start forwarding
-// a Codex stream. Metadata events (created/in_progress) are held back because
-// the next event can still be response.failed with server_is_overloaded. Once
-// output starts, or a terminal non-capacity event arrives, the response must
-// be committed and cannot be replayed transparently. Unknown JSON events are
-// held briefly too, so newly introduced metadata events do not bypass the
-// capacity check; the probe has a bounded buffer.
+// a Codex stream. Metadata and structural events (including output_item.added)
+// are held back because the next event can still be response.failed with
+// server_is_overloaded. Once an actual output delta starts, or a terminal
+// non-capacity event arrives, the response must be committed and cannot be
+// replayed transparently. Unknown JSON events are held briefly too, so newly
+// introduced metadata events do not bypass the capacity check; the probe has
+// a bounded buffer.
 func codexStreamEventAllowsCommit(event []byte) bool {
 	for _, line := range bytes.Split(event, []byte("\n")) {
 		line = bytes.TrimSpace(line)
@@ -194,6 +195,7 @@ func codexStreamEventAllowsCommit(event []byte) bool {
 			"response.in_progress",
 			"response.metadata",
 			"codex.response.metadata",
+			"response.output_item.added",
 			"response.content_part.added",
 			"response.content_part.done",
 			"response.custom_tool_call_input.done",

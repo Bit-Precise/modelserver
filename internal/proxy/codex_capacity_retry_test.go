@@ -137,6 +137,40 @@ func TestProbeCodexCapacityStream_HoldsCodexMetadataUntilFailedEvent(t *testing.
 	}
 }
 
+func TestProbeCodexCapacityStream_HoldsOutputItemAddedUntilFailedEvent(t *testing.T) {
+	body := "event: response.created\ndata: {\"type\":\"response.created\"}\n\n" +
+		"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n" +
+		"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"Selected model is at capacity. Please try a different model.\"}}}\n\n"
+	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if !retry {
+		t.Fatal("probe committed the structural output_item.added event before the capacity failure")
+	}
+	got, err := io.ReadAll(replay)
+	if err != nil {
+		t.Fatalf("read replay body: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("replay body = %q, want original body", got)
+	}
+}
+
+func TestProbeCodexCapacityStream_DoesNotRetryAfterOutputDelta(t *testing.T) {
+	body := "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"content\":[]}}\n\n" +
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"visible output\"}\n\n" +
+		"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"}}}\n\n"
+	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if retry {
+		t.Fatal("probe retried after user-visible output had started")
+	}
+	got, err := io.ReadAll(replay)
+	if err != nil {
+		t.Fatalf("read replay body: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("replay body = %q, want original body", got)
+	}
+}
+
 func TestProbeCodexCapacityStream_RetryOnCRLFFailedEvent(t *testing.T) {
 	body := "event: response.failed\r\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"}}}\r\n\r\n"
 	retry, _ := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
