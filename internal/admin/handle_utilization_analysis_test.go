@@ -186,3 +186,17 @@ func TestUtilizationBaseRates_GPT54MiniNano(t *testing.T) {
 		}
 	}
 }
+
+func TestUtilizationBaseRates_GLM53Flash(t *testing.T) {
+	rate, ok := utilizationAnalysisBaseRates["glm-5.3-flash"]
+	if !ok {
+		t.Fatal("glm-5.3-flash missing from utilizationAnalysisBaseRates")
+	}
+	if rate.InputRate != 0.002 || rate.OutputRate != 0.0067 ||
+		rate.CacheCreationRate != 0 || rate.CacheReadRate != 0.0004 {
+		t.Fatalf("glm-5.3-flash rates: %+v; want in=0.002 out=0.0067 cc=0 cr=0.0004", rate)
+	}
+	if rate.LongContext != nil {
+		t.Fatalf("glm-5.3-flash long_context: %+v; want nil", rate.LongContext)
+	}
+}
