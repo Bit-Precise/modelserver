@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 type codexReplayBody struct {
@@ -171,12 +173,11 @@ func inspectCodexCapacityResponse(resp *http.Response, doErr error, isStream boo
 }
 
 // codexStreamEventAllowsCommit reports whether it is safe to start forwarding
-// a Codex stream. Metadata, lifecycle, and *.done events are held back because
-// none of their bytes have reached the client yet and the next event can still
-// be response.failed with server_is_overloaded. Once an actual *.delta starts,
-// an image is partially emitted, or a terminal non-capacity event arrives, the
-// response must be committed and cannot be replayed transparently. Unknown
-// JSON events are held briefly too; the probe has a bounded buffer.
+// a Codex stream. It deliberately tests for actual generated content instead
+// of treating every delta event as output: Codex Desktop can emit empty delta
+// and done events before response.failed with server_is_overloaded. Those
+// structural events remain replayable; a non-empty text/reasoning/tool/image
+// payload commits the response and cannot be followed by another upstream.
 func codexStreamEventAllowsCommit(event []byte) bool {
 	for _, line := range bytes.Split(event, []byte("\n")) {
 		line = bytes.TrimSpace(line)
@@ -184,30 +185,90 @@ func codexStreamEventAllowsCommit(event []byte) bool {
 			continue
 		}
 		data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
-		var envelope struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(data, &envelope) != nil {
+		if !json.Valid(data) {
 			// A non-JSON SSE event is not inspectable as a Codex envelope;
 			// preserve existing behavior by allowing it through.
 			return true
 		}
-		switch envelope.Type {
-		case "error", "response.failed", "response.incomplete", "response.completed":
-			return true
-		}
-		if strings.HasPrefix(envelope.Type, "response.") &&
-			(strings.HasSuffix(envelope.Type, ".delta") ||
-				envelope.Type == "response.image_generation_call.partial_image") {
-			return true
-		}
-		// Hold structural, lifecycle, *.done, and unknown JSON events. If no
-		// actual delta follows, a capacity failure can still be retried without
-		// exposing bytes from two different upstream responses to the client.
-		// The bounded probe buffer below prevents indefinite accumulation.
-		return false
+		return codexResponsePayloadHasOutput(data)
 	}
 	return false
+}
+
+// codexResponsePayloadHasOutput is the Responses equivalent of a TTFT/token
+// predicate. A delta with an empty string, an output_item.added with empty
+// content, or a done event with no text/arguments is still output-free and can
+// be held in the bounded bootstrap probe. Terminal events are deliberately
+// treated as commit points so normal completion and non-capacity errors are
+// not delayed forever.
+func codexResponsePayloadHasOutput(payload []byte) bool {
+	typ := gjson.GetBytes(payload, "type").String()
+	if typ == "" {
+		return false
+	}
+	if typ == "response.completed" || typ == "response.done" ||
+		typ == "response.incomplete" || typ == "response.failed" || typ == "error" {
+		return true
+	}
+	stringNonEmpty := func(path string) bool {
+		// A single whitespace is still a real token and is therefore already
+		// visible output. Only the empty string (or a missing field) is
+		// output-free.
+		return gjson.GetBytes(payload, path).String() != ""
+	}
+	switch typ {
+	case "response.reasoning_summary_text.delta", "response.reasoning.delta",
+		"response.reasoning_text.delta", "response.output_text.delta",
+		"response.text.delta", "response.function_call_arguments.delta",
+		"response.custom_tool_call_input.delta", "response.code_interpreter_call_code.delta",
+		"response.mcp_call_arguments.delta", "response.shell_call_command.delta",
+		"response.refusal.delta", "response.audio.transcript.delta":
+		return stringNonEmpty("delta")
+	case "response.audio.delta":
+		return stringNonEmpty("delta") || stringNonEmpty("data")
+	case "response.image_generation_call.partial_image":
+		return stringNonEmpty("partial_image_b64")
+	case "response.shell_call_command.added":
+		return stringNonEmpty("command")
+	case "response.reasoning_summary_text.done", "response.reasoning_text.done",
+		"response.output_text.done":
+		return stringNonEmpty("text")
+	case "response.refusal.done":
+		return stringNonEmpty("refusal")
+	case "response.function_call_arguments.done", "response.mcp_call_arguments.done":
+		return stringNonEmpty("arguments")
+	case "response.custom_tool_call_input.done":
+		return stringNonEmpty("input")
+	case "response.code_interpreter_call_code.done":
+		return stringNonEmpty("code")
+	case "response.shell_call_command.done":
+		return stringNonEmpty("command")
+	case "response.reasoning_summary_part.done":
+		return stringNonEmpty("part.text")
+	case "response.content_part.done":
+		return stringNonEmpty("part.text") || stringNonEmpty("part.refusal")
+	case "response.output_item.done":
+		itemType := gjson.GetBytes(payload, "item.type").String()
+		switch itemType {
+		case "function_call":
+			return stringNonEmpty("item.arguments")
+		case "custom_tool_call":
+			return stringNonEmpty("item.input")
+		case "message":
+			for _, content := range gjson.GetBytes(payload, "item.content").Array() {
+				if content.Get("text").String() != "" ||
+					content.Get("refusal").String() != "" {
+					return true
+				}
+			}
+		}
+		return false
+	default:
+		// response.created/in_progress, codex.* metadata, keepalives, output
+		// item announcements, and unknown structural events carry no generated
+		// output. Keep them buffered until a bounded probe limit is reached.
+		return false
+	}
 }
 
 // probeCodexCapacityStream reads just enough of a successful Codex SSE body

@@ -217,10 +217,10 @@ func TestCodexStreamEventAllowsCommit(t *testing.T) {
 		{name: "output item added", eventType: "response.output_item.added", want: false},
 		{name: "output item done", eventType: "response.output_item.done", want: false},
 		{name: "reasoning done", eventType: "response.reasoning_summary_text.done", want: false},
-		{name: "output delta", eventType: "response.output_text.delta", want: true},
-		{name: "reasoning delta", eventType: "response.reasoning_summary_text.delta", want: true},
-		{name: "function delta", eventType: "response.function_call_arguments.delta", want: true},
-		{name: "partial image", eventType: "response.image_generation_call.partial_image", want: true},
+		{name: "empty output delta", eventType: "response.output_text.delta", want: false},
+		{name: "empty reasoning delta", eventType: "response.reasoning_summary_text.delta", want: false},
+		{name: "empty function delta", eventType: "response.function_call_arguments.delta", want: false},
+		{name: "empty partial image", eventType: "response.image_generation_call.partial_image", want: false},
 		{name: "failed", eventType: "response.failed", want: true},
 		{name: "incomplete", eventType: "response.incomplete", want: true},
 		{name: "completed", eventType: "response.completed", want: true},
@@ -233,6 +233,50 @@ func TestCodexStreamEventAllowsCommit(t *testing.T) {
 				t.Fatalf("codexStreamEventAllowsCommit(%q) = %v, want %v", tt.eventType, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCodexStreamEventAllowsCommit_OnlyWithActualOutput(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+		want  bool
+	}{
+		{"text delta", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n", true},
+		{"reasoning delta", "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"thinking\"}\n\n", true},
+		{"function delta", "data: {\"type\":\"response.function_call_arguments.delta\",\"delta\":\"{\\\"x\\\":1}\"}\n\n", true},
+		{"image", "data: {\"type\":\"response.image_generation_call.partial_image\",\"partial_image_b64\":\"abc\"}\n\n", true},
+		{"text done", "data: {\"type\":\"response.output_text.done\",\"text\":\"done\"}\n\n", true},
+		{"whitespace text delta", "data: {\"type\":\"response.output_text.delta\",\"delta\":\" \"}\n\n", true},
+		{"empty text delta", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"\"}\n\n", false},
+		{"empty output item", "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"content\":[]}}\n\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codexStreamEventAllowsCommit([]byte(tt.event)); got != tt.want {
+				t.Fatalf("codexStreamEventAllowsCommit() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProbeCodexCapacityStream_RetryAfterEmptyDelta(t *testing.T) {
+	body := "event: response.created\ndata: {\"type\":\"response.created\"}\n\n" +
+		"event: response.in_progress\ndata: {\"type\":\"response.in_progress\"}\n\n" +
+		"event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\",\"content\":[]}}\n\n" +
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"\"}\n\n" +
+		"event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"text\":\"\"}\n\n" +
+		"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"}}}\n\n"
+	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if !retry {
+		t.Fatal("empty delta/done events committed the stream before the capacity failure")
+	}
+	got, err := io.ReadAll(replay)
+	if err != nil {
+		t.Fatalf("read replay body: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("replay body = %q, want original body", got)
 	}
 }
 
