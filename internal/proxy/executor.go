@@ -492,31 +492,8 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			outReq.Header.Set("Content-Type", "application/json")
 		}
 
-		// Forward select client headers that upstream providers need.
-		for _, h := range []string{
-			"Anthropic-Beta",
-			"Anthropic-Dangerous-Direct-Browser-Access",
-			"Anthropic-Version",
-			"User-Agent",
-			"X-App",
-			// Claude Code client headers for analytics and request correlation.
-			"X-Claude-Code-Session-Id",
-			"X-Client-Request-Id",
-			"X-Client-App",
-			"X-Anthropic-Additional-Protection",
-			"X-Claude-Remote-Container-Id",
-			"X-Claude-Remote-Session-Id",
-		} {
-			if v := r.Header.Get(h); v != "" {
-				outReq.Header.Set(h, v)
-			}
-		}
-		// Forward X-Stainless-* headers.
-		for key, vals := range r.Header {
-			if strings.HasPrefix(http.CanonicalHeaderKey(key), "X-Stainless-") {
-				outReq.Header[http.CanonicalHeaderKey(key)] = vals
-			}
-		}
+		// Forward the client headers needed by the selected provider.
+		forwardClientHeaders(outReq.Header, r.Header)
 
 		// For Bedrock, inject the resolved model and streaming flag into the
 		// request context so SetUpstream can construct the correct URL path.
@@ -2142,6 +2119,51 @@ func writeExtraUsageSuccessHeaders(w http.ResponseWriter, rc *RequestContext) {
 		w.Header().Set("X-Extra-Usage-Cost-Credits", strconv.FormatInt(rc.ExtraUsageCostCredits, 10))
 	}
 	w.Header().Set("X-Extra-Usage-Balance-Credits", strconv.FormatInt(rc.ExtraUsageBalanceAfterCredits, 10))
+}
+
+// forwardClientHeaders copies the provider-relevant client headers into a
+// freshly-built outbound request. This is intentionally separate from
+// sanitizeOutboundHeaders: the sanitizer runs after SetUpstream and cannot
+// restore headers that were omitted here.
+func forwardClientHeaders(dst, src http.Header) {
+	for _, h := range []string{
+		"Anthropic-Beta",
+		"Anthropic-Dangerous-Direct-Browser-Access",
+		"Anthropic-Version",
+		// Codex Responses API request headers. Keep legacy spellings long
+		// enough for directorSetCodexUpstream to migrate them.
+		"Accept",
+		"Session-Id",
+		"Thread-Id",
+		"Session_id",
+		"Thread_id",
+		"User-Agent",
+		"X-App",
+		// Claude Code client headers for analytics and request correlation.
+		"X-Claude-Code-Session-Id",
+		"X-Client-Request-Id",
+		"X-Client-App",
+		"X-Anthropic-Additional-Protection",
+		"X-Claude-Remote-Container-Id",
+		"X-Claude-Remote-Session-Id",
+	} {
+		if v := src.Get(h); v != "" {
+			dst.Set(h, v)
+		}
+	}
+
+	// Codex/OpenAI header names change as the CLI adds backend capabilities.
+	// Keep the families aligned with sanitizeOutboundHeaders below rather than
+	// silently dropping a newly-introduced Responses API header here.
+	for key, vals := range src {
+		canon := http.CanonicalHeaderKey(key)
+		if strings.HasPrefix(canon, "X-Stainless-") ||
+			strings.HasPrefix(canon, "X-Codex-") ||
+			strings.HasPrefix(canon, "X-Openai-") ||
+			strings.HasPrefix(canon, "X-Oai-") {
+			dst[canon] = vals
+		}
+	}
 }
 
 // sanitizeOutboundHeaders returns a new header map containing only headers

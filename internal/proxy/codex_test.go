@@ -199,19 +199,19 @@ func TestSanitizeOutboundHeaders_PassesCodexHeaders(t *testing.T) {
 		"Thread-Id":          {"tid"},
 		// Codex 0.144.1 header families (x-codex-*, x-openai-*, x-oai-*).
 		// See the sanitizeOutboundHeaders comment for the full list.
-		"X-Codex-Window-Id":                          {"win-1"},
-		"X-Codex-Installation-Id":                    {"inst-1"},
-		"X-Codex-Turn-State":                         {"opaque"},
-		"X-Codex-Turn-Metadata":                      {"{}"},
-		"X-Codex-Beta-Features":                      {"foo,bar"},
-		"X-Codex-Parent-Thread-Id":                   {"parent"},
-		"X-Openai-Subagent":                          {"review"},
-		"X-Openai-Memgen-Request":                    {"true"},
-		"X-Openai-Internal-Codex-Responses-Lite":     {"true"},
-		"X-Openai-Internal-Codex-Residency":          {"us"},
-		"X-Openai-Fedramp":                           {"true"},
-		"X-Oai-Attestation":                          {"blob"},
-		"X-Random-Garbage":                           {"drop me"},
+		"X-Codex-Window-Id":                      {"win-1"},
+		"X-Codex-Installation-Id":                {"inst-1"},
+		"X-Codex-Turn-State":                     {"opaque"},
+		"X-Codex-Turn-Metadata":                  {"{}"},
+		"X-Codex-Beta-Features":                  {"foo,bar"},
+		"X-Codex-Parent-Thread-Id":               {"parent"},
+		"X-Openai-Subagent":                      {"review"},
+		"X-Openai-Memgen-Request":                {"true"},
+		"X-Openai-Internal-Codex-Responses-Lite": {"true"},
+		"X-Openai-Internal-Codex-Residency":      {"us"},
+		"X-Openai-Fedramp":                       {"true"},
+		"X-Oai-Attestation":                      {"blob"},
+		"X-Random-Garbage":                       {"drop me"},
 	}
 	out := sanitizeOutboundHeaders(in)
 	for _, want := range []string{
@@ -247,5 +247,72 @@ func TestSanitizeOutboundHeaders_PassesCodexHeaders(t *testing.T) {
 	}
 	if v := out.Get("Content-Encoding"); v != "" {
 		t.Errorf("Content-Encoding should not pass through (proxy decompresses), got %q", v)
+	}
+}
+
+func TestForwardClientHeaders_PassesCodexHeaders(t *testing.T) {
+	src := http.Header{
+		"Session-Id":          {"session-1"},
+		"Thread-Id":           {"thread-1"},
+		"Session_id":          {"legacy-session"},
+		"Thread_id":           {"legacy-thread"},
+		"Accept":              {"text/event-stream"},
+		"X-Codex-Turn-State":  {"state"},
+		"X-Codex-Window-Id":   {"window"},
+		"X-Openai-Subagent":   {"review"},
+		"X-Oai-Attestation":   {"attestation"},
+		"X-Stainless-Runtime": {"go"},
+		"X-Random-Garbage":    {"drop"},
+		"Authorization":       {"client-secret"},
+		"Content-Encoding":    {"zstd"},
+	}
+	dst := make(http.Header)
+	forwardClientHeaders(dst, src)
+
+	for _, want := range []string{
+		"Session-Id", "Thread-Id", "Session_id", "Thread_id", "Accept",
+		"X-Codex-Turn-State", "X-Codex-Window-Id", "X-Openai-Subagent",
+		"X-Oai-Attestation", "X-Stainless-Runtime",
+	} {
+		if got := dst.Get(want); got != src.Get(want) {
+			t.Errorf("header %q = %q, want %q", want, got, src.Get(want))
+		}
+	}
+	for _, dropped := range []string{"X-Random-Garbage", "Authorization", "Content-Encoding"} {
+		if got := dst.Get(dropped); got != "" {
+			t.Errorf("header %q should not be forwarded, got %q", dropped, got)
+		}
+	}
+}
+
+func TestForwardClientHeaders_CodexIdentitySurvivesSetup(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		name := "modern"
+		sessionHeader, threadHeader := "session-id", "thread-id"
+		if legacy {
+			name = "legacy"
+			sessionHeader, threadHeader = "session_id", "thread_id"
+		}
+		t.Run(name, func(t *testing.T) {
+			clientHeaders := make(http.Header)
+			clientHeaders.Set(sessionHeader, "client-session")
+			clientHeaders.Set(threadHeader, "client-thread")
+			// Exercise the same header pipeline as each executor attempt.
+			for attempt := 0; attempt < 2; attempt++ {
+				req := httptest.NewRequest(http.MethodPost, "http://proxy.local/v1/responses", nil)
+				forwardClientHeaders(req.Header, clientHeaders)
+				directorSetCodexUpstream(req, "", "tok", "org_1", "up-1")
+				req.Header = sanitizeOutboundHeaders(req.Header)
+				if got := req.Header.Get("session-id"); got != "client-session" {
+					t.Errorf("attempt %d session-id = %q, want client-session", attempt, got)
+				}
+				if got := req.Header.Get("thread-id"); got != "client-thread" {
+					t.Errorf("attempt %d thread-id = %q, want client-thread", attempt, got)
+				}
+				if req.Header.Get("session_id") != "" || req.Header.Get("thread_id") != "" {
+					t.Error("legacy header names should not reach the upstream")
+				}
+			}
+		})
 	}
 }
