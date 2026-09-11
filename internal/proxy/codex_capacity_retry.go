@@ -137,6 +137,8 @@ func containsCodexCapacityText(value string) bool {
 func isCodexCapacityCode(code string) bool {
 	return strings.EqualFold(code, "server_is_overloaded") ||
 		strings.EqualFold(code, "server_overloaded") ||
+		strings.EqualFold(code, "overloaded_error") ||
+		strings.EqualFold(code, "model_at_capacity") ||
 		strings.EqualFold(code, "slow_down")
 }
 
@@ -356,9 +358,55 @@ func isCodexCapacitySSEEvent(event []byte) bool {
 		return false
 	}
 	if len(data) > 0 {
+		// A terminal can carry an overload code after the provider has already
+		// attached generated output or billed usage. Such a response is no
+		// longer safe to replay: forwarding it as an in-stream failure preserves
+		// the response lifecycle and avoids dropping output.
+		if codexCapacityTerminalHasOutput(data) {
+			return false
+		}
 		return isCodexCapacityErrorBody(data)
 	}
 	return isCodexCapacityErrorBody(event)
+}
+
+// codexCapacityTerminalHasOutput reports whether a terminal capacity envelope
+// already contains output evidence. Codex has returned both a non-empty output
+// list and usage-only terminals, including reasoning token counts, so checking
+// only the event code would incorrectly discard a partially generated answer.
+func codexCapacityTerminalHasOutput(data []byte) bool {
+	for _, path := range []string{"output", "response.output"} {
+		value := gjson.GetBytes(data, path)
+		if !value.Exists() || value.Type == gjson.Null {
+			continue
+		}
+		if value.IsArray() {
+			if len(value.Array()) > 0 {
+				return true
+			}
+			continue
+		}
+		if value.IsObject() {
+			if len(value.Map()) > 0 {
+				return true
+			}
+			continue
+		}
+		if value.String() != "" {
+			return true
+		}
+	}
+	for _, path := range []string{
+		"usage.output_tokens", "response.usage.output_tokens",
+		"usage.output_tokens_details.reasoning_tokens",
+		"response.usage.output_tokens_details.reasoning_tokens",
+	} {
+		value := gjson.GetBytes(data, path)
+		if value.Exists() && value.Float() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCodexSSEEvent(event []byte) (eventName string, data []byte) {

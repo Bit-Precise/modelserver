@@ -29,6 +29,16 @@ func TestIsCodexCapacityErrorBody(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "machine-readable overloaded error code",
+			body: `{"error":{"code":"overloaded_error"}}`,
+			want: true,
+		},
+		{
+			name: "machine-readable model at capacity code",
+			body: `{"error":{"code":"model_at_capacity"}}`,
+			want: true,
+		},
+		{
 			name: "machine-readable overloaded alias",
 			body: `{"error":{"code":"server_overloaded"}}`,
 			want: true,
@@ -270,6 +280,22 @@ func TestProbeCodexCapacityStream_RetryAfterEmptyDelta(t *testing.T) {
 	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
 	if !retry {
 		t.Fatal("empty delta/done events committed the stream before the capacity failure")
+	}
+	got, err := io.ReadAll(replay)
+	if err != nil {
+		t.Fatalf("read replay body: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("replay body = %q, want original body", got)
+	}
+}
+
+func TestProbeCodexCapacityStream_DoesNotRetryTerminalWithOutput(t *testing.T) {
+	body := "event: response.created\ndata: {\"type\":\"response.created\"}\n\n" +
+		"event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"},\"output\":[{\"type\":\"message\"}],\"usage\":{\"output_tokens\":1}}}\n\n"
+	retry, replay := probeCodexCapacityStream(io.NopCloser(strings.NewReader(body)))
+	if retry {
+		t.Fatal("terminal carrying output was incorrectly marked replayable")
 	}
 	got, err := io.ReadAll(replay)
 	if err != nil {
