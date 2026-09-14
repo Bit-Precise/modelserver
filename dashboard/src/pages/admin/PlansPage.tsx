@@ -261,6 +261,12 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
       output_multiplier: 4,
     },
   },
+  "deepseek-v4.1-flash": {
+    input_rate: 0.002427,
+    output_rate: 0.009709,
+    cache_creation_rate: 0,
+    cache_read_rate: 0.0000485,
+  },
   "deepseek-v4-pro-0813": {
     input_rate: 0.010923,
     output_rate: 0.032769,
