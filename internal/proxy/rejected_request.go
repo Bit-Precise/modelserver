@@ -20,7 +20,7 @@ import (
 // requestKindFromRequest maps the incoming path + method to a
 // types.Kind* constant. Mirrors the per-handler constants chosen in
 // handler.go (search for `RequestKind: types.Kind`). Returns "" if
-// the path is outside the proxy's POST request surface (admin,
+// the path is outside the proxy's POST / Responses WebSocket surface (admin,
 // health, GETs on /v1/models or /v1/usage, etc.); the caller treats
 // "" the same as the production success path treats an unrouted
 // pre-handler rejection: the column stays empty.
@@ -32,6 +32,9 @@ import (
 func requestKindFromRequest(r *http.Request) string {
 	if r == nil {
 		return ""
+	}
+	if isResponsesWebsocketRequest(r) {
+		return types.KindOpenAIResponsesWebsocket
 	}
 	if r.Method != http.MethodPost {
 		return ""
@@ -85,6 +88,9 @@ var streamingBodyPaths = map[string]bool{
 func peekStreaming(r *http.Request) bool {
 	if r == nil {
 		return false
+	}
+	if isResponsesWebsocketRequest(r) {
+		return true
 	}
 	if strings.HasPrefix(r.URL.Path, "/v1beta/models/") {
 		// Gemini native: any `:stream*` suffix means streaming.
@@ -154,6 +160,9 @@ func buildRejectedRequestRow(
 	}
 
 	metadata := map[string]string{}
+	if responsesWebsocketFromContext(r.Context()) != nil {
+		metadata["transport"] = "websocket"
+	}
 	if ua := r.Header.Get("User-Agent"); ua != "" {
 		metadata["user_agent"] = ua
 	}
@@ -172,11 +181,11 @@ func buildRejectedRequestRow(
 	}
 
 	return &types.Request{
-		ProjectID:        project.ID,
-		APIKeyID:         apiKey.ID,
-		OAuthGrantID:     OAuthGrantIDFromContext(r.Context()),
-		CreatedBy:        apiKey.CreatedBy,
-		TraceID:          TraceIDFromContext(r.Context()),
+		ProjectID:    project.ID,
+		APIKeyID:     apiKey.ID,
+		OAuthGrantID: OAuthGrantIDFromContext(r.Context()),
+		CreatedBy:    apiKey.CreatedBy,
+		TraceID:      TraceIDFromContext(r.Context()),
 		// Provider is intentionally left empty: rejection happens before
 		// upstream selection, so we don't know which upstream this would
 		// have hit. The success-path pending row (handler.go CreateRequest)

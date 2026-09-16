@@ -129,10 +129,11 @@ func reassembleSSE(rec *Record, logger *slog.Logger) []byte {
 	// httplog module. If those constants change, update them here too;
 	// TestKindLiterals could be added later to lock this down.
 	const (
-		kindAnthropicMessages     = "anthropic_messages"
-		kindOpenAIChatCompletions = "openai_chat_completions"
-		kindOpenAIResponses       = "openai_responses"
-		kindOpenAIResponsesCompact = "openai_responses_compact"
+		kindAnthropicMessages        = "anthropic_messages"
+		kindOpenAIChatCompletions    = "openai_chat_completions"
+		kindOpenAIResponses          = "openai_responses"
+		kindOpenAIResponsesWebsocket = "openai_responses_websocket"
+		kindOpenAIResponsesCompact   = "openai_responses_compact"
 	)
 	switch rec.RequestKind {
 	case kindOpenAIChatCompletions:
@@ -142,7 +143,7 @@ func reassembleSSE(rec *Record, logger *slog.Logger) []byte {
 		logger.Warn("httplog: openai chat.completion SSE reassembly produced no events, storing raw",
 			"request_id", rec.RequestID)
 		return rec.ResponseBody
-	case kindOpenAIResponses, kindOpenAIResponsesCompact:
+	case kindOpenAIResponses, kindOpenAIResponsesWebsocket, kindOpenAIResponsesCompact:
 		if b, ok := ReassembleOpenAIResponsesSSE(rec.ResponseBody); ok {
 			return b
 		}

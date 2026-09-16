@@ -35,16 +35,24 @@ func MountRoutes(
 	logger *slog.Logger,
 	introspector TokenIntrospector,
 ) {
-	wire := func(r chi.Router) {
-		r.Use(AuthMiddleware(st, encKey, introspector))
-		r.Use(TraceMiddleware(traceCfg, st, logger))
-		r.Use(ResolveModelMiddleware(catalog, maxBodySize, imagesMaxBodySize))
-		r.Use(SubscriptionEligibilityMiddleware())
-		if limiter != nil {
-			r.Use(RateLimitMiddleware(limiter, st, logger))
-		}
-		r.Use(ExtraUsageGuardMiddleware(euCfg, st, logger))
+	chain := chi.Middlewares{
+		AuthMiddleware(st, encKey, introspector),
+		TraceMiddleware(traceCfg, st, logger),
+		ResolveModelMiddleware(catalog, maxBodySize, imagesMaxBodySize),
+		SubscriptionEligibilityMiddleware(),
 	}
+	if limiter != nil {
+		chain = append(chain, RateLimitMiddleware(limiter, st, logger))
+	}
+	chain = append(chain, ExtraUsageGuardMiddleware(euCfg, st, logger))
+	wire := func(r chi.Router) {
+		r.Use(chain...)
+	}
+
+	// Authenticate the upgrade; run the complete admission chain again for
+	// EVERY response.create, after its model/body become available.
+	r.With(AuthMiddleware(st, encKey, introspector)).Get("/v1/responses",
+		handler.responsesWebSocketHandler(chain.HandlerFunc(handler.handleResponsesWebsocketTurn)))
 
 	r.Route("/v1", func(r chi.Router) {
 		wire(r)

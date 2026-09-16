@@ -18,9 +18,18 @@ func TestIsValidRequestKind_RejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestAllRequestKinds_ContainsExactlyEight(t *testing.T) {
-	if got := len(AllRequestKinds); got != 8 {
-		t.Errorf("len(AllRequestKinds) = %d, want 8", got)
+func TestAllRequestKinds_ContainsExactlyNine(t *testing.T) {
+	if got := len(AllRequestKinds); got != 9 {
+		t.Errorf("len(AllRequestKinds) = %d, want 9", got)
+	}
+}
+
+func TestIsValidRequestKind_OpenAIResponsesWebsocket(t *testing.T) {
+	if !IsValidRequestKind(KindOpenAIResponsesWebsocket) {
+		t.Errorf("IsValidRequestKind(%q) = false, want true", KindOpenAIResponsesWebsocket)
+	}
+	if KindOpenAIResponsesWebsocket == KindOpenAIResponses {
+		t.Fatal("WebSocket and HTTP Responses must have distinct request kinds")
 	}
 }
 

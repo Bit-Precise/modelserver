@@ -327,7 +327,35 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 	}
 
 	// 2. Get ordered list of upstream candidates (primary + retry fallbacks).
-	candidates := e.router.SelectWithRetry(r.Context(), group, reqCtx.SessionID, reqCtx.Model)
+	ws := responsesWebsocketFromContext(r.Context())
+	var candidates []*SelectedUpstream
+	if ws != nil {
+		candidates, err = ws.candidates(e.router, group, reqCtx.Model)
+		if err != nil {
+			writeProxyError(w, http.StatusServiceUnavailable, err.Error())
+			e.finalizeEarlyError(reqCtx, executeStart, err.Error())
+			return
+		}
+		if candidates == nil {
+			// These providers speak native Responses WebSocket. Filter before
+			// balancing so an HTTP-only member cannot hide a capable member.
+			filtered := &resolvedGroup{group: group.group}
+			for _, member := range group.members {
+				if member.upstream.Provider == types.ProviderOpenAI || member.upstream.Provider == types.ProviderCodex {
+					filtered.members = append(filtered.members, member)
+				}
+			}
+			if len(filtered.members) == 0 {
+				writeProxyError(w, http.StatusUpgradeRequired, "route has no native Responses WebSocket upstream; use HTTP POST /v1/responses")
+				e.finalizeEarlyError(reqCtx, executeStart, "route does not support Responses WebSocket")
+				return
+			}
+			group = filtered
+		}
+	}
+	if candidates == nil {
+		candidates = e.router.SelectWithRetry(r.Context(), group, reqCtx.SessionID, reqCtx.Model)
+	}
 
 	if len(candidates) == 0 {
 		e.logger.Warn("SelectWithRetry returned no candidates",
@@ -434,8 +462,10 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 		// Record the selected upstream on the processing-state request row so
 		// in-flight log viewers can see which upstream this request is hitting.
 		// Best-effort: a DB hiccup here must not block the upstream call.
-		if err := e.store.UpdateRequestUpstream(reqCtx.RequestID, upstream.ID, upstream.Provider, attempt+1); err != nil {
-			logger.Warn("failed to record upstream on processing request", "error", err)
+		if reqCtx.RequestID != "" {
+			if err := e.store.UpdateRequestUpstream(reqCtx.RequestID, upstream.ID, upstream.Provider, attempt+1); err != nil {
+				logger.Warn("failed to record upstream on processing request", "error", err)
+			}
 		}
 
 		// 6a. Resolve model name via upstream's ModelMap.
@@ -543,6 +573,16 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 		}
 
 		// 6d. Configure the outbound request for this upstream.
+		if ws != nil {
+			// Keep legacy session_id/thread_id until the Codex director has
+			// migrated them. The common allowlist runs after SetUpstream.
+			outReq.Header = r.Header.Clone()
+			// Only the selected provider may set authentication headers.
+			outReq.Header.Del("Authorization")
+			outReq.Header.Del("X-Api-Key")
+			outReq.Header.Del("X-Goog-Api-Key")
+			outReq.Header.Del("Chatgpt-Account-Id")
+		}
 		if err := transformer.SetUpstream(outReq, upstream, apiKeyForUpstream); err != nil {
 			logger.Error("set upstream failed", "error", err)
 			continue
@@ -591,7 +631,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 
 		// 6g. Execute the request.
 		attemptStart := time.Now()
-		resp, doErr := client.Do(outReq)
+		resp, doErr := e.doUpstreamRequest(client, outReq, candidate, reqCtx, startTime)
 
 		if cancelFn != nil && doErr != nil {
 			// On error, cancel immediately – there is no body to read.
@@ -608,6 +648,12 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 		// the same capacity handling.
 		codexCapacityRetry := false
 		handleCodexCapacity := func() (detected, retry bool) {
+			// Native WebSocket frames may already have reached the model and
+			// refer to connection-local state. Only handshake failures can use
+			// cross-upstream retries; never consume/replay an established turn.
+			if ws != nil && ws.conn != nil {
+				return false, false
+			}
 			if upstream.Provider != types.ProviderCodex ||
 				!inspectCodexCapacityResponse(resp, doErr, reqCtx.IsStream, e.streamIdleTimeout) {
 				return false, false
@@ -798,7 +844,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			}
 			retryReq = retryReq.WithContext(retryCtx)
 
-			resp, doErr = client.Do(retryReq)
+			resp, doErr = e.doUpstreamRequest(client, retryReq, candidate, reqCtx, startTime)
 			if retryCancelFn != nil && doErr != nil {
 				retryCancelFn()
 			}
@@ -855,7 +901,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			}
 			retryReq = retryReq.WithContext(retryCtx)
 
-			resp, doErr = client.Do(retryReq)
+			resp, doErr = e.doUpstreamRequest(client, retryReq, candidate, reqCtx, startTime)
 			if retryCancelFn != nil && doErr != nil {
 				retryCancelFn()
 			}
@@ -908,7 +954,7 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 					}
 					retryReq = retryReq.WithContext(retryCtx)
 
-					resp, doErr = client.Do(retryReq)
+					resp, doErr = e.doUpstreamRequest(client, retryReq, candidate, reqCtx, startTime)
 					if retryCancelFn != nil && doErr != nil {
 						retryCancelFn()
 					}
@@ -1207,8 +1253,9 @@ func (e *Executor) commitStreamingResponse(
 	// ErrStreamIdleTimeout to the client instead of letting the client's own
 	// watchdog (e.g. Claude Code's "Stream idle timeout - partial response
 	// received") fire while modelserver looks healthy.
+	wsBody, _ := resp.Body.(*responsesWebsocketBody)
 	upstreamBody := resp.Body
-	if e.streamIdleTimeout > 0 {
+	if e.streamIdleTimeout > 0 && wsBody == nil {
 		if _, alreadyWrapped := upstreamBody.(interface{ streamIdleTimeoutApplied() }); !alreadyWrapped {
 			upstreamBody = newIdleTimeoutReader(resp.Body, e.streamIdleTimeout)
 		}
@@ -1234,43 +1281,46 @@ func (e *Executor) commitStreamingResponse(
 	var interruptErr error
 	interruptErrPtr := &interruptErr
 
+	completeStream := func(metrics StreamMetrics) {
+		if *interruptErrPtr != nil {
+			// A downstream write/read failure takes precedence over a
+			// provider classification when both happen on the same close.
+			metrics.InterruptErr = *interruptErrPtr
+		}
+		if metrics.CodexCapacityError {
+			reqCtx.CodexCapacityError = true
+			reqCtx.RetryReason = codexCapacityAfterCommitRetryReason
+			e.router.UnbindSessionFromUpstream(reqCtx.SessionID, reqCtx.Model, candidate.Upstream.ID)
+			e.router.CircuitBreaker().RecordFailure(candidate.Upstream.ID)
+			if *interruptErrPtr == nil {
+				e.router.Metrics().RecordError(candidate.Upstream.ID)
+			}
+			logger.Warn("codex model-at-capacity after stream commit; failover skipped to preserve response integrity",
+				"upstream_id", candidate.Upstream.ID,
+				"request_id", reqCtx.RequestID,
+			)
+			// The response may already contain output bytes. It is not
+			// safe to append a second channel's response, so record this
+			// retryable failure as exhausted for this request.
+			markRetryExhausted(reqCtx)
+			if metrics.InterruptErr == nil {
+				metrics.InterruptErr = errCodexCapacity
+			}
+		}
+		if reqCtx.CodexCapacityError && metrics.InterruptErr == nil {
+			metrics.InterruptErr = errCodexCapacity
+		}
+		e.completeStreamingRequest(candidate, reqCtx, metrics, startTime, cancelFn, logger)
+	}
 	var wrapped io.ReadCloser
-	if isImageRequestKind(reqCtx.RequestKind) {
+	if wsBody != nil {
+		wrapped = &responsesWebsocketStream{ReadCloser: upstreamBody, body: wsBody, onComplete: completeStream}
+	} else if isImageRequestKind(reqCtx.RequestKind) {
 		wrapped = newImageStreamInterceptor(upstreamBody, startTime, func(usage ImageTokenUsage, usagePresent bool, ttftMs int64) {
 			e.completeImageStreamingRequest(candidate, reqCtx, usage, usagePresent, *interruptErrPtr, ttftMs, startTime, cancelFn, logger)
 		})
 	} else {
-		wrapped = transformer.WrapStream(upstreamBody, startTime, func(metrics StreamMetrics) {
-			if *interruptErrPtr != nil {
-				// A downstream write/read failure takes precedence over a
-				// provider classification when both happen on the same close.
-				metrics.InterruptErr = *interruptErrPtr
-			}
-			if metrics.CodexCapacityError {
-				reqCtx.CodexCapacityError = true
-				reqCtx.RetryReason = codexCapacityAfterCommitRetryReason
-				e.router.UnbindSessionFromUpstream(reqCtx.SessionID, reqCtx.Model, candidate.Upstream.ID)
-				e.router.CircuitBreaker().RecordFailure(candidate.Upstream.ID)
-				if *interruptErrPtr == nil {
-					e.router.Metrics().RecordError(candidate.Upstream.ID)
-				}
-				logger.Warn("codex model-at-capacity after stream commit; failover skipped to preserve response integrity",
-					"upstream_id", candidate.Upstream.ID,
-					"request_id", reqCtx.RequestID,
-				)
-				// The response may already contain output bytes. It is not
-				// safe to append a second channel's response, so record this
-				// retryable failure as exhausted for this request.
-				markRetryExhausted(reqCtx)
-				if metrics.InterruptErr == nil {
-					metrics.InterruptErr = errCodexCapacity
-				}
-			}
-			if reqCtx.CodexCapacityError && metrics.InterruptErr == nil {
-				metrics.InterruptErr = errCodexCapacity
-			}
-			e.completeStreamingRequest(candidate, reqCtx, metrics, startTime, cancelFn, logger)
-		})
+		wrapped = transformer.WrapStream(upstreamBody, startTime, completeStream)
 	}
 
 	// Optionally wrap with TeeReadCloser for http logging.
@@ -2207,6 +2257,9 @@ func sanitizeOutboundHeaders(h http.Header) http.Header {
 			// through this proxy must disable that feature, or we must add
 			// transparent decompression before TransformBody.
 			canon == "Accept",
+			canon == "Openai-Organization",
+			canon == "Openai-Project",
+			canon == "X-Responsesapi-Include-Timing-Metrics",
 			canon == "Chatgpt-Account-Id",
 			canon == "Originator",
 			canon == "Session-Id",

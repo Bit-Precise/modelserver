@@ -97,7 +97,7 @@ export function RoutesPage() {
     return m;
   }, [projects]);
 
-  // Mirror of the SQL inference table in migration 021. Returns the kinds
+  // Provider-family hints for the kinds
   // the chosen upstream group's members typically serve; an empty array
   // means "cross-family / unrecognised — no inference possible".
   const kindMismatch = useMemo(() => {
@@ -116,8 +116,8 @@ export function RoutesPage() {
       inferred = ["anthropic_messages", "anthropic_count_tokens"];
     } else if (subsetOf(["anthropic", "claudecode", "bedrock-anthropic", "vertex-anthropic"])) {
       inferred = ["anthropic_messages"];
-    } else if (providers.size === 1 && providers.has("openai")) {
-      inferred = ["openai_responses"];
+    } else if (subsetOf(["openai", "codex"])) {
+      inferred = ["openai_responses", "openai_responses_websocket", "openai_responses_compact"];
     } else if (subsetOf(["vertex-openai", "bedrock-openai"])) {
       inferred = ["openai_chat_completions"];
     } else if (subsetOf(["gemini", "vertex-google"])) {
@@ -477,7 +477,8 @@ export function RoutesPage() {
               <p className="text-xs text-muted-foreground">
                 Wire-level endpoints this route serves (e.g. anthropic_messages =
                 /v1/messages, anthropic_count_tokens = /v1/messages/count_tokens).
-                Pick at least one.
+                OpenAI Responses HTTP and WebSocket are separate kinds; select
+                both explicitly to serve both transports. Pick at least one.
               </p>
             </div>
             <div className="space-y-2">

@@ -1,14 +1,15 @@
 package types
 
 const (
-	KindAnthropicMessages       = "anthropic_messages"
-	KindAnthropicCountTokens    = "anthropic_count_tokens"
-	KindOpenAIChatCompletions   = "openai_chat_completions"
-	KindOpenAIResponses         = "openai_responses"
-	KindOpenAIResponsesCompact  = "openai_responses_compact"
-	KindOpenAIImagesGenerations = "openai_images_generations"
-	KindOpenAIImagesEdits       = "openai_images_edits"
-	KindGoogleGenerateContent   = "google_generate_content"
+	KindAnthropicMessages        = "anthropic_messages"
+	KindAnthropicCountTokens     = "anthropic_count_tokens"
+	KindOpenAIChatCompletions    = "openai_chat_completions"
+	KindOpenAIResponses          = "openai_responses"
+	KindOpenAIResponsesWebsocket = "openai_responses_websocket"
+	KindOpenAIResponsesCompact   = "openai_responses_compact"
+	KindOpenAIImagesGenerations  = "openai_images_generations"
+	KindOpenAIImagesEdits        = "openai_images_edits"
+	KindGoogleGenerateContent    = "google_generate_content"
 )
 
 var AllRequestKinds = []string{
@@ -16,6 +17,7 @@ var AllRequestKinds = []string{
 	KindAnthropicCountTokens,
 	KindOpenAIChatCompletions,
 	KindOpenAIResponses,
+	KindOpenAIResponsesWebsocket,
 	KindOpenAIResponsesCompact,
 	KindOpenAIImagesGenerations,
 	KindOpenAIImagesEdits,

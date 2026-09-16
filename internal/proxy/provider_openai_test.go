@@ -26,7 +26,7 @@ func TestGetProviderTransformer_OpenAIChatCompletions(t *testing.T) {
 // TestGetProviderTransformer_OpenAIResponses verifies that the Responses-API
 // path keeps using the existing OpenAITransformer.
 func TestGetProviderTransformer_OpenAIResponses(t *testing.T) {
-	for _, kind := range []string{types.KindOpenAIResponses, types.KindOpenAIResponsesCompact} {
+	for _, kind := range []string{types.KindOpenAIResponses, types.KindOpenAIResponsesWebsocket, types.KindOpenAIResponsesCompact} {
 		got := GetProviderTransformer(types.ProviderOpenAI, kind)
 		if _, ok := got.(*OpenAITransformer); !ok {
 			t.Errorf("GetProviderTransformer(openai, %s) = %T, want *OpenAITransformer", kind, got)

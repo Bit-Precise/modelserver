@@ -108,6 +108,9 @@ func logRateLimitRejection(st *store.Store, r *http.Request, project *types.Proj
 // emitGuardRejection. ExtraUsageReason is empty because classic
 // rate-limit rejections are not on the extra-usage path.
 func logRateLimitRejectionMsg(st *store.Store, r *http.Request, _ *types.Project, _ *types.APIKey, msg string) {
+	if st == nil {
+		return
+	}
 	req := buildRejectedRequestRow(r, types.RequestStatusRateLimited, msg, "")
 	if req == nil {
 		return

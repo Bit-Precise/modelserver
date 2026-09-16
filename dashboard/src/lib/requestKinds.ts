@@ -11,6 +11,7 @@ export const REQUEST_KINDS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "anthropic_count_tokens", label: "Anthropic Count Tokens" },
   { value: "openai_chat_completions", label: "OpenAI Chat Completions" },
   { value: "openai_responses", label: "OpenAI Responses" },
+  { value: "openai_responses_websocket", label: "OpenAI Responses WebSocket" },
   { value: "openai_responses_compact", label: "OpenAI Responses Compact" },
   { value: "openai_images_generations", label: "OpenAI Images Generations" },
   { value: "openai_images_edits", label: "OpenAI Images Edits" },

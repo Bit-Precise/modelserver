@@ -24,6 +24,7 @@ require (
 	github.com/tidwall/sjson v1.2.5
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.21.0
+	nhooyr.io/websocket v1.8.17
 )
 
 require (

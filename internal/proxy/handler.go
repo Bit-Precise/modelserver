@@ -132,10 +132,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	h.handleProxyRequest(w, r, IngressAnthropic, types.KindAnthropicMessages)
 }
 
-// HandleResponses proxies OpenAI /v1/responses (stream + non-stream).
+// HandleResponses proxies HTTP POST /v1/responses (stream + non-stream).
 // Routes are matched against KindOpenAIResponses.
 func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	h.handleProxyRequest(w, r, IngressOpenAI, types.KindOpenAIResponses)
+}
+
+// handleResponsesWebsocketTurn processes one response.create after upgrade.
+// It uses its own request kind for routing and accounting, even though the
+// transport adapter represents each turn internally as a POST body.
+func (h *Handler) handleResponsesWebsocketTurn(w http.ResponseWriter, r *http.Request) {
+	h.handleProxyRequest(w, r, IngressOpenAI, types.KindOpenAIResponsesWebsocket)
 }
 
 // HandleResponsesCompact proxies OpenAI /v1/responses/compact (unary).
@@ -500,6 +507,9 @@ func (h *Handler) handleProxyRequest(w http.ResponseWriter, r *http.Request, ing
 	}
 
 	// Insert a pending request record before proxying.
+	if responsesWebsocketFromContext(r.Context()) != nil {
+		metadata["transport"] = "websocket"
+	}
 	pendingReq := &types.Request{
 		ProjectID:    project.ID,
 		APIKeyID:     apiKey.ID,

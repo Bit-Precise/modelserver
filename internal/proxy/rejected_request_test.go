@@ -44,6 +44,43 @@ func TestRequestKindFromRequest_AllRoutes(t *testing.T) {
 	}
 }
 
+func TestRequestKindFromRequest_ResponsesWebsocket(t *testing.T) {
+	for _, tc := range []struct {
+		name, method  string
+		upgrade, turn bool
+		want          string
+	}{
+		{"upgrade", http.MethodGet, true, false, types.KindOpenAIResponsesWebsocket},
+		{"internal turn", http.MethodPost, false, true, types.KindOpenAIResponsesWebsocket},
+		{"HTTP body with response.create", http.MethodPost, false, false, types.KindOpenAIResponses},
+		{"POST with upgrade headers", http.MethodPost, true, false, types.KindOpenAIResponses},
+		{"plain GET", http.MethodGet, false, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(tc.method, "/v1/responses", strings.NewReader(`{"type":"response.create","model":"gpt-5"}`))
+			if tc.upgrade {
+				r.Header.Set("Upgrade", "WebSocket")
+				r.Header.Set("Connection", "keep-alive, Upgrade")
+			}
+			ctx := context.WithValue(r.Context(), ctxProject, &types.Project{ID: "p1"})
+			ctx = context.WithValue(ctx, ctxAPIKey, &types.APIKey{ID: "k1"})
+			if tc.turn {
+				ctx = context.WithValue(ctx, responsesWebsocketKey, &responsesWebsocketSession{})
+			}
+			r = r.WithContext(ctx)
+			if got := requestKindFromRequest(r); got != tc.want {
+				t.Fatalf("kind = %q, want %q", got, tc.want)
+			}
+			if tc.want == types.KindOpenAIResponsesWebsocket {
+				row := buildRejectedRequestRow(r, types.RequestStatusRateLimited, "rate limited", "")
+				if row == nil || row.RequestKind != tc.want || !row.Streaming {
+					t.Fatalf("rejected WebSocket row = %+v", row)
+				}
+			}
+		})
+	}
+}
+
 func TestPeekStreaming(t *testing.T) {
 	cases := []struct {
 		name, method, path, body string
