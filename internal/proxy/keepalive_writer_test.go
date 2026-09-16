@@ -21,10 +21,10 @@ type fakeRW struct {
 
 func newFakeRW() *fakeRW { return &fakeRW{hdr: http.Header{}} }
 
-func (f *fakeRW) Header() http.Header  { return f.hdr }
-func (f *fakeRW) WriteHeader(s int)    { f.status = s }
-func (f *fakeRW) Flush()               { atomic.AddInt64(&f.flush, 1) }
-func (f *fakeRW) FlushCount() int64    { return atomic.LoadInt64(&f.flush) }
+func (f *fakeRW) Header() http.Header { return f.hdr }
+func (f *fakeRW) WriteHeader(s int)   { f.status = s }
+func (f *fakeRW) Flush()              { atomic.AddInt64(&f.flush, 1) }
+func (f *fakeRW) FlushCount() int64   { return atomic.LoadInt64(&f.flush) }
 func (f *fakeRW) Snapshot() []byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -142,9 +142,11 @@ func TestKeepaliveWriter_NoInterleaveUnderConcurrency(t *testing.T) {
 				}
 				// Yield so the timer goroutine and peer writers
 				// actually get scheduled between writes; without
-				// this the loop completes in microseconds and the
-				// 1ms timer never fires.
-				time.Sleep(200 * time.Microsecond)
+				// Leave a gap longer than the 1ms heartbeat interval so
+				// the timer is guaranteed an opportunity to fire; a
+				// sub-millisecond gap can be continuously masked by the
+				// other writer goroutines resetting the timer.
+				time.Sleep(2 * time.Millisecond)
 			}
 		}()
 	}
@@ -182,8 +184,8 @@ func TestKeepaliveWriter_NoInterleaveUnderConcurrency(t *testing.T) {
 	}
 	// Heartbeats must actually have fired during the test — otherwise
 	// the concurrency contract isn't being exercised at all. With 4
-	// writers of 50 events each at 200µs/event we run ~10ms, so the
-	// 1ms timer should fire several times; we require at least one to
+	// writers of 50 events each at 2ms/event we run ~100ms, so the 1ms
+	// timer should fire several times; we require at least one to
 	// keep the assertion resilient to scheduler quirks.
 	if heartbeats == 0 {
 		t.Errorf("no heartbeats fired during the test — concurrency contract not exercised")
