@@ -10,14 +10,14 @@ import (
 // CandidateInfo provides upstream state to the balancer.
 type CandidateInfo struct {
 	Upstream    *types.Upstream
-	Weight      int   // Effective weight (from group member override, or upstream default)
+	Weight      int // Effective weight (from group member override, or upstream default)
 	IsBackup    bool
 	ActiveConns int64 // From ConnectionTracker
 }
 
 // Balancer selects an upstream from pre-filtered candidates using a single policy.
-// Candidates have already been filtered by circuit breaker (open circuits removed)
-// and health checker (down upstreams removed). The balancer only picks from healthy options.
+// Candidates have already been filtered by operator status and concurrency limits.
+// Prior request failures do not remove upstreams from selection.
 type Balancer struct {
 	policy  string
 	tracker *ConnectionTracker

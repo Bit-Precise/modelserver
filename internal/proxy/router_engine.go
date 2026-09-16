@@ -34,15 +34,14 @@ type sessionKey struct {
 // It is the central routing engine for the upstream-based routing model.
 type Router struct {
 	mu            sync.RWMutex
-	upstreams     map[string]*types.Upstream    // id -> upstream
-	groups        map[string]*resolvedGroup     // groupID -> resolved group
-	routes        []types.Route                 // sorted by match_priority descending
-	decryptedKeys map[string]string             // upstreamID -> API key
+	upstreams     map[string]*types.Upstream // id -> upstream
+	groups        map[string]*resolvedGroup  // groupID -> resolved group
+	routes        []types.Route              // sorted by match_priority descending
+	decryptedKeys map[string]string          // upstreamID -> API key
 
-	balancers      map[string]*lb.Balancer      // groupID -> balancer
-	circuitBreaker *lb.CircuitBreaker
-	connTracker    *lb.ConnectionTracker
-	metrics        *lb.UpstreamMetrics
+	balancers   map[string]*lb.Balancer // groupID -> balancer
+	connTracker *lb.ConnectionTracker
+	metrics     *lb.UpstreamMetrics
 
 	sessionMap sync.Map // sessionKey -> sessionBinding
 	sessionTTL time.Duration
@@ -110,7 +109,6 @@ func NewRouter(
 	// Build shared infrastructure components.
 	r.connTracker = lb.NewConnectionTracker()
 	r.metrics = lb.NewUpstreamMetrics()
-	r.circuitBreaker = lb.NewCircuitBreaker(5, 2, 30*time.Second)
 
 	// Build all maps from the configuration.
 	r.buildMaps(upstreams, groups, routes, encKey)
@@ -303,8 +301,8 @@ func (r *Router) Match(projectID, model, kind, client string) (*resolvedGroup, e
 
 // SelectWithRetry returns an ordered list of upstreams to try for the given group.
 // The first element is the primary pick; subsequent elements are retry fallbacks.
-// Filtering applies: open circuits, MaxConcurrent at capacity, and
-// draining upstreams are excluded.
+// Filtering applies: disabled/draining upstreams and MaxConcurrent at capacity.
+// Previous request failures do not affect eligibility.
 func (r *Router) SelectWithRetry(ctx context.Context, group *resolvedGroup, sessionID, model string) []*SelectedUpstream {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -329,11 +327,6 @@ func (r *Router) SelectWithRetry(ctx context.Context, group *resolvedGroup, sess
 
 		// Skip draining upstreams (no new requests).
 		if m.upstream.Status == types.UpstreamStatusDraining {
-			continue
-		}
-
-		// Skip upstreams with open circuit breakers.
-		if !r.circuitBreaker.CanPass(uid) {
 			continue
 		}
 
@@ -421,9 +414,6 @@ func (r *Router) SelectCapacityFallbacks(group *resolvedGroup, excluded map[stri
 			continue
 		}
 		if m.upstream.Status == types.UpstreamStatusDisabled || m.upstream.Status == types.UpstreamStatusDraining {
-			continue
-		}
-		if !r.circuitBreaker.CanPass(uid) {
 			continue
 		}
 		if m.upstream.MaxConcurrent > 0 && r.connTracker.Count(uid) >= int64(m.upstream.MaxConcurrent) {
@@ -562,7 +552,7 @@ func (r *Router) resultWithPrimary(primary *types.Upstream, candidates []lb.Cand
 type MatrixCell struct {
 	Model           string
 	Kind            string
-	Client          string   // bucket this cell was resolved for
+	Client          string // bucket this cell was resolved for
 	UpstreamGroupID string
 	RouteID         string
 	MatchPriority   int
@@ -769,11 +759,6 @@ func (r *Router) ConnTracker() *lb.ConnectionTracker {
 // Metrics returns the shared upstream metrics.
 func (r *Router) Metrics() *lb.UpstreamMetrics {
 	return r.metrics
-}
-
-// CircuitBreaker returns the shared circuit breaker.
-func (r *Router) CircuitBreaker() *lb.CircuitBreaker {
-	return r.circuitBreaker
 }
 
 // ActiveModels returns canonical names that are actually routable — i.e.

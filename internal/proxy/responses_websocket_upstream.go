@@ -103,8 +103,7 @@ func (s *responsesWebsocketSession) candidates(router *Router, group *resolvedGr
 			router.decryptedKeys[u.ID] != s.selected.APIKey {
 			break
 		}
-		if !router.CircuitBreaker().CanPass(u.ID) ||
-			(u.MaxConcurrent > 0 && router.ConnTracker().Count(u.ID) >= int64(u.MaxConcurrent)) {
+		if u.MaxConcurrent > 0 && router.ConnTracker().Count(u.ID) >= int64(u.MaxConcurrent) {
 			return nil, errors.New("WebSocket upstream is temporarily unavailable")
 		}
 		return []*SelectedUpstream{{Upstream: u, APIKey: s.selected.APIKey}}, nil

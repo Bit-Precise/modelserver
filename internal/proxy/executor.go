@@ -368,7 +368,6 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 				"upstream_id", uid,
 				"upstream_name", m.upstream.Name,
 				"status", m.upstream.Status,
-				"circuit_open", !e.router.circuitBreaker.CanPass(uid),
 				"concurrent", e.router.connTracker.Count(uid),
 				"max_concurrent", m.upstream.MaxConcurrent)
 		}
@@ -615,7 +614,6 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 		if err != nil {
 			logger.Error("resolve upstream outbound proxy failed",
 				"proxy_mode", upstream.EffectiveProxyMode(), "error", err)
-			e.router.CircuitBreaker().RecordFailure(upstream.ID)
 			e.router.Metrics().RecordError(upstream.ID)
 			continue
 		}
@@ -702,7 +700,6 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 						"candidate_upstream_name", member.upstream.Name,
 						"attempted", attempted,
 						"status", member.upstream.Status,
-						"circuit_state", e.router.CircuitBreaker().State(member.upstream.ID).String(),
 						"concurrent", e.router.ConnTracker().Count(member.upstream.ID),
 						"max_concurrent", member.upstream.MaxConcurrent,
 						"is_backup", member.isBackup,
@@ -722,7 +719,6 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			markRetryableAttempt(reqCtx, codexCapacityRetryReason)
 
 			e.router.ConnTracker().Release(upstream.ID)
-			e.router.CircuitBreaker().RecordFailure(upstream.ID)
 			e.router.Metrics().RecordError(upstream.ID)
 			statusCode := 0
 			errMsg := codexCapacityMessage
@@ -770,7 +766,6 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 			}
 			// Release connection, record error, log, and try next candidate.
 			e.router.ConnTracker().Release(upstream.ID)
-			e.router.CircuitBreaker().RecordFailure(upstream.ID)
 			e.router.Metrics().RecordError(upstream.ID)
 
 			errMsg := "unknown error"
@@ -999,14 +994,12 @@ func (e *Executor) Execute(w http.ResponseWriter, r *http.Request, reqCtx *Reque
 		reqCtx.CodexCapacityError = codexCapacityRetry
 
 		// 6i. Commit: this is the final response (success or non-retryable error).
-		//     Only record success in CB/metrics if we got a non-5xx response.
+		//     Only record success in metrics if we got a non-5xx response.
 		//     Connection errors (resp==nil) or 5xx responses that weren't retried
 		//     (because no retry policy) should still count as failures.
 		if resp != nil && resp.StatusCode < 500 && !codexCapacityRetry {
-			e.router.CircuitBreaker().RecordSuccess(upstream.ID)
 			e.router.Metrics().RecordSuccess(upstream.ID)
 		} else {
-			e.router.CircuitBreaker().RecordFailure(upstream.ID)
 			e.router.Metrics().RecordError(upstream.ID)
 			if doErr != nil {
 				logger.Warn("upstream request failed",
@@ -1291,7 +1284,6 @@ func (e *Executor) commitStreamingResponse(
 			reqCtx.CodexCapacityError = true
 			reqCtx.RetryReason = codexCapacityAfterCommitRetryReason
 			e.router.UnbindSessionFromUpstream(reqCtx.SessionID, reqCtx.Model, candidate.Upstream.ID)
-			e.router.CircuitBreaker().RecordFailure(candidate.Upstream.ID)
 			if *interruptErrPtr == nil {
 				e.router.Metrics().RecordError(candidate.Upstream.ID)
 			}

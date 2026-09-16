@@ -215,7 +215,7 @@ func TestSelectWithRetry_ExpiredBindingIsReplaced(t *testing.T) {
 
 // TestSelectWithRetry_BoundUpstreamUnavailableFallsThrough verifies that when
 // the stored binding points to an upstream that is no longer in the candidate
-// set (disabled / draining / unhealthy), SelectWithRetry picks a new upstream
+// set (disabled / draining / at capacity), SelectWithRetry picks a new upstream
 // from the available candidates AND rebinds the session to that new pick —
 // atomically, so concurrent callers do not diverge.
 func TestSelectWithRetry_BoundUpstreamUnavailableFallsThrough(t *testing.T) {

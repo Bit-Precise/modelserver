@@ -6,9 +6,8 @@ import (
 	"time"
 )
 
-// UpstreamMetrics tracks per-upstream health/performance metrics in memory.
-// Used by: health endpoint, routing events.
-// NOT used for LB decisions this phase -- circuit breaker + health checker handle that.
+// UpstreamMetrics tracks per-upstream request outcomes in memory.
+// These counters are observational only and never affect routing eligibility.
 type UpstreamMetrics struct {
 	mu      sync.RWMutex
 	metrics map[string]*UpstreamStats // upstreamID -> stats
