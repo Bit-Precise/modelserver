@@ -81,6 +81,28 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
       output_multiplier: 1.5,
     },
   },
+  "gpt-6-sol": {
+    input_rate: 0.1068,
+    output_rate: 0.5332,
+    cache_creation_rate: 0.1332,
+    cache_read_rate: 0.0108,
+    long_context: {
+      threshold_input_tokens: 272000,
+      input_multiplier: 2,
+      output_multiplier: 1.5,
+    },
+  },
+  "gpt-6-luna": {
+    input_rate: 0.0052,
+    output_rate: 0.0268,
+    cache_creation_rate: 0.0068,
+    cache_read_rate: 0.0004,
+    long_context: {
+      threshold_input_tokens: 272000,
+      input_multiplier: 2,
+      output_multiplier: 1.5,
+    },
+  },
   "gpt-5.6-sol": {
     input_rate: 0.2132,
     output_rate: 1.0668,

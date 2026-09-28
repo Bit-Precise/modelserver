@@ -161,6 +161,36 @@ func TestUtilizationBaseRates_GPT6Astra(t *testing.T) {
 	}
 }
 
+func TestUtilizationBaseRates_GPT6SolLuna(t *testing.T) {
+	cases := []struct {
+		name          string
+		wantInput     float64
+		wantOutput    float64
+		wantCacheRead float64
+		wantCacheCrea float64
+	}{
+		{"gpt-6-sol", 0.1068, 0.5332, 0.0108, 0.1332},
+		{"gpt-6-luna", 0.0052, 0.0268, 0.0004, 0.0068},
+	}
+	for _, tc := range cases {
+		r, ok := utilizationAnalysisBaseRates[tc.name]
+		if !ok {
+			t.Fatalf("%s missing from utilizationAnalysisBaseRates", tc.name)
+		}
+		if r.InputRate != tc.wantInput || r.OutputRate != tc.wantOutput ||
+			r.CacheReadRate != tc.wantCacheRead || r.CacheCreationRate != tc.wantCacheCrea {
+			t.Fatalf("%s rates: %+v; want in=%v out=%v cr=%v cc=%v",
+				tc.name, r, tc.wantInput, tc.wantOutput, tc.wantCacheRead, tc.wantCacheCrea)
+		}
+		if r.LongContext == nil ||
+			r.LongContext.ThresholdInputTokens != 272000 ||
+			r.LongContext.InputMultiplier != 2.0 ||
+			r.LongContext.OutputMultiplier != 1.5 {
+			t.Fatalf("%s long_context: %+v; want thr=272000 in=2 out=1.5", tc.name, r.LongContext)
+		}
+	}
+}
+
 func TestUtilizationBaseRates_GPT54MiniNano(t *testing.T) {
 	cases := []struct {
 		name          string
