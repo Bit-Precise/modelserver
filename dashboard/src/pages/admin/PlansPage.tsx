@@ -81,6 +81,17 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
       output_multiplier: 1.5,
     },
   },
+  "gpt-6.1-sol": {
+    input_rate: 0.1068,
+    output_rate: 0.5332,
+    cache_creation_rate: 0.1332,
+    cache_read_rate: 0.0052,
+    long_context: {
+      threshold_input_tokens: 272000,
+      input_multiplier: 2,
+      output_multiplier: 1.5,
+    },
+  },
   "gpt-6-sol": {
     input_rate: 0.1068,
     output_rate: 0.5332,

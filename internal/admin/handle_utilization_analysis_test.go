@@ -170,6 +170,7 @@ func TestUtilizationBaseRates_GPT6SolLuna(t *testing.T) {
 		wantCacheCrea float64
 	}{
 		{"gpt-6-sol", 0.1068, 0.5332, 0.0108, 0.1332},
+		{"gpt-6.1-sol", 0.1068, 0.5332, 0.0052, 0.1332},
 		{"gpt-6-luna", 0.0052, 0.0268, 0.0004, 0.0068},
 	}
 	for _, tc := range cases {

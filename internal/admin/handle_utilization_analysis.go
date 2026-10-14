@@ -53,6 +53,11 @@ var utilizationAnalysisBaseRates = map[string]types.CreditRate{
 		InputMultiplier:      2.0,
 		OutputMultiplier:     1.5,
 	}},
+	"gpt-6.1-sol": {InputRate: 0.1068, OutputRate: 0.5332, CacheCreationRate: 0.1332, CacheReadRate: 0.0052, LongContext: &types.LongContextCreditRate{
+		ThresholdInputTokens: 272000,
+		InputMultiplier:      2.0,
+		OutputMultiplier:     1.5,
+	}},
 	"gpt-6-sol": {InputRate: 0.1068, OutputRate: 0.5332, CacheCreationRate: 0.1332, CacheReadRate: 0.0108, LongContext: &types.LongContextCreditRate{
 		ThresholdInputTokens: 272000,
 		InputMultiplier:      2.0,
