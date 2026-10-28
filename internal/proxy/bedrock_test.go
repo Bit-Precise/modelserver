@@ -343,6 +343,27 @@ func TestDirectorSetOpenAIUpstream_PlainBaseURL(t *testing.T) {
 	}
 }
 
+func TestDirectorSetOpenAIUpstream_VersionedBaseURL(t *testing.T) {
+	cases := []struct {
+		baseURL, reqPath, want string
+	}{
+		{"https://open.bigmodel.cn/api/paas/v4", "/v1/chat/completions", "/api/paas/v4/chat/completions"},
+		{"https://open.bigmodel.cn/api/paas/v4/", "/v1/chat/completions", "/api/paas/v4/chat/completions"},
+		{"https://open.bigmodel.cn/api/v1", "/v1/responses", "/api/v1/responses"},
+		{"https://example.com/v1", "/v1/responses/compact", "/v1/responses/compact"},
+		// A non-version trailing segment keeps the incoming /v1 prefix.
+		{"https://open.bigmodel.cn/api", "/v1/responses", "/api/v1/responses"},
+		{"https://dashscope.aliyuncs.com/compatible-mode", "/v1/chat/completions", "/compatible-mode/v1/chat/completions"},
+	}
+	for _, tc := range cases {
+		req := mustNewRequest(t, "POST", "http://localhost"+tc.reqPath, nil)
+		directorSetOpenAIUpstream(req, tc.baseURL, "sk-key")
+		if req.URL.Path != tc.want {
+			t.Errorf("base %s + %s: path = %s, want %s", tc.baseURL, tc.reqPath, req.URL.Path, tc.want)
+		}
+	}
+}
+
 func TestDirectorSetBedrockUpstream_BaseURLWithPath(t *testing.T) {
 	req := mustNewRequest(t, "POST", "http://localhost/v1/messages", nil)
 	if err := directorSetBedrockUpstream(req, "https://custom-proxy.example.com/bedrock", "token", "anthropic.claude-3-sonnet-20240229-v1:0", false); err != nil {
