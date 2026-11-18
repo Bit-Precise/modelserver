@@ -161,7 +161,7 @@ func TestUtilizationBaseRates_GPT6Astra(t *testing.T) {
 	}
 }
 
-func TestUtilizationBaseRates_GPT6SolLuna(t *testing.T) {
+func TestUtilizationBaseRates_GPT6Family(t *testing.T) {
 	cases := []struct {
 		name          string
 		wantInput     float64
@@ -171,6 +171,8 @@ func TestUtilizationBaseRates_GPT6SolLuna(t *testing.T) {
 	}{
 		{"gpt-6-sol", 0.1068, 0.5332, 0.0108, 0.1332},
 		{"gpt-6.1-sol", 0.1068, 0.5332, 0.0052, 0.1332},
+		{"gpt-6.2-sol", 0.1068, 0.5332, 0.0052, 0.1332},
+		{"gpt-6.2-astra", 0.4268, 2.1332, 0.0212, 0.5332},
 		{"gpt-6-luna", 0.0052, 0.0268, 0.0004, 0.0068},
 	}
 	for _, tc := range cases {

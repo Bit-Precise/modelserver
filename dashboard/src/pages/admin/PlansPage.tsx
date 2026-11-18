@@ -70,6 +70,28 @@ const DEFAULT_MODEL_CREDIT_RATES: Record<string, CreditRate> = {
     cache_creation_rate: 0.133,
     cache_read_rate: 0,
   },
+  "gpt-6.2-astra": {
+    input_rate: 0.4268,
+    output_rate: 2.1332,
+    cache_creation_rate: 0.5332,
+    cache_read_rate: 0.0212,
+    long_context: {
+      threshold_input_tokens: 272000,
+      input_multiplier: 2,
+      output_multiplier: 1.5,
+    },
+  },
+  "gpt-6.2-sol": {
+    input_rate: 0.1068,
+    output_rate: 0.5332,
+    cache_creation_rate: 0.1332,
+    cache_read_rate: 0.0052,
+    long_context: {
+      threshold_input_tokens: 272000,
+      input_multiplier: 2,
+      output_multiplier: 1.5,
+    },
+  },
   "gpt-6-astra": {
     input_rate: 0.5332,
     output_rate: 2.6668,
