@@ -105,8 +105,9 @@ var utilizationAnalysisBaseRates = map[string]types.CreditRate{
 	"gpt-5.1-codex":       {InputRate: 0.0668, OutputRate: 0.5332, CacheCreationRate: 0, CacheReadRate: 0.0068},
 	"gpt-5.1-codex-max":   {InputRate: 0.0668, OutputRate: 0.5332, CacheCreationRate: 0, CacheReadRate: 0.0068},
 	"gpt-5.1-codex-mini":  {InputRate: 0.0132, OutputRate: 0.1068, CacheCreationRate: 0, CacheReadRate: 0.0012},
-	"glm-5.2":             {InputRate: 0.0187, OutputRate: 0.0587, CacheCreationRate: 0, CacheReadRate: 0.0035},
+	"glm-5.4":             {InputRate: 0.0187, OutputRate: 0.0587, CacheCreationRate: 0, CacheReadRate: 0.0035},
 	"glm-5.3":             {InputRate: 0.0187, OutputRate: 0.0587, CacheCreationRate: 0, CacheReadRate: 0.0035},
+	"glm-5.2":             {InputRate: 0.0187, OutputRate: 0.0587, CacheCreationRate: 0, CacheReadRate: 0.0035},
 	"glm-5.3-flash":       {InputRate: 0.002, OutputRate: 0.0067, CacheCreationRate: 0, CacheReadRate: 0.0004},
 	"deepseek-v4.1-flash": {InputRate: 0.002427, OutputRate: 0.009709, CacheCreationRate: 0, CacheReadRate: 0.0000485},
 	// Alibaba Cloud OpenCode Token Plan models. These mirror migration 070's

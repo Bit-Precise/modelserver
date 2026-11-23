@@ -233,3 +233,17 @@ func TestUtilizationBaseRates_GLM53Flash(t *testing.T) {
 		t.Fatalf("glm-5.3-flash long_context: %+v; want nil", rate.LongContext)
 	}
 }
+
+func TestUtilizationBaseRates_GLM54(t *testing.T) {
+	rate, ok := utilizationAnalysisBaseRates["glm-5.4"]
+	if !ok {
+		t.Fatal("glm-5.4 missing from utilizationAnalysisBaseRates")
+	}
+	if rate.InputRate != 0.0187 || rate.OutputRate != 0.0587 ||
+		rate.CacheCreationRate != 0 || rate.CacheReadRate != 0.0035 {
+		t.Fatalf("glm-5.4 rates: %+v; want in=0.0187 out=0.0587 cc=0 cr=0.0035", rate)
+	}
+	if rate.LongContext != nil {
+		t.Fatalf("glm-5.4 long_context: %+v; want nil", rate.LongContext)
+	}
+}
